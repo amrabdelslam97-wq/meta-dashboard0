@@ -1,0 +1,89 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+
+jobs:
+  lint-and-test:
+    name: Lint + Test + Coverage
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Run test suite with coverage
+        run: npm run test:coverage
+        env:
+          # Tests generate their own temp SQLite files (tests/helpers/testDb.js)
+          # and never touch real Meta credentials -- this key only needs to be
+          # a valid 32-byte hex string for tokenCrypto's format check.
+          TOKEN_ENCRYPTION_KEY: 'a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f9'
+
+      - name: Upload coverage report
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          path: coverage/
+          retention-days: 14
+
+  build-validation:
+    name: Build Validation (real boot + seed + smoke test)
+    runs-on: ubuntu-latest
+    needs: lint-and-test
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Generate an ephemeral encryption key for this CI run
+        run: echo "TOKEN_ENCRYPTION_KEY=$(node -e "console.log(require('crypto').randomBytes(32).toString('hex'))")" >> "$GITHUB_ENV"
+
+      - name: Seed a fresh database
+        run: node scripts/seed.js
+        env:
+          DB_PATH: ${{ github.workspace }}/data/ci-build-validation.db
+
+      - name: Boot the real server against the seeded database
+        run: |
+          node src/app.js &
+          echo $! > server.pid
+          for i in $(seq 1 20); do
+            if curl -sf http://localhost:3000/api/v1/health > /dev/null; then
+              echo "Server is up."
+              exit 0
+            fi
+            sleep 0.5
+          done
+          echo "Server did not become healthy in time."
+          cat server.pid
+          exit 1
+        env:
+          DB_PATH: ${{ github.workspace }}/data/ci-build-validation.db
+
+      - name: Run the manual verify.js smoke test against the live server
+        run: node scripts/verify.js
+        env:
+          DB_PATH: ${{ github.workspace }}/data/ci-build-validation.db
+
+      - name: Stop the server
+        if: always()
+        run: kill "$(cat server.pid)" || true
