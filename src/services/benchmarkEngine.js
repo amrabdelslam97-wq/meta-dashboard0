@@ -12,38 +12,13 @@
  *   source   : account_benchmark | global_benchmark | platform_default
  */
 
-const db = require('../db/database');
+const { resolveThresholds } = require('./benchmarkResolver');
 
-// ─────────────────────────────────────────────
-// Resolve benchmark for one metric
-// ─────────────────────────────────────────────
-function resolveBenchmark(objective, metricKey, adAccountId) {
-  // 1. Account-specific
-  const acct = db.get(
-    `SELECT * FROM benchmark_metrics
-     WHERE objective = ? AND metric_key = ? AND ad_account_id = ?`,
-    [objective, metricKey, adAccountId]
-  );
-  if (acct) return { ...acct, source: 'account_benchmark' };
-
-  // 2. Global (industry-level, no account)
-  const global = db.get(
-    `SELECT * FROM benchmark_metrics
-     WHERE objective = ? AND metric_key = ? AND ad_account_id IS NULL`,
-    [objective, metricKey]
-  );
-  if (global) return { ...global, source: 'global_benchmark' };
-
-  // 3. Platform default from scoring configs
-  const platform = db.get(
-    `SELECT * FROM objective_scoring_configs
-     WHERE objective = ? AND metric_key = ?`,
-    [objective, metricKey]
-  );
-  if (platform) return { ...platform, source: 'platform_default' };
-
-  return null;
-}
+// resolveBenchmark(objective, metricKey, adAccountId) === resolveThresholds
+// with no pre-loaded platform config, which already returns null when
+// nothing is found at any of the 3 tiers -- exactly this function's
+// previous contract.
+const resolveBenchmark = resolveThresholds;
 
 // ─────────────────────────────────────────────
 // Evaluate one metric against its benchmark
@@ -120,13 +95,20 @@ function evaluateMetric(value, benchmark) {
 function evaluateBenchmarks(campaign, metrics, adAccountId) {
   const { objective } = campaign;
 
-  // Which metrics to evaluate per objective
+  // Which metrics to evaluate per objective. Kept in sync with the metric
+  // sets actually seeded in objective_scoring_configs (seedIntelligence.js)
+  // -- this list had drifted from that source of truth, silently dropping
+  // each objective's primary volume KPI (leads, purchases,
+  // landing_page_views) from benchmark evaluation and substituting a
+  // generic 'cpm' that isn't part of that objective's scoring weights at
+  // all. 'unknown' has no seeded scoring config, so it keeps a reasonable
+  // universal fallback.
   const metricsByObjective = {
-    messaging: ['ctr', 'cpr', 'frequency', 'cpm', 'reach'],
-    leads:     ['ctr', 'cpl', 'frequency', 'cpm'],
-    sales:     ['ctr', 'roas', 'cpa', 'cpm'],
-    traffic:   ['ctr', 'cpc', 'cpm', 'frequency'],
-    awareness: ['cpm', 'frequency', 'reach', 'impressions'],
+    messaging: ['cpr', 'ctr', 'frequency', 'reach'],
+    leads:     ['cpl', 'leads', 'ctr', 'frequency'],
+    sales:     ['roas', 'cpa', 'purchases', 'ctr'],
+    traffic:   ['cpc', 'ctr', 'landing_page_views', 'frequency'],
+    awareness: ['reach', 'cpm', 'frequency', 'impressions'],
     unknown:   ['ctr', 'cpm', 'frequency'],
   };
 

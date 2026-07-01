@@ -13,6 +13,7 @@
 
 const { v4: uuidv4 } = require('uuid');
 const db = require('../db/database');
+const { resolveThresholds } = require('./benchmarkResolver');
 
 // ─────────────────────────────────────────────────────────────
 // Status thresholds
@@ -77,38 +78,6 @@ function loadScoringConfigs(objective) {
     `SELECT * FROM objective_scoring_configs WHERE objective = ?`,
     [objective]
   );
-}
-
-// ─────────────────────────────────────────────────────────────
-// Resolve thresholds: benchmark → platform default
-// ─────────────────────────────────────────────────────────────
-function resolveThresholds(objective, metricKey, adAccountId, platformConfig) {
-  // 1. Account-specific benchmark
-  const accountBenchmark = db.get(
-    `SELECT * FROM benchmark_metrics
-     WHERE objective = ? AND metric_key = ? AND ad_account_id = ?`,
-    [objective, metricKey, adAccountId]
-  );
-  if (accountBenchmark) {
-    return { ...accountBenchmark, source: 'account_benchmark' };
-  }
-
-  // 2. Global industry benchmark (ad_account_id IS NULL)
-  const globalBenchmark = db.get(
-    `SELECT * FROM benchmark_metrics
-     WHERE objective = ? AND metric_key = ? AND ad_account_id IS NULL`,
-    [objective, metricKey]
-  );
-  if (globalBenchmark) {
-    return { ...globalBenchmark, source: 'global_benchmark' };
-  }
-
-  // 3. Platform default from objective_scoring_configs
-  return {
-    ...platformConfig,
-    comparison_direction: platformConfig.comparison_direction,
-    source: 'platform_default',
-  };
 }
 
 // ─────────────────────────────────────────────────────────────
