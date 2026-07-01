@@ -1,8 +1,14 @@
 'use strict';
 
+const nock = require('nock');
 const {
   normalizeRow, pickRoasValue, attributionWindowParams, computeDeltas,
+  fetchCampaignMetrics, fetchAdSetMetrics, fetchAdMetrics, fetchTrendData,
 } = require('../../src/services/metricsFetcher');
+const cache = require('../../src/services/cacheService');
+
+const BASE = 'https://graph.facebook.com';
+const VERSION = process.env.META_API_VERSION || 'v21.0';
 
 describe('metricsFetcher.pickRoasValue', () => {
   test('prefers omni_purchase over other action types', () => {
@@ -146,5 +152,104 @@ describe('metricsFetcher.computeDeltas', () => {
   test('handles a zero prior value without dividing by zero', () => {
     const deltas = computeDeltas({ spend: 50 }, { spend: 0 });
     expect(deltas.spend).toEqual({ delta_abs: 50, delta_pct: 100 });
+  });
+});
+
+// Regression tests for a production incident: a real Meta API failure
+// (e.g. bad access token, invalid API version, rate limit) was being
+// swallowed inside these functions and converted into an empty/null
+// result indistinguishable from "Meta genuinely has no data for this
+// period" -- masking the real cause everywhere downstream (insights.js's
+// own error-surfacing catch block never ran because these functions never
+// threw). The fix removes that swallowing; these tests lock in that a real
+// API error now propagates as a real, informative exception.
+describe('metricsFetcher error propagation (does not swallow real Meta API failures)', () => {
+  afterEach(() => {
+    nock.cleanAll();
+    cache.flush();
+  });
+
+  test('fetchCampaignMetrics throws (with isMetaError/code intact) when the CURRENT period fetch fails', async () => {
+    nock(BASE).get(`/${VERSION}/camp_err_1/insights`).query(true)
+      .reply(400, { error: { message: 'Invalid OAuth access token', code: 190 } });
+
+    await expect(
+      fetchCampaignMetrics('camp_err_1', 'bad-token', { since: '2026-01-01', until: '2026-01-07' }, 7)
+    ).rejects.toMatchObject({ isMetaError: true, code: 190, message: 'Invalid OAuth access token' });
+  });
+
+  test('fetchCampaignMetrics still gracefully degrades to prior:null when only the PRIOR period fetch fails', async () => {
+    nock(BASE).get(`/${VERSION}/camp_err_2/insights`).query(q => JSON.parse(q.time_range).since === '2026-01-01')
+      .reply(200, { data: [{ spend: '10', impressions: '100' }] });
+    nock(BASE).get(`/${VERSION}/camp_err_2/insights`).query(q => JSON.parse(q.time_range).since !== '2026-01-01')
+      .reply(400, { error: { message: 'Prior period rate limited', code: 4 } });
+
+    const result = await fetchCampaignMetrics('camp_err_2', 'token', { since: '2026-01-01', until: '2026-01-07' }, 7);
+    expect(result.current.spend).toBe(10);
+    expect(result.prior).toBeNull();
+  });
+
+  test('fetchAdSetMetrics throws instead of silently returning [] on a real Meta error', async () => {
+    nock(BASE).get(`/${VERSION}/camp_err_3/insights`).query(true)
+      .reply(400, { error: { message: 'Unsupported request', code: 100 } }); // non-retryable code -- avoids exercising metaGet's rate-limit retry loop, which is covered elsewhere
+
+    await expect(
+      fetchAdSetMetrics('camp_err_3', 'token', '2026-01-01', '2026-01-07', 7)
+    ).rejects.toMatchObject({ isMetaError: true, code: 100 });
+  });
+
+  test('fetchAdMetrics throws instead of silently returning [] on a real Meta error', async () => {
+    nock(BASE).get(`/${VERSION}/camp_err_4/insights`).query(true)
+      .reply(400, { error: { message: 'Unsupported request', code: 100 } }); // non-retryable code -- avoids exercising metaGet's rate-limit retry loop, which is covered elsewhere
+
+    await expect(
+      fetchAdMetrics('camp_err_4', 'token', '2026-01-01', '2026-01-07', 7)
+    ).rejects.toMatchObject({ isMetaError: true, code: 100 });
+  });
+
+  test('fetchTrendData throws instead of silently returning [] on a real Meta error', async () => {
+    nock(BASE).get(`/${VERSION}/camp_err_5/insights`).query(true)
+      .reply(400, { error: { message: 'Unsupported request', code: 100 } }); // non-retryable code -- avoids exercising metaGet's rate-limit retry loop, which is covered elsewhere
+
+    await expect(
+      fetchTrendData('camp_err_5', 'token', '2026-01-01', '2026-01-07', 7)
+    ).rejects.toMatchObject({ isMetaError: true, code: 100 });
+  });
+});
+
+// Regression test for a second, independently-discovered bug: Meta does
+// NOT automatically include adset_id/ad_id in an Insights response for
+// level=adset/level=ad -- they must be requested explicitly like any other
+// field. Without them, fetchAdSetMetrics/fetchAdMetrics could never
+// attribute a row back to a specific ad set/ad (meta_adset_id/meta_ad_id
+// would always be undefined), independent of the error-swallowing bug
+// above -- confirmed against a real Meta Insights response before fixing.
+describe('metricsFetcher requests entity-identifying fields for adset/ad level calls', () => {
+  afterEach(() => {
+    nock.cleanAll();
+    cache.flush();
+  });
+
+  test('fetchAdSetMetrics requests adset_id and adset_name, and attributes rows correctly', async () => {
+    const scope = nock(BASE).get(`/${VERSION}/camp_fields_1/insights`)
+      .query(q => q.fields.includes('adset_id') && q.fields.includes('adset_name'))
+      .reply(200, { data: [{ spend: '10', adset_id: 'adset_123', adset_name: 'Test AdSet' }] });
+
+    const result = await fetchAdSetMetrics('camp_fields_1', 'token', '2026-01-01', '2026-01-07', 7);
+    expect(scope.isDone()).toBe(true);
+    expect(result[0].meta_adset_id).toBe('adset_123');
+    expect(result[0].name).toBe('Test AdSet');
+  });
+
+  test('fetchAdMetrics requests ad_id, ad_name, and adset_id, and attributes rows correctly', async () => {
+    const scope = nock(BASE).get(`/${VERSION}/camp_fields_2/insights`)
+      .query(q => q.fields.includes('ad_id') && q.fields.includes('ad_name') && q.fields.includes('adset_id'))
+      .reply(200, { data: [{ spend: '10', ad_id: 'ad_456', ad_name: 'Test Ad', adset_id: 'adset_123' }] });
+
+    const result = await fetchAdMetrics('camp_fields_2', 'token', '2026-01-01', '2026-01-07', 7);
+    expect(scope.isDone()).toBe(true);
+    expect(result[0].meta_ad_id).toBe('ad_456');
+    expect(result[0].name).toBe('Test Ad');
+    expect(result[0].meta_adset_id).toBe('adset_123');
   });
 });

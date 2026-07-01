@@ -31,6 +31,16 @@ const CORE_FIELDS = [
   'action_values',
 ].join(',');
 
+// Meta does NOT automatically include an entity's identifying id/name
+// fields in an Insights response for level=adset/level=ad -- they must be
+// requested explicitly like any other field, confirmed against a real
+// Insights call (requesting only CORE_FIELDS returns rows with no
+// adset_id/ad_id at all). Without these, fetchAdSetMetrics/fetchAdMetrics
+// could never attribute a row back to a specific ad set/ad, so every
+// entity-level lookup silently found nothing.
+const ADSET_FIELDS = CORE_FIELDS + ',adset_id,adset_name';
+const AD_FIELDS     = CORE_FIELDS + ',ad_id,ad_name,adset_id';
+
 // ─────────────────────────────────────────────
 // Parse Meta actions[] + cost_per_action_type[]
 // Maps all known action_types to flat metric keys
@@ -253,18 +263,22 @@ async function fetchCampaignMetrics(metaCampaignId, accessToken, dateRange, attr
   const fetchedAt = new Date().toISOString();
 
   // ── Current period ──
+  // A real Meta API failure here (bad token, invalid API version, rate
+  // limit, etc.) is intentionally NOT caught -- it must propagate to the
+  // caller (insights.js already has a try/catch that returns the real
+  // "Meta API error: <message>" reason with HTTP 502). Swallowing it here
+  // used to collapse every failure mode into the same generic "No Meta
+  // insights available for the selected period" message that's meant for
+  // the genuinely-different case of Meta returning 200 with zero rows --
+  // which normalizeInsights() already turns into `null` on its own,
+  // without needing a catch block, so nothing is lost by removing this one.
   const currentKey = cache.keyInsights(metaCampaignId, since, until);
   let currentMetrics = cache.get(currentKey);
 
   if (!currentMetrics) {
-    try {
-      const raw = await fetchInsights(metaCampaignId, accessToken, since, until, attributionWindowParams(attributionWindowDays));
-      currentMetrics = normalizeInsights(raw);
-      if (currentMetrics) cache.set(currentKey, currentMetrics, 'current');
-    } catch (err) {
-      console.warn(`[Metrics] Current period fetch failed for ${metaCampaignId}:`, err.message);
-      currentMetrics = null;
-    }
+    const raw = await fetchInsights(metaCampaignId, accessToken, since, until, attributionWindowParams(attributionWindowDays));
+    currentMetrics = normalizeInsights(raw);
+    if (currentMetrics) cache.set(currentKey, currentMetrics, 'current');
   }
 
   // ── Prior period ──
@@ -309,14 +323,14 @@ async function fetchAdSetMetrics(metaCampaignId, accessToken, since, until, attr
   console.log('[MetricsFetcher][AdSet] Level: adset');
   console.log('[MetricsFetcher][AdSet] Date range:', since, '->', until);
   console.log('[MetricsFetcher][AdSet] Token length:', accessToken?.length ?? 0);
-  console.log('[MetricsFetcher][AdSet] Fields:', CORE_FIELDS);
+  console.log('[MetricsFetcher][AdSet] Fields:', ADSET_FIELDS);
 
   let raw;
   try {
     raw = await metaGet(
       `${metaCampaignId}/insights`,
       {
-        fields:     CORE_FIELDS,
+        fields:     ADSET_FIELDS,
         time_range: JSON.stringify({ since, until }),
         level:      'adset',
         ...attributionWindowParams(attributionWindowDays),
@@ -324,13 +338,19 @@ async function fetchAdSetMetrics(metaCampaignId, accessToken, since, until, attr
       accessToken
     );
   } catch (err) {
-    // Log the full error — never swallow
+    // Log the full error, then RE-THROW it -- adSetIntelligence.js's
+    // runAdSetIntelligence() already has a try/catch around this call
+    // specifically built to surface the real Meta error message
+    // ("Meta API error: <message>"), but that code path only fires if
+    // this function actually throws. Swallowing to `[]` here defeated
+    // that already-correct caller and made every real API failure look
+    // identical to "no ad sets have data for this period."
     console.error('[MetricsFetcher][AdSet] ── Meta API ERROR ──');
     console.error('[MetricsFetcher][AdSet] Message:', err.message);
     console.error('[MetricsFetcher][AdSet] Code:', err.code);
     console.error('[MetricsFetcher][AdSet] Type:', err.type);
     console.error('[MetricsFetcher][AdSet] HTTP Status:', err.httpStatus);
-    return [];
+    throw err;
   }
 
   // Log the raw response before any parsing
@@ -372,14 +392,14 @@ async function fetchAdMetrics(metaCampaignId, accessToken, since, until, attribu
   console.log('[MetricsFetcher][Ad] Level: ad');
   console.log('[MetricsFetcher][Ad] Date range:', since, '->', until);
   console.log('[MetricsFetcher][Ad] Token length:', accessToken?.length ?? 0);
-  console.log('[MetricsFetcher][Ad] Fields:', CORE_FIELDS);
+  console.log('[MetricsFetcher][Ad] Fields:', AD_FIELDS);
 
   let raw;
   try {
     raw = await metaGet(
       `${metaCampaignId}/insights`,
       {
-        fields:     CORE_FIELDS,
+        fields:     AD_FIELDS,
         time_range: JSON.stringify({ since, until }),
         level:      'ad',
         ...attributionWindowParams(attributionWindowDays),
@@ -387,13 +407,17 @@ async function fetchAdMetrics(metaCampaignId, accessToken, since, until, attribu
       accessToken
     );
   } catch (err) {
-    // Log the full error — never swallow
+    // Log the full error, then RE-THROW it -- adIntelligence.js's
+    // runAdIntelligence() already has a try/catch around this call
+    // specifically built to surface the real Meta error message, but
+    // that only fires if this function actually throws. Swallowing to
+    // `[]` here defeated that already-correct caller.
     console.error('[MetricsFetcher][Ad] ── Meta API ERROR ──');
     console.error('[MetricsFetcher][Ad] Message:', err.message);
     console.error('[MetricsFetcher][Ad] Code:', err.code);
     console.error('[MetricsFetcher][Ad] Type:', err.type);
     console.error('[MetricsFetcher][Ad] HTTP Status:', err.httpStatus);
-    return [];
+    throw err;
   }
 
   // Log the raw response before any parsing
@@ -430,25 +454,26 @@ async function fetchTrendData(metaCampaignId, accessToken, since, until, attribu
   const cached = cache.get(key);
   if (cached) return cached;
 
-  try {
-    const raw = await metaGet(
-      `${metaCampaignId}/insights`,
-      {
-        fields:         CORE_FIELDS,
-        time_range:     JSON.stringify({ since, until }),
-        time_increment: 1,
-        ...attributionWindowParams(attributionWindowDays),
-      },
-      accessToken
-    );
+  // No try/catch here, matching the campaign/ad-set/ad fetchers above: a
+  // real Meta API failure must propagate to the route (GET /insights/trend
+  // in insights.js has no try/catch either, so asyncHandler forwards it to
+  // errorHandler, which returns a proper 502 with the real reason via
+  // err.isMetaError) instead of silently resolving to an empty trend array
+  // that looks identical to "this campaign genuinely has no daily data."
+  const raw = await metaGet(
+    `${metaCampaignId}/insights`,
+    {
+      fields:         CORE_FIELDS,
+      time_range:     JSON.stringify({ since, until }),
+      time_increment: 1,
+      ...attributionWindowParams(attributionWindowDays),
+    },
+    accessToken
+  );
 
-    const trend = normalizeTrend(raw);
-    cache.set(key, trend, 'trend');
-    return trend;
-  } catch (err) {
-    console.warn(`[Metrics] Trend fetch failed for ${metaCampaignId}:`, err.message);
-    return [];
-  }
+  const trend = normalizeTrend(raw);
+  cache.set(key, trend, 'trend');
+  return trend;
 }
 
 module.exports = {
