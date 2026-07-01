@@ -203,8 +203,34 @@ function calculateHealthScore(campaign, metrics, adAccountId) {
 // ─────────────────────────────────────────────────────────────
 // Persist health score to history table
 // ─────────────────────────────────────────────────────────────
+// A new row is skipped when the score is identical to the last recorded
+// one AND that last row is still recent (10 minutes -- matching the
+// 'current' metrics cache TTL in cacheService.js, since the underlying
+// Meta data can't meaningfully have changed within that window anyway).
+// Previously this wrote unconditionally on every single call, meaning
+// health_score_history (and, via database.js's full-export-per-write
+// persist(), the cost of every write in the whole system) grew
+// proportional to how often a campaign's insights were *viewed*, not to
+// how often the score actually changed.
+// ─────────────────────────────────────────────────────────────
+const UNCHANGED_SCORE_SKIP_WINDOW_MS = 10 * 60 * 1000;
+
 function saveHealthScore(campaign, adAccountId, scoreResult, entityType = 'campaign') {
   const now = new Date().toISOString();
+
+  const last = db.get(
+    `SELECT health_score, calculated_at FROM health_score_history
+     WHERE entity_meta_id = ? AND entity_type = ?
+     ORDER BY calculated_at DESC LIMIT 1`,
+    [campaign.meta_campaign_id, entityType]
+  );
+
+  if (last && last.health_score === scoreResult.health_score) {
+    const ageMs = Date.now() - new Date(last.calculated_at).getTime();
+    if (ageMs < UNCHANGED_SCORE_SKIP_WINDOW_MS) {
+      return; // unchanged and recent -- nothing new to record
+    }
+  }
 
   db.run(
     `INSERT INTO health_score_history
