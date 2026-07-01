@@ -93,7 +93,13 @@ async function runTests() {
   ok('campaigns table exists', tables.includes('campaigns'));
   ok('ad_sets table exists', tables.includes('ad_sets'));
   ok('ads table exists', tables.includes('ads'));
-  ok('Exactly 5 core tables', tables.filter(t => !t.startsWith('sqlite_')).length === 5,
+  // This script only calls Phase 1's runMigrations() itself, but when run
+  // against a server that has already booted with the full migration set
+  // (Phase 2/5/6/7B), later-phase tables will also be present -- so this
+  // checks that the 5 core tables exist, not that they are the *only*
+  // tables, which used to fail here for exactly that reason.
+  const core5 = ['users', 'ad_accounts', 'campaigns', 'ad_sets', 'ads'];
+  ok('All 5 core tables present', core5.every(t => tables.includes(t)),
     `found: ${tables.join(', ')}`);
 
   // ── 2. Indexes ──
