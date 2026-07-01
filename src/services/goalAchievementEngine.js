@@ -51,11 +51,19 @@ function loadTargets(adAccountId, objective) {
 
 // ─────────────────────────────────────────────
 // Evaluate one metric against its target
-// lower_is_better: CPR, CPL, CPA, CPM, CPC
+// lower_is_better: CPR, CPL, CPA, CPM, CPC (cheaper is unambiguously better,
+//   no floor concern)
 // higher_is_better: CTR, ROAS, leads, purchases
+// ceiling: frequency max (a cap, not something to minimize -- going far
+//   below the cap isn't "more achievement" the way a lower CPA always is,
+//   and usually signals under-delivery rather than success. This matches
+//   the optimal-range treatment frequency already gets in health scoring
+//   and benchmarking, instead of contradicting it by rewarding near-zero
+//   frequency as dramatically "Exceeded")
 // ─────────────────────────────────────────────
-const LOWER_IS_BETTER_TARGETS = ['target_cpr', 'target_cpl', 'target_cpa', 'target_cpm', 'target_frequency_max'];
+const LOWER_IS_BETTER_TARGETS = ['target_cpr', 'target_cpl', 'target_cpa', 'target_cpm'];
 const HIGHER_IS_BETTER_TARGETS = ['target_ctr', 'target_roas'];
+const CEILING_TARGETS = ['target_frequency_max'];
 
 function evaluateTarget(actualValue, targetValue, targetKey) {
   if (actualValue === null || actualValue === undefined) {
@@ -65,10 +73,17 @@ function evaluateTarget(actualValue, targetValue, targetKey) {
     return null; // target not set for this metric
   }
 
-  const isLower = LOWER_IS_BETTER_TARGETS.includes(targetKey);
+  const isLower   = LOWER_IS_BETTER_TARGETS.includes(targetKey);
+  const isCeiling = CEILING_TARGETS.includes(targetKey);
   let achievementPct;
 
-  if (isLower) {
+  if (isCeiling) {
+    // At or below the ceiling is fully achieved (100%, not uncapped credit
+    // for going lower); only exceeding the ceiling degrades achievement.
+    achievementPct = actualValue <= targetValue
+      ? 100
+      : Math.round((targetValue / actualValue) * 100);
+  } else if (isLower) {
     // For lower-is-better: achievement = target / actual * 100
     // actual < target is GOOD (exceeded)
     achievementPct = targetValue > 0
