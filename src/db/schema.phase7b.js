@@ -11,6 +11,9 @@
  */
 
 const db = require('./database');
+const { ensureMigrationsTable, markMigrationApplied } = require('./migrationTracker');
+
+const MIGRATION_NAME = 'phase7b_ad_creative_columns';
 
 const NEW_COLUMNS = [
   { name: 'creative_id',  type: 'TEXT' },
@@ -20,6 +23,7 @@ const NEW_COLUMNS = [
 ];
 
 function runPhase7BMigrations() {
+  ensureMigrationsTable();
   const existingCols = db.all("PRAGMA table_info(ads)").map(c => c.name);
 
   let added = 0;
@@ -32,6 +36,8 @@ function runPhase7BMigrations() {
       console.warn(`[DB] Phase 7B: could not add column ${col.name}:`, err.message);
     }
   }
+
+  markMigrationApplied(MIGRATION_NAME);
 
   if (added > 0) {
     db.persist();

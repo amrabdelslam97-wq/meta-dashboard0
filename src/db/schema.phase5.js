@@ -5,6 +5,9 @@
  */
 
 const db = require('./database');
+const { ensureMigrationsTable, markMigrationApplied } = require('./migrationTracker');
+
+const MIGRATION_NAME = 'phase5_decision_history';
 
 const PHASE5_SCHEMA = `
 
@@ -54,9 +57,11 @@ CREATE INDEX IF NOT EXISTS idx_decision_history_status
 `;
 
 function runPhase5Migrations() {
+  ensureMigrationsTable();
   console.log('[DB] Running Phase 5 schema migrations...');
   const stmts = PHASE5_SCHEMA.split(';').map(s => s.trim()).filter(s => s.length > 0);
   for (const stmt of stmts) db.run(stmt + ';');
+  markMigrationApplied(MIGRATION_NAME);
   console.log('[DB] Phase 5 schema complete.');
 }
 

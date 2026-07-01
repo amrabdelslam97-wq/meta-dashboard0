@@ -12,6 +12,9 @@
  */
 
 const db = require('./database');
+const { ensureMigrationsTable, isMigrationApplied, markMigrationApplied } = require('./migrationTracker');
+
+const MIGRATION_NAME = 'phase1_core_tables';
 
 const SCHEMA_SQL = `
 
@@ -161,6 +164,7 @@ CREATE INDEX IF NOT EXISTS idx_ads_status
  * Safe to run multiple times — uses CREATE IF NOT EXISTS.
  */
 function runMigrations() {
+  ensureMigrationsTable();
   console.log('[DB] Running schema migrations...');
 
   // Split on semicolons and run each statement individually
@@ -174,6 +178,7 @@ function runMigrations() {
     db.run(statement + ';');
   }
 
+  markMigrationApplied(MIGRATION_NAME);
   console.log('[DB] Schema migrations complete.');
 }
 

@@ -17,6 +17,9 @@
  */
 
 const db = require('./database');
+const { ensureMigrationsTable, markMigrationApplied } = require('./migrationTracker');
+
+const MIGRATION_NAME = 'phase2_intelligence_tables';
 
 const PHASE2_SCHEMA = `
 
@@ -244,6 +247,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_active_alerts_dedup
 `;
 
 function runPhase2Migrations() {
+  ensureMigrationsTable();
   console.log('[DB] Running Phase 2 schema migrations...');
 
   const statements = PHASE2_SCHEMA
@@ -255,6 +259,7 @@ function runPhase2Migrations() {
     db.run(statement + ';');
   }
 
+  markMigrationApplied(MIGRATION_NAME);
   console.log('[DB] Phase 2 schema complete.');
 }
 

@@ -13,6 +13,7 @@ const { runMigrations }          = require('./db/schema');
 const { runPhase2Migrations }    = require('./db/schema.phase2');
 const { runPhase5Migrations }    = require('./db/schema.phase5');
 const { runPhase6Migrations } = require('./db/schema.phase6');
+const { runPhase7BMigrations } = require('./db/schema.phase7b');
 const { seedIntelligenceConfig } = require('./db/seedIntelligence');
 const apiRouter                  = require('./api/router');
 const { errorHandler }           = require('./middleware/errorHandler');
@@ -26,6 +27,7 @@ async function start() {
   runPhase2Migrations();
   runPhase5Migrations();
   runPhase6Migrations();
+  runPhase7BMigrations();
   seedIntelligenceConfig();
 
   const app = express();

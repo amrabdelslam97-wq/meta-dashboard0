@@ -7,27 +7,30 @@
  * Existing tables modified: health_score_history (CHECK constraint only)
  * New tables: NONE
  * Existing data: fully preserved via INSERT SELECT
+ *
+ * Idempotency: tracked via schema_migrations (see migrationTracker.js).
+ * The previous approach probed idempotency by inserting a dummy row with
+ * ad_account_id = '__probe__' — but ad_accounts.id is a foreign-key target
+ * enforced via PRAGMA foreign_keys = ON, so that probe insert ALWAYS failed
+ * (on the FK constraint, independent of whether the CHECK constraint was
+ * already fixed). That made the migration re-run its destructive table
+ * rebuild on every single boot, and made the post-migration verification
+ * step crash the whole process on any database with zero ad_accounts rows
+ * (since its verify-insert also violated the same FK constraint). Tracking
+ * applied migrations in a real table removes both failure modes.
  */
 
 const db = require('./database');
+const { ensureMigrationsTable, isMigrationApplied, markMigrationApplied } = require('./migrationTracker');
+
+const MIGRATION_NAME = 'phase6a_health_score_history_entity_type_ad';
 
 function runPhase6Migrations() {
-  // Check if 'ad' is already accepted — idempotent guard
-  try {
-    db.run(`
-      INSERT INTO health_score_history
-        (id, ad_account_id, entity_type, entity_meta_id, entity_label,
-         health_score, health_status, score_reference, calculated_at)
-      VALUES
-        ('__phase6_probe__','__probe__','ad','__probe__','__probe__',
-         50,'good','platform_default',datetime('now'))
-    `);
-    // If we get here, 'ad' already works — clean up probe and skip migration
-    db.run("DELETE FROM health_score_history WHERE id = '__phase6_probe__'");
-    console.log('[DB] Phase 6 schema: entity_type=ad already supported, skipping migration.');
+  ensureMigrationsTable();
+
+  if (isMigrationApplied(MIGRATION_NAME)) {
+    console.log('[DB] Phase 6 schema: already applied, skipping.');
     return;
-  } catch {
-    // Expected on first run — proceed with migration
   }
 
   console.log('[DB] Running Phase 6A schema migration (health_score_history entity_type patch)...');
@@ -58,7 +61,9 @@ function runPhase6Migrations() {
       )
     `);
 
-    // Step 2: Copy all existing rows
+    // Step 2: Copy all existing rows (safe even if this table has never
+    // existed before / is empty — INSERT...SELECT from an existing table
+    // with zero rows is a no-op, not an error)
     dbRaw.run(`
       INSERT INTO health_score_history_v6
         (id, ad_account_id, entity_type, entity_meta_id, entity_label,
@@ -84,35 +89,14 @@ function runPhase6Migrations() {
     `);
 
     dbRaw.run('COMMIT;');
+    markMigrationApplied(MIGRATION_NAME);
     db.persist();
 
     console.log('[DB] Phase 6A migration complete — entity_type now supports: account, campaign, ad_set, ad');
-
-    // Verify: confirm 'ad' now works
-    db.run(`
-      INSERT INTO health_score_history
-        (id, ad_account_id, entity_type, entity_meta_id, entity_label,
-         health_score, health_status, score_reference, calculated_at)
-      VALUES
-        ('__phase6_verify__','${getFirstAccountId()}','ad','__verify__','Verify',
-         50,'good','platform_default',datetime('now'))
-    `);
-    db.run("DELETE FROM health_score_history WHERE id = '__phase6_verify__'");
-    console.log('[DB] Phase 6A verification passed.');
-
   } catch (err) {
     dbRaw.run('ROLLBACK;');
     console.error('[DB] Phase 6A migration FAILED — rolled back:', err.message);
     throw err;
-  }
-}
-
-function getFirstAccountId() {
-  try {
-    const row = db.get('SELECT id FROM ad_accounts LIMIT 1');
-    return row ? row.id : '__noaccount__';
-  } catch {
-    return '__noaccount__';
   }
 }
 

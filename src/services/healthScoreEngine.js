@@ -209,13 +209,16 @@ function calculateHealthScore(campaign, metrics, adAccountId) {
     };
   }
 
-  // Scale score if some metrics were missing
+  // Blend the weighted average of available metrics with a neutral 50,
+  // proportional to how much of the objective's total scoring weight was
+  // actually available. A campaign with only one of four metrics present
+  // (e.g. CTR alone, weight 0.10 of 1.0) should land close to neutral, not
+  // swing to that one metric's extreme — this is what redistributes trust
+  // away from single-metric noise when data is genuinely incomplete.
   let finalScore = 50;
-  if (weightUsed > 0) {
-    finalScore = Math.round(weightedTotal / weightUsed * (weightUsed / totalWeight)
-      + 50 * (1 - weightUsed / totalWeight));
-    // Simpler: just scale by available weight
-    finalScore = Math.round(weightedTotal / weightUsed);
+  if (weightUsed > 0 && totalWeight > 0) {
+    const coverage = weightUsed / totalWeight;
+    finalScore = Math.round((weightedTotal / totalWeight) + 50 * (1 - coverage));
   }
 
   finalScore = Math.max(0, Math.min(100, finalScore));
