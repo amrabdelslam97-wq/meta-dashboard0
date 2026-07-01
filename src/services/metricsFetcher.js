@@ -21,14 +21,21 @@ const CORE_FIELDS = [
   'ctr', 'cpm', 'cpc', 'frequency',
   'actions', 'cost_per_action_type',
   'purchase_roas', 'website_purchase_roas',
-  'conversion_values',
+  // action_values is the correct Meta Insights field name for monetary
+  // value per action_type (mirrors the actions[] structure). The
+  // previously-used 'conversion_values' does not match Meta's documented
+  // field taxonomy -- flagged in the Meta API audit for live verification
+  // against a real Insights response before fully trusting this value in
+  // production, since this environment has no real Meta credentials to
+  // confirm it against.
+  'action_values',
 ].join(',');
 
 // ─────────────────────────────────────────────
 // Parse Meta actions[] + cost_per_action_type[]
 // Maps all known action_types to flat metric keys
 // ─────────────────────────────────────────────
-function parseActions(actions, costPerAction, conversionValues) {
+function parseActions(actions, costPerAction, actionValues) {
   const result = {};
   if (!Array.isArray(actions)) return result;
 
@@ -82,9 +89,9 @@ function parseActions(actions, costPerAction, conversionValues) {
     }
   }
 
-  // Purchase value from conversion_values
-  if (Array.isArray(conversionValues)) {
-    for (const { action_type, value } of conversionValues) {
+  // Purchase value from action_values
+  if (Array.isArray(actionValues)) {
+    for (const { action_type, value } of actionValues) {
       if (['purchase', 'offsite_conversion.fb_pixel_purchase', 'omni_purchase'].includes(action_type)) {
         result.purchase_value = (result.purchase_value || 0) + (parseFloat(value) || 0);
       }
@@ -92,6 +99,28 @@ function parseActions(actions, costPerAction, conversionValues) {
   }
 
   return result;
+}
+
+// ─────────────────────────────────────────────
+// Pick a ROAS value from Meta's purchase_roas/website_purchase_roas array.
+// These are arrays of { action_type, value } and Meta does not guarantee
+// ordering, so blindly taking index [0] can return whichever action_type
+// happens to sort first rather than the one that actually matters. Prefer
+// 'omni_purchase' (Meta's channel-agnostic, recommended metric since the
+// iOS14/AEM changes), then the legacy pixel-based purchase action, falling
+// back to the first entry only if neither known type is present.
+// ─────────────────────────────────────────────
+const PREFERRED_ROAS_ACTION_TYPES = ['omni_purchase', 'purchase', 'offsite_conversion.fb_pixel_purchase'];
+
+function pickRoasValue(roasArray) {
+  if (!Array.isArray(roasArray) || roasArray.length === 0) return null;
+
+  for (const actionType of PREFERRED_ROAS_ACTION_TYPES) {
+    const match = roasArray.find(r => r.action_type === actionType);
+    if (match) return parseFloat(match.value) || null;
+  }
+
+  return parseFloat(roasArray[0].value) || null;
 }
 
 // ─────────────────────────────────────────────
@@ -115,12 +144,11 @@ function normalizeRow(d) {
 
   // ROAS from Meta's purchase_roas array
   const roasSource = d.purchase_roas || d.website_purchase_roas;
-  if (Array.isArray(roasSource) && roasSource[0]) {
-    base.roas = parseFloat(roasSource[0].value) || null;
-  }
+  const pickedRoas = pickRoasValue(roasSource);
+  if (pickedRoas !== null) base.roas = pickedRoas;
 
   // Actions → objective-specific metrics
-  const actionMetrics = parseActions(d.actions, d.cost_per_action_type, d.conversion_values);
+  const actionMetrics = parseActions(d.actions, d.cost_per_action_type, d.action_values);
   Object.assign(base, actionMetrics);
 
   // Derive missing cost metrics from volume + spend
@@ -416,6 +444,7 @@ module.exports = {
   normalizeInsights,
   normalizeTrend,
   normalizeRow,
+  pickRoasValue,
   computeDeltas,
   defaultDateRange: defaultRange,
   getPriorPeriod: priorPeriod,
