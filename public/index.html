@@ -1,0 +1,2556 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>Meta Ads Intelligence</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+:root{
+  --bg:#0f1117;--bg2:#1a1d27;--bg3:#22263a;--border:#2e3250;
+  --text:#e2e8f0;--muted:#8892a4;--accent:#6366f1;--accent2:#818cf8;
+  --green:#22c55e;--yellow:#eab308;--orange:#f97316;--red:#ef4444;
+  --green-bg:rgba(34,197,94,.12);--yellow-bg:rgba(234,179,8,.12);
+  --orange-bg:rgba(249,115,22,.12);--red-bg:rgba(239,68,68,.12);
+  --blue:#3b82f6;--blue-bg:rgba(59,130,246,.12);
+  --sidebar:220px;
+}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:var(--bg);color:var(--text);display:flex;min-height:100vh;font-size:14px}
+
+/* ── Sidebar ── */
+#sidebar{width:var(--sidebar);background:var(--bg2);border-right:1px solid var(--border);display:flex;flex-direction:column;position:fixed;top:0;left:0;height:100vh;z-index:100}
+.logo{padding:20px 16px 16px;border-bottom:1px solid var(--border)}
+.logo h1{font-size:15px;font-weight:700;color:var(--text);letter-spacing:.3px}
+.logo p{font-size:11px;color:var(--muted);margin-top:2px}
+nav{padding:12px 8px;flex:1;overflow-y:auto}
+.nav-item{display:flex;align-items:center;gap:10px;padding:9px 12px;border-radius:8px;cursor:pointer;color:var(--muted);font-size:13px;font-weight:500;transition:all .15s;margin-bottom:2px;border:none;background:none;width:100%;text-align:left}
+.nav-item:hover{background:var(--bg3);color:var(--text)}
+.nav-item.active{background:rgba(99,102,241,.15);color:var(--accent2)}
+.nav-item svg{width:16px;height:16px;flex-shrink:0}
+.nav-badge{margin-left:auto;background:var(--red);color:#fff;font-size:10px;font-weight:700;padding:1px 6px;border-radius:10px;min-width:18px;text-align:center}
+.nav-badge.warn{background:var(--orange)}
+.sidebar-footer{padding:12px 16px;border-top:1px solid var(--border);font-size:11px;color:var(--muted)}
+
+/* ── Main ── */
+#main{margin-left:var(--sidebar);flex:1;display:flex;flex-direction:column;min-height:100vh}
+.topbar{padding:16px 24px;border-bottom:1px solid var(--border);background:var(--bg2);display:flex;align-items:center;justify-content:space-between;position:sticky;top:0;z-index:50}
+.topbar h2{font-size:16px;font-weight:600}
+.topbar-right{display:flex;align-items:center;gap:10px}
+.content{padding:24px;flex:1}
+
+/* ── Buttons ── */
+.btn{padding:7px 14px;border-radius:7px;border:none;cursor:pointer;font-size:13px;font-weight:500;transition:all .15s;display:inline-flex;align-items:center;gap:6px}
+.btn-primary{background:var(--accent);color:#fff}
+.btn-primary:hover{background:var(--accent2)}
+.btn-ghost{background:transparent;color:var(--muted);border:1px solid var(--border)}
+.btn-ghost:hover{background:var(--bg3);color:var(--text)}
+.btn-sm{padding:4px 10px;font-size:12px}
+.btn-danger{background:rgba(239,68,68,.15);color:var(--red);border:1px solid rgba(239,68,68,.3)}
+.btn-danger:hover{background:rgba(239,68,68,.25)}
+.btn-success{background:rgba(34,197,94,.15);color:var(--green);border:1px solid rgba(34,197,94,.3)}
+
+/* ── Cards ── */
+.card{background:var(--bg2);border:1px solid var(--border);border-radius:12px;padding:20px}
+.card-sm{padding:14px 16px}
+.grid{display:grid;gap:16px}
+.grid-4{grid-template-columns:repeat(4,1fr)}
+.grid-3{grid-template-columns:repeat(3,1fr)}
+.grid-2{grid-template-columns:repeat(2,1fr)}
+
+/* ── Stat Cards ── */
+.stat-card{background:var(--bg2);border:1px solid var(--border);border-radius:12px;padding:18px 20px}
+.stat-label{font-size:11px;color:var(--muted);font-weight:500;text-transform:uppercase;letter-spacing:.5px;margin-bottom:8px}
+.stat-value{font-size:26px;font-weight:700;line-height:1}
+.stat-sub{font-size:12px;color:var(--muted);margin-top:5px}
+
+/* ── Health Score ── */
+.score-ring{display:inline-flex;flex-direction:column;align-items:center;gap:4px}
+.score-circle{width:64px;height:64px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:18px;font-weight:800;border:3px solid}
+.score-circle.excellent{color:var(--green);border-color:var(--green);background:var(--green-bg)}
+.score-circle.good{color:var(--yellow);border-color:var(--yellow);background:var(--yellow-bg)}
+.score-circle.warning{color:var(--orange);border-color:var(--orange);background:var(--orange-bg)}
+.score-circle.critical{color:var(--red);border-color:var(--red);background:var(--red-bg)}
+.score-circle.none{color:var(--muted);border-color:var(--border);background:var(--bg3)}
+
+.badge{display:inline-flex;align-items:center;gap:4px;padding:3px 9px;border-radius:20px;font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.4px}
+.badge.excellent{background:var(--green-bg);color:var(--green)}
+.badge.good{background:var(--yellow-bg);color:var(--yellow)}
+.badge.warning{background:var(--orange-bg);color:var(--orange)}
+.badge.critical{background:var(--red-bg);color:var(--red)}
+.badge.info{background:var(--blue-bg);color:var(--blue)}
+.badge.none{background:var(--bg3);color:var(--muted)}
+
+/* ── Table ── */
+.table-wrap{overflow-x:auto;border-radius:10px;border:1px solid var(--border)}
+table{width:100%;border-collapse:collapse;background:var(--bg2)}
+thead tr{border-bottom:1px solid var(--border)}
+th{padding:10px 14px;text-align:left;font-size:11px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;white-space:nowrap}
+td{padding:12px 14px;font-size:13px;border-bottom:1px solid rgba(46,50,80,.5)}
+tbody tr:last-child td{border-bottom:none}
+tbody tr:hover{background:rgba(99,102,241,.04)}
+.td-name{font-weight:500;color:var(--text)}
+.td-muted{color:var(--muted)}
+
+/* ── Chip / Pill ── */
+.chip{display:inline-block;padding:2px 8px;border-radius:6px;font-size:11px;font-weight:500}
+.chip.active{background:rgba(34,197,94,.12);color:var(--green)}
+.chip.paused{background:rgba(234,179,8,.1);color:var(--yellow)}
+.chip.archived{background:var(--bg3);color:var(--muted)}
+.chip.messaging{background:rgba(99,102,241,.15);color:var(--accent2)}
+.chip.leads{background:rgba(59,130,246,.15);color:var(--blue)}
+.chip.sales{background:rgba(34,197,94,.12);color:var(--green)}
+.chip.traffic{background:rgba(249,115,22,.12);color:var(--orange)}
+.chip.awareness{background:rgba(168,85,247,.12);color:#c084fc}
+.chip.unknown{background:var(--bg3);color:var(--muted)}
+
+/* ── Section header ── */
+.section-header{display:flex;align-items:center;justify-content:space-between;margin-bottom:14px}
+.section-title{font-size:14px;font-weight:600;color:var(--text)}
+.section-sub{font-size:12px;color:var(--muted);margin-top:2px}
+
+/* ── Filters bar ── */
+.filter-bar{display:flex;align-items:center;gap:10px;margin-bottom:16px;flex-wrap:wrap}
+.filter-bar select,.filter-bar input{background:var(--bg2);border:1px solid var(--border);color:var(--text);padding:7px 12px;border-radius:8px;font-size:13px;outline:none}
+.filter-bar select:focus,.filter-bar input:focus{border-color:var(--accent)}
+
+/* ── Recommendation Card ── */
+.rec-card{background:var(--bg2);border:1px solid var(--border);border-radius:10px;padding:14px 16px;margin-bottom:10px}
+.rec-card.critical{border-left:3px solid var(--red)}
+.rec-card.warning{border-left:3px solid var(--orange)}
+.rec-card.info{border-left:3px solid var(--blue)}
+.rec-title{font-size:13px;font-weight:600;margin-bottom:4px}
+.rec-body{font-size:12px;color:var(--muted);line-height:1.5;margin-bottom:10px}
+.rec-meta{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.rec-actions{display:flex;gap:6px;margin-top:10px}
+
+/* ── Alert Card ── */
+.alert-row td{vertical-align:middle}
+.alert-row.critical td:first-child{border-left:3px solid var(--red)}
+.alert-row.warning td:first-child{border-left:3px solid var(--orange)}
+.alert-row.info td:first-child{border-left:3px solid var(--blue)}
+
+/* ── Trend Chart ── */
+.chart-wrap{padding:12px 0;position:relative}
+.chart-bars{display:flex;align-items:flex-end;gap:4px;height:80px}
+.bar-wrap{flex:1;display:flex;flex-direction:column;align-items:center;gap:3px;cursor:default}
+.bar{width:100%;border-radius:3px 3px 0 0;transition:opacity .15s;min-height:3px}
+.bar:hover{opacity:.8}
+.bar-label{font-size:9px;color:var(--muted)}
+
+/* ── Details panel ── */
+.details-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:16px}
+.detail-item{background:var(--bg3);border-radius:8px;padding:12px 14px}
+.detail-label{font-size:11px;color:var(--muted);margin-bottom:4px;font-weight:500}
+.detail-value{font-size:18px;font-weight:700}
+.detail-value.small{font-size:14px}
+
+/* ── Tabs ── */
+.tabs{display:flex;gap:2px;border-bottom:1px solid var(--border);margin-bottom:20px}
+.tab{padding:9px 16px;cursor:pointer;font-size:13px;font-weight:500;color:var(--muted);border-bottom:2px solid transparent;margin-bottom:-1px;transition:all .15s}
+.tab:hover{color:var(--text)}
+.tab.active{color:var(--accent2);border-bottom-color:var(--accent)}
+
+/* ── Settings form ── */
+.form-group{margin-bottom:14px}
+.form-label{font-size:12px;font-weight:500;color:var(--muted);margin-bottom:6px;display:block}
+.form-input{width:100%;background:var(--bg3);border:1px solid var(--border);color:var(--text);padding:8px 12px;border-radius:8px;font-size:13px;outline:none}
+.form-input:focus{border-color:var(--accent)}
+.form-row{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+
+/* ── Misc ── */
+.empty{text-align:center;padding:40px;color:var(--muted);font-size:13px}
+.empty svg{margin-bottom:10px;opacity:.4}
+.loader{display:flex;align-items:center;justify-content:center;padding:40px;color:var(--muted);font-size:13px;gap:8px}
+.spin{animation:spin 1s linear infinite;display:inline-block}
+@keyframes spin{to{transform:rotate(360deg)}}
+.text-muted{color:var(--muted)}
+.text-green{color:var(--green)}
+.text-red{color:var(--red)}
+.text-orange{color:var(--orange)}
+.text-yellow{color:var(--yellow)}
+.mt8{margin-top:8px}.mt16{margin-top:16px}.mt24{margin-top:24px}
+.flex{display:flex}.items-center{align-items:center}.gap8{gap:8px}.gap12{gap:12px}
+.modal-overlay{position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:500;display:flex;align-items:center;justify-content:center}
+.modal{background:var(--bg2);border:1px solid var(--border);border-radius:14px;padding:24px;width:440px;max-width:95vw}
+.modal h3{font-size:15px;font-weight:600;margin-bottom:16px}
+.modal-actions{display:flex;gap:8px;justify-content:flex-end;margin-top:20px}
+.divider{border:none;border-top:1px solid var(--border);margin:16px 0}
+textarea.form-input{resize:vertical;min-height:80px}
+
+/* Phase 4 additions */
+.freshness-bar{padding:8px 24px;background:rgba(99,102,241,.08);border-bottom:1px solid var(--border);font-size:12px;color:var(--muted);display:flex;align-items:center;gap:12px}
+.freshness-bar.warn{background:rgba(249,115,22,.08);border-color:rgba(249,115,22,.2)}
+.freshness-bar .dot{width:7px;height:7px;border-radius:50%;background:var(--green);flex-shrink:0}
+.freshness-bar.warn .dot{background:var(--orange)}
+.delta{font-size:11px;font-weight:600;display:inline-flex;align-items:center;gap:2px}
+.delta.pos{color:var(--green)}.delta.neg{color:var(--red)}.delta.neu{color:var(--muted)}
+.metric-with-delta{display:flex;flex-direction:column;gap:2px}
+.breakdown-bar-row{display:flex;align-items:center;gap:8px;margin-bottom:8px}
+.breakdown-bar-label{width:90px;font-size:12px;color:var(--muted);text-align:right;flex-shrink:0}
+.breakdown-bar-track{flex:1;height:8px;background:var(--bg3);border-radius:4px;overflow:hidden}
+.breakdown-bar-fill{height:100%;border-radius:4px;background:var(--accent);transition:width .4s}
+.breakdown-bar-val{font-size:12px;width:80px;text-align:right;flex-shrink:0}
+.source-badge{font-size:10px;padding:2px 7px;border-radius:10px;font-weight:600;text-transform:uppercase}
+.source-badge.live{background:var(--green-bg);color:var(--green)}
+.source-badge.mock{background:var(--blue-bg);color:var(--blue)}
+.source-badge.cached{background:var(--yellow-bg);color:var(--yellow)}
+.tabs-inner{display:flex;gap:2px;margin-bottom:16px;border-bottom:1px solid var(--border)}
+.tab-inner{padding:7px 14px;cursor:pointer;font-size:12px;font-weight:500;color:var(--muted);border-bottom:2px solid transparent;margin-bottom:-1px;transition:all .15s}
+.tab-inner:hover{color:var(--text)}
+.tab-inner.active{color:var(--accent2);border-bottom-color:var(--accent)}
+
+/* Phase 5 — Decision Center */
+.decision-card{background:var(--bg2);border:1px solid var(--border);border-radius:10px;padding:14px 16px;margin-bottom:10px;display:flex;flex-direction:column;gap:8px}
+.decision-card.critical{border-left:4px solid var(--red)}
+.decision-card.high{border-left:4px solid var(--orange)}
+.decision-card.medium{border-left:4px solid var(--yellow)}
+.decision-card.low{border-left:4px solid var(--muted)}
+.decision-header{display:flex;align-items:flex-start;justify-content:space-between;gap:8px;flex-wrap:wrap}
+.decision-label{font-size:14px;font-weight:700}
+.decision-reason{font-size:12px;color:var(--muted);line-height:1.5}
+.decision-action{font-size:12px;background:var(--bg3);border-radius:6px;padding:8px 10px;border-left:2px solid var(--accent)}
+.decision-metrics{display:flex;gap:12px;flex-wrap:wrap}
+.decision-metric{font-size:11px;background:var(--bg3);padding:3px 8px;border-radius:5px;color:var(--muted)}
+.decision-actions{display:flex;gap:6px;flex-wrap:wrap}
+.priority-bar{display:flex;gap:8px;margin-bottom:16px;flex-wrap:wrap}
+.priority-pill{padding:6px 14px;border-radius:20px;font-size:12px;font-weight:600;cursor:pointer;border:1px solid transparent;transition:all .15s}
+.priority-pill.critical{background:var(--red-bg);color:var(--red);border-color:rgba(239,68,68,.3)}
+.priority-pill.high{background:var(--orange-bg);color:var(--orange);border-color:rgba(249,115,22,.3)}
+.priority-pill.medium{background:var(--yellow-bg);color:var(--yellow);border-color:rgba(234,179,8,.3)}
+.priority-pill.low{background:var(--bg3);color:var(--muted);border-color:var(--border)}
+.winner-card,.loser-card{padding:10px 14px;background:var(--bg2);border:1px solid var(--border);border-radius:8px;margin-bottom:8px;display:flex;align-items:center;justify-content:space-between;gap:12px}
+.opp-card{padding:12px 14px;background:var(--bg2);border:1px solid var(--border);border-radius:8px;margin-bottom:10px}
+.opp-type{font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--accent2);margin-bottom:4px}
+.opp-reason{font-size:12px;color:var(--muted);line-height:1.5;margin-bottom:8px}
+.confidence-badge{font-size:10px;padding:2px 7px;border-radius:8px;font-weight:600}
+.confidence-badge.high{background:var(--green-bg);color:var(--green)}
+.confidence-badge.medium{background:var(--yellow-bg);color:var(--yellow)}
+.confidence-badge.low{background:var(--bg3);color:var(--muted)}
+.report-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:20px}
+.report-stat{background:var(--bg2);border:1px solid var(--border);border-radius:10px;padding:16px;text-align:center}
+.report-stat-val{font-size:28px;font-weight:800}
+.report-stat-lbl{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.4px;margin-top:4px}
+
+/* ── Phase 6C ── */
+.date-bar{display:flex;align-items:center;gap:6px;padding:8px 24px;background:var(--bg2);border-bottom:1px solid var(--border);flex-wrap:wrap}
+.date-btn{padding:4px 10px;border-radius:6px;border:1px solid var(--border);background:transparent;color:var(--muted);font-size:12px;cursor:pointer;transition:all .12s}
+.date-btn:hover{background:var(--bg3);color:var(--text)}
+.date-btn.active{background:var(--accent);color:#fff;border-color:var(--accent)}
+.date-custom{background:var(--bg3);border:1px solid var(--border);color:var(--text);padding:3px 8px;border-radius:6px;font-size:12px}
+.acct-select{background:var(--bg3);border:1px solid var(--border);color:var(--text);padding:4px 10px;border-radius:6px;font-size:12px;margin-left:auto}
+.kpi-hero{background:var(--bg3);border-radius:8px;padding:14px 18px;margin-bottom:12px;display:flex;align-items:center;justify-content:space-between}
+.kpi-hero-label{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin-bottom:4px}
+.kpi-hero-value{font-size:28px;font-weight:800}
+.kpi-hero-cost{font-size:13px;color:var(--muted);margin-top:3px}
+.breakdown-panel{background:var(--bg3);border-radius:10px;padding:14px;margin-top:12px}
+.breakdown-row{display:flex;align-items:center;padding:7px 0;border-bottom:1px solid var(--border);gap:8px;font-size:12px}
+.breakdown-row:last-child{border-bottom:none}
+.breakdown-metric{width:180px;flex-shrink:0;font-weight:500}
+.breakdown-bar-outer{flex:1;height:8px;background:var(--bg2);border-radius:4px;overflow:hidden}
+.breakdown-bar-inner{height:100%;border-radius:4px;transition:width .4s}
+.breakdown-val{width:60px;text-align:right;flex-shrink:0}
+.breakdown-weight{width:40px;text-align:right;color:var(--muted);flex-shrink:0}
+.breakdown-interp{color:var(--muted);font-size:11px;margin-top:2px}
+.portfolio-card{background:var(--bg2);border:1px solid var(--border);border-radius:10px;padding:16px;margin-bottom:10px}
+.portfolio-rank{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:8px 0;border-bottom:1px solid var(--border)}
+.portfolio-rank:last-child{border-bottom:none}
+
+/* ── Intelligence Center (Campaign page) ── */
+.ic-wrap{display:flex;flex-direction:column;height:100%;gap:0}
+.ic-topbar{background:var(--bg2);border:1px solid var(--border);border-radius:8px;padding:8px 14px;margin-bottom:10px;display:flex;align-items:center;gap:10px;flex-wrap:wrap;min-height:auto}
+.ic-header-meta{display:flex;align-items:center;gap:10px;flex-wrap:wrap;font-size:12px;color:var(--muted)}
+.ic-header-pill{padding:2px 8px;background:var(--bg3);border-radius:6px;font-size:11px;white-space:nowrap}
+.ic-campaign-select{flex:1;min-width:200px;background:var(--bg3);border:1px solid var(--border);color:var(--text);padding:8px 12px;border-radius:8px;font-size:14px;font-weight:500;outline:none}
+.ic-campaign-select:focus{border-color:var(--accent)}
+.ic-breadcrumb{display:flex;align-items:center;gap:6px;font-size:12px;color:var(--muted);flex-wrap:wrap}
+.ic-breadcrumb .bc-item{color:var(--accent2);cursor:pointer}
+.ic-breadcrumb .bc-item:hover{text-decoration:underline}
+.ic-breadcrumb .bc-sep{color:var(--border)}
+.ic-breadcrumb .bc-current{color:var(--text);font-weight:500}
+.ic-tabs{display:flex;gap:2px;border-bottom:1px solid var(--border);margin-bottom:16px}
+.ic-tab{padding:9px 18px;cursor:pointer;font-size:13px;font-weight:500;color:var(--muted);border-bottom:2px solid transparent;margin-bottom:-1px;transition:all .15s;display:flex;align-items:center;gap:6px}
+.ic-tab:hover{color:var(--text)}
+.ic-tab.active{color:var(--accent2);border-bottom-color:var(--accent)}
+.ic-tab .ic-tab-count{background:var(--bg3);padding:1px 6px;border-radius:8px;font-size:11px}
+.ic-tab.active .ic-tab-count{background:rgba(99,102,241,.2)}
+.ic-hero{display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:12px;margin-bottom:16px}
+.ic-kpi-card{background:var(--bg3);border-radius:10px;padding:14px 16px;position:relative;overflow:hidden}
+.ic-kpi-card.primary{background:linear-gradient(135deg,rgba(99,102,241,.15),rgba(99,102,241,.05));border:1px solid rgba(99,102,241,.3)}
+.ic-kpi-label{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px}
+.ic-kpi-value{font-size:22px;font-weight:800;line-height:1}
+.ic-kpi-sub{font-size:11px;color:var(--muted);margin-top:4px;display:flex;align-items:center;gap:4px}
+.hs-inline{display:flex;align-items:center;gap:8px}
+.ic-adset-row,.ic-ad-row{display:grid;align-items:center;gap:10px;padding:11px 14px;border-bottom:1px solid var(--border);transition:background .1s;cursor:default}
+.ic-adset-row{grid-template-columns:2fr 70px 70px 100px 100px 90px 80px 70px 100px auto}
+.ic-ad-row{grid-template-columns:2fr 70px 70px 100px 90px 70px 90px 60px auto}
+.ic-adset-row:hover,.ic-ad-row:hover{background:rgba(99,102,241,.04)}
+.ic-col-label{font-size:11px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.4px;padding:8px 14px;border-bottom:1px solid var(--border);background:var(--bg3);display:grid;align-items:center;gap:10px}
+.ic-adset-label{grid-template-columns:2fr 70px 70px 100px 100px 90px 80px 70px 100px auto}
+.ic-ad-label{grid-template-columns:2fr 70px 70px 100px 90px 70px 90px 60px auto}
+.ic-cell-name{font-weight:600;font-size:13px}
+.ic-cell-muted{font-size:12px;color:var(--muted)}
+.ic-analyze-btn{font-size:11px;padding:4px 10px;background:rgba(99,102,241,.12);color:var(--accent2);border:1px solid rgba(99,102,241,.25);border-radius:6px;cursor:pointer;white-space:nowrap}
+.ic-analyze-btn:hover{background:rgba(99,102,241,.22)}
+.ic-drill-btn{font-size:11px;padding:4px 10px;background:var(--bg3);color:var(--muted);border:1px solid var(--border);border-radius:6px;cursor:pointer;white-space:nowrap}
+.ic-drill-btn:hover{color:var(--text);border-color:var(--accent2)}
+.ic-empty{text-align:center;padding:40px;color:var(--muted);font-size:13px}
+.ic-score-sm{width:36px;height:36px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:700;border:2px solid;flex-shrink:0}
+</style>
+</head>
+<body>
+
+<!-- Sidebar -->
+<aside id="sidebar">
+  <div class="logo">
+    <h1>📊 Meta Ads</h1>
+    <p>Intelligence Platform</p>
+  </div>
+  <nav>
+    <button class="nav-item" onclick="navigate('portfolio')">
+      <svg fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10"/></svg>
+      Portfolio
+    </button>
+    <button class="nav-item active" onclick="navigate('dashboard')">
+      <svg fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6"/></svg>
+      Control Center
+    </button>
+    <button class="nav-item" onclick="navigate('campaigns')">
+      <svg fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"/></svg>
+      Campaigns
+    </button>
+    <button class="nav-item" onclick="navigate('recommendations')" id="nav-rec">
+      <svg fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z"/></svg>
+      Recommendations
+      <span class="nav-badge warn" id="badge-rec" style="display:none">0</span>
+    </button>
+    <button class="nav-item" onclick="navigate('alerts')" id="nav-alert">
+      <svg fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9"/></svg>
+      Alerts
+      <span class="nav-badge" id="badge-alert" style="display:none">0</span>
+    </button>
+    <button class="nav-item" onclick="navigate('decisions')" id="nav-decisions">
+      <svg fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-3 7h3m-3 4h3m-6-4h.01M9 16h.01"/></svg>
+      Decision Center
+    </button>
+    <button class="nav-item" onclick="navigate('reports')">
+      <svg fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 17v-2m3 2v-4m3 4v-6m2 10H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>
+      Reports
+    </button>
+    <button class="nav-item" onclick="navigate('settings')">
+      <svg fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/></svg>
+      Settings
+    </button>
+  </nav>
+  <div class="sidebar-footer">v6.1 · Phase 6C</div>
+</aside>
+
+<!-- Main -->
+<div id="main">
+  <div class="topbar">
+    <h2 id="page-title">Control Center</h2>
+    <div class="topbar-right">
+      <span id="last-updated" class="text-muted" style="font-size:12px"></span>
+      <button class="btn btn-ghost btn-sm" onclick="refreshData()">↻ Refresh</button>
+    </div>
+  </div>
+  <div id="date-bar" class="date-bar">
+  <button class="date-btn" onclick="setPreset('today')">Today</button>
+  <button class="date-btn" onclick="setPreset('last_3_days')">3D</button>
+  <button class="date-btn active" id="dbtn-last_7_days" onclick="setPreset('last_7_days')">7D</button>
+  <button class="date-btn" onclick="setPreset('last_14')">14D</button>
+  <button class="date-btn" onclick="setPreset('last_30_days')">30D</button>
+  <button class="date-btn" onclick="setPreset('this_month')">Month</button>
+  <button class="date-btn" onclick="setPreset('last_month')">Last Month</button>
+  <span style="color:var(--muted);font-size:11px;margin-left:4px">Custom:</span>
+  <input type="date" class="date-custom" id="custom-since" onchange="setCustomRange()">
+  <input type="date" class="date-custom" id="custom-until" onchange="setCustomRange()">
+  <select class="acct-select" id="acct-selector" onchange="setAccount(this.value)">
+    <option value="">All Accounts</option>
+  </select>
+</div>
+<div id="freshness-bar" style="display:none" class="freshness-bar">
+  <span class="dot"></span>
+  <span id="freshness-text"></span>
+</div>
+<div class="content" id="content">
+    <div class="loader"><span class="spin">◌</span> Loading...</div>
+  </div>
+</div>
+
+<!-- Modal -->
+<div class="modal-overlay" id="modal" style="display:none" onclick="if(event.target===this)closeModal()">
+  <div class="modal" id="modal-body"></div>
+</div>
+
+<script>
+const API = '/api/v1';
+let currentPage = 'dashboard';
+let dashboardData = null;
+
+// ─── API helpers ───────────────────────────────────────────────
+async function api(path, opts={}) {
+  const r = await fetch(API + path, { headers:{'Content-Type':'application/json'}, ...opts });
+  return r.json();
+}
+async function apiPatch(path, body) {
+  return api(path, { method:'PATCH', body: JSON.stringify(body) });
+}
+async function apiPost(path, body) {
+  return api(path, { method:'POST', body: JSON.stringify(body) });
+}
+async function apiDelete(path) {
+  return api(path, { method:'DELETE' });
+}
+
+// ─── Navigation ────────────────────────────────────────────────
+function navigate(page, params={}) {
+  currentPage = page;
+  document.querySelectorAll('.nav-item').forEach(el => el.classList.remove('active'));
+  const navMap = { dashboard:'dashboard', campaigns:'campaigns', recommendations:'recommendations', alerts:'alerts', settings:'settings' };
+  const btn = document.querySelector(`.nav-item[onclick*="${navMap[page] || page}"]`);
+  if (btn) btn.classList.add('active');
+  const titles = { portfolio:'Portfolio', dashboard:'Control Center', campaigns:'Campaigns', recommendations:'Recommendations', alerts:'Alert Center', decisions:'Decision Center', reports:'Reports', settings:'Settings' };
+  document.getElementById('page-title').textContent = titles[page] || page;
+  const content = document.getElementById('content');
+  content.innerHTML = '<div class="loader"><span class="spin">◌</span> Loading...</div>';
+  const pages = { portfolio: loadPortfolio, dashboard: loadDashboard, campaigns: loadCampaigns, recommendations: loadRecommendations, alerts: loadAlerts, decisions: loadDecisions, reports: loadReports, settings: loadSettings };
+  if (pages[page]) pages[page](params);
+}
+
+function refreshData() {
+  // Clear IC cached insights so next render re-fetches with new date range
+  if (window.ic) {
+    window.ic.insights = null;
+    window.ic.adsets   = [];
+    window.ic.ads      = [];
+  }
+  // Clear server-side cache then reload page
+  fetch(API + '/sync/cache/flush', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({}) })
+    .catch(() => {})
+    .finally(() => navigate(currentPage));
+}
+
+// ─── Helpers ───────────────────────────────────────────────────
+function scoreClass(s) {
+  if (s === null || s === undefined) return 'none';
+  if (s >= 80) return 'excellent';
+  if (s >= 60) return 'good';
+  if (s >= 40) return 'warning';
+  return 'critical';
+}
+function scoreLabel(s) {
+  if (s === null || s === undefined) return '—';
+  if (s >= 80) return 'Excellent';
+  if (s >= 60) return 'Good';
+  if (s >= 40) return 'Warning';
+  return 'Critical';
+}
+function severityClass(s) {
+  return { critical:'critical', warning:'warning', info:'info' }[s] || 'none';
+}
+function fmtDate(d) {
+  if (!d) return '—';
+  return new Date(d).toLocaleDateString('en-GB', { day:'2-digit', month:'short', year:'numeric' });
+}
+function fmtNum(n, dec=2) {
+  if (n === null || n === undefined) return '—';
+  return Number(n).toFixed(dec);
+}
+function objChip(o) {
+  return `<span class="chip ${o||'unknown'}">${o||'unknown'}</span>`;
+}
+function scoreCircle(score, small=false) {
+  const cls = scoreClass(score);
+  const val = score !== null && score !== undefined ? score : '—';
+  const size = small ? 'width:44px;height:44px;font-size:13px' : '';
+  return `<div class="score-circle ${cls}" style="${size}">${val}</div>`;
+}
+
+// ─── Modal ─────────────────────────────────────────────────────
+function openModal(html) {
+  document.getElementById('modal-body').innerHTML = html;
+  document.getElementById('modal').style.display = 'flex';
+}
+function closeModal() {
+  document.getElementById('modal').style.display = 'none';
+}
+
+// ─── Update nav badges ─────────────────────────────────────────
+async function updateBadges() {
+  try {
+    const d = await apiDate('/dashboard');
+    const ac = d.summary?.alerts?.critical || 0;
+    const aw = d.summary?.alerts?.warning || 0;
+    const rt = d.summary?.recommendations?.total || 0;
+    const ab = document.getElementById('badge-alert');
+    const rb = document.getElementById('badge-rec');
+    if (ac > 0) { ab.textContent = ac; ab.style.display=''; ab.classList.remove('warn'); }
+    else if (aw > 0) { ab.textContent = aw; ab.style.display=''; ab.classList.add('warn'); }
+    else ab.style.display='none';
+    if (rt > 0) { rb.textContent = rt; rb.style.display=''; } else rb.style.display='none';
+  } catch(e) {}
+}
+
+// ═══════════════════════════════════════════════════════════════
+// DASHBOARD
+// ═══════════════════════════════════════════════════════════════
+async function loadDashboard() {
+  const d = await apiDate('/dashboard');
+  dashboardData = d;
+  document.getElementById('last-updated').textContent = 'Updated ' + new Date().toLocaleTimeString();
+  updateBadges();
+
+  const s = d.summary;
+  const avgScore = s.health.average;
+  const avgCls = scoreClass(avgScore);
+
+  document.getElementById('content').innerHTML = `
+  <div class="grid grid-4" style="margin-bottom:20px">
+    <div class="stat-card">
+      <div class="stat-label">Ad Accounts</div>
+      <div class="stat-value">${s.accounts.total}</div>
+      <div class="stat-sub">${s.accounts.active} active</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-label">Campaigns</div>
+      <div class="stat-value">${s.campaigns.total}</div>
+      <div class="stat-sub">${s.campaigns.active} active</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-label">Avg Health Score</div>
+      <div class="stat-value" style="color:var(--${avgCls==='excellent'?'green':avgCls==='good'?'yellow':avgCls==='warning'?'orange':'red'})">${avgScore ?? '—'}</div>
+      <div class="stat-sub"><span class="badge ${avgCls}">${scoreLabel(avgScore)}</span></div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-label">Active Alerts</div>
+      <div class="stat-value text-red">${s.alerts.critical}</div>
+      <div class="stat-sub">
+        <span class="badge critical">${s.alerts.critical} critical</span>
+        <span class="badge warning" style="margin-left:4px">${s.alerts.warning} warning</span>
+      </div>
+    </div>
+  </div>
+
+  <div class="grid" style="grid-template-columns:1fr 1fr;gap:16px;margin-bottom:20px">
+    <div class="card">
+      <div class="stat-label">Recommendations</div>
+      <div style="display:flex;align-items:center;gap:16px;margin-top:8px">
+        <div><div class="stat-value text-red">${s.recommendations.critical}</div><div class="stat-sub">Critical</div></div>
+        <div><div class="stat-value" style="color:var(--orange)">${s.recommendations.total - s.recommendations.critical}</div><div class="stat-sub">Other</div></div>
+        <div><div class="stat-value text-green">${s.recommendations.completed}</div><div class="stat-sub">Completed</div></div>
+      </div>
+    </div>
+    ${d.needs_attention?.length ? `
+    <div class="card">
+      <div class="section-header"><span class="section-title">⚠ Needs Attention</span></div>
+      ${d.needs_attention.map(c=>`
+        <div style="display:flex;align-items:center;justify-content:space-between;padding:6px 0;border-bottom:1px solid var(--border)">
+          <div>
+            <span class="td-name" style="font-size:13px;cursor:pointer;color:var(--accent2)" onclick="viewCampaign('${c.meta_campaign_id}')">${c.name}</span>
+            <div style="margin-top:2px">${objChip(c.objective)}</div>
+          </div>
+          <div class="score-circle ${scoreClass(c.health_score)}" style="width:36px;height:36px;font-size:12px">${c.health_score??'—'}</div>
+        </div>
+      `).join('')}
+    </div>
+    ` : '<div class="card"><div class="empty">✓ No campaigns need immediate attention</div></div>'}
+  </div>
+
+  <div class="section-header">
+    <div><div class="section-title">Top Campaigns by Health Score</div></div>
+    <button class="btn btn-ghost btn-sm" onclick="navigate('campaigns')">View All</button>
+  </div>
+  <div class="table-wrap">
+    <table>
+      <thead><tr>
+        <th>Campaign</th><th>Objective</th><th>Status</th>
+        <th>Health</th><th>Recs</th><th>Alerts</th><th></th>
+      </tr></thead>
+      <tbody>
+        ${d.top_campaigns.map(c => `
+        <tr>
+          <td class="td-name" style="cursor:pointer;color:var(--accent2)" onclick="viewCampaign('${c.meta_campaign_id}')">${c.name}</td>
+          <td>${objChip(c.objective)}</td>
+          <td><span class="chip ${c.status}">${c.status}</span></td>
+          <td>
+            <div style="display:flex;align-items:center;gap:8px">
+              ${scoreCircle(c.health_score, true)}
+              <span class="badge ${scoreClass(c.health_score)}">${scoreLabel(c.health_score)}</span>
+            </div>
+          </td>
+          <td>${c.recommendation_count > 0 ? `<span class="badge warning">${c.recommendation_count}</span>` : '<span class="text-muted">0</span>'}</td>
+          <td>${c.alert_count > 0 ? `<span class="badge critical">${c.alert_count}</span>` : '<span class="text-muted">0</span>'}</td>
+          <td><button class="btn btn-ghost btn-sm" onclick="viewCampaign('${c.meta_campaign_id}')">Details →</button></td>
+        </tr>`).join('')}
+      </tbody>
+    </table>
+  </div>
+  `;
+}
+
+// ═══════════════════════════════════════════════════════════════
+// CAMPAIGNS LIST
+// ═══════════════════════════════════════════════════════════════
+// ═══════════════════════════════════════════════════════════════
+// CAMPAIGN INTELLIGENCE CENTER — Phase 6 UI
+// Single-page drilldown: Campaign → Ad Sets → Ads
+// State lives in window.ic (Intelligence Center state)
+// ═══════════════════════════════════════════════════════════════
+
+// ── Global IC state ──
+window.ic = {
+  campaigns:       [],   // all campaigns
+  scoreMap:        {},   // health scores by meta_campaign_id
+  selectedCampaign: null, // full campaign object
+  selectedAdSet:   null, // { meta_adset_id, name }
+  level:           'campaign', // 'campaign' | 'adsets' | 'ads'
+  insights:        null, // last loaded insights
+  adsets:          [],   // ad sets for selected campaign
+  ads:             [],   // ads for selected ad set
+};
+
+// ── KPI helpers (inline — no server round-trip needed) ──
+const _KPI = {
+  messaging: { key:'results',            label:'Conversations',      costKey:'cpr',  costLabel:'Cost/Conv' },
+  leads:     { key:'leads',              label:'Leads',              costKey:'cpl',  costLabel:'Cost/Lead' },
+  sales:     { key:'roas',               label:'ROAS',               costKey:'cpa',  costLabel:'CPA' },
+  traffic:   { key:'landing_page_views', label:'Landing Page Views', costKey:'cost_per_landing_page_view', costLabel:'Cost/LPV' },
+  awareness: { key:'reach',              label:'Reach',              costKey:'cpm',  costLabel:'CPM' },
+  unknown:   { key:'spend',              label:'Spend',              costKey:'cpm',  costLabel:'CPM' },
+};
+function icKPI(obj) { return _KPI[obj] || _KPI.unknown; }
+function icScoreStyle(s) {
+  if (s===null||s===undefined) return 'color:var(--muted);border-color:var(--border)';
+  if (s>=80) return 'color:var(--green);border-color:var(--green)';
+  if (s>=60) return 'color:var(--yellow);border-color:var(--yellow)';
+  if (s>=40) return 'color:var(--orange);border-color:var(--orange)';
+  return 'color:var(--red);border-color:var(--red)';
+}
+function icScoreEl(s) {
+  const v = s!==null&&s!==undefined ? s : '—';
+  return `<div class="ic-score-sm" style="${icScoreStyle(s)}">${v}</div>`;
+}
+function icFmtVal(key, val, currency='') {
+  if (val===null||val===undefined) return '<span style="color:var(--muted);font-style:italic">No data</span>';
+  const v = parseFloat(val);
+  if (isNaN(v)) return '<span style="color:var(--muted);font-style:italic">No data</span>';
+  if (key==='roas') return v.toFixed(2)+'x';
+  if (key==='ctr')  return v.toFixed(2)+'%';
+  if (['cpr','cpl','cpa','cpm','cpc','cost_per_landing_page_view'].includes(key))
+    return v.toFixed(2) + (currency?' '+currency:'');
+  if (['results','leads','purchases','landing_page_views','reach','impressions'].includes(key))
+    return v.toLocaleString('en-US');
+  if (key==='spend' || key==='purchase_value')
+    return v.toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2}) + (currency?' '+currency:'');
+  return v.toFixed(2);
+}
+function icDelta(deltas, key, lowerBetter=false) {
+  const d = deltas?.[key];
+  if (!d) return '';
+  const pct = d.delta_pct;
+  const good = lowerBetter ? pct < 0 : pct > 0;
+  const cls  = good ? 'var(--green)' : 'var(--red)';
+  const arr  = pct > 0 ? '▲' : pct < 0 ? '▼' : '▸';
+  return `<span style="color:${cls};font-size:10px;margin-left:3px">${arr}${Math.abs(pct)}%</span>`;
+}
+
+// ── Health Score trend display (Phase 7B — Part 4) ──
+// Reads health_trend[] already returned by backend (campaign/adset/ad insights).
+// Shows previous score + delta + which underlying metrics moved, or "First analysis".
+function buildHealthTrendHtml(trendArr, currentScore) {
+  if (!Array.isArray(trendArr) || trendArr.length < 2) {
+    return `<div style="font-size:11px;color:var(--muted);margin-bottom:10px">📈 First analysis — no previous score to compare</div>`;
+  }
+  // trendArr is ordered ASC by calculated_at in the backend; last = current, second-to-last = previous
+  const sorted = [...trendArr].sort((a,b) => new Date(a.calculated_at) - new Date(b.calculated_at));
+  const prev = sorted[sorted.length - 2];
+  const cur  = currentScore ?? sorted[sorted.length - 1]?.score;
+  if (!prev || cur === undefined || cur === null) {
+    return `<div style="font-size:11px;color:var(--muted);margin-bottom:10px">📈 First analysis — no previous score to compare</div>`;
+  }
+  const diff = cur - prev.score;
+  const cls  = diff > 0 ? 'var(--green)' : diff < 0 ? 'var(--red)' : 'var(--muted)';
+  const arr  = diff > 0 ? '▲' : diff < 0 ? '▼' : '▸';
+  return `<div style="font-size:11px;color:var(--muted);margin-bottom:10px;display:flex;align-items:center;gap:8px">
+    <span>Previous: <strong style="color:var(--text)">${prev.score}</strong></span>
+    <span style="color:${cls};font-weight:700">${arr} ${Math.abs(diff)}</span>
+    <span style="opacity:.7">(${new Date(prev.calculated_at).toLocaleDateString()})</span>
+  </div>`;
+}
+
+// ── Main loader ──
+async function loadCampaigns() {
+  document.getElementById('content').innerHTML = '<div class="loader"><span class="spin">◌</span> Loading campaigns...</div>';
+  const [campsR, histR] = await Promise.all([
+    api('/campaigns?limit=200'),
+    apiDate('/health-history'),
+  ]);
+  window.ic.campaigns = campsR.data || [];
+  window.ic.scoreMap  = {};
+  (histR.data || []).forEach(h => { window.ic.scoreMap[h.entity_meta_id] = h; });
+
+  // Always default to first campaign if none selected
+  if (!window.ic.selectedCampaign && window.ic.campaigns.length) {
+    window.ic.selectedCampaign = window.ic.campaigns[0];
+  }
+
+  // IMPORTANT: Always clear insights so date changes take effect
+  window.ic.insights = null;
+  window.ic.adsets   = [];
+  window.ic.ads      = [];
+
+  renderIC();
+}
+
+// ── Render entire Intelligence Center shell ──
+function renderIC() {
+  const c = window.ic.selectedCampaign;
+  const h = c ? window.ic.scoreMap[c.meta_campaign_id] : null;
+
+  document.getElementById('content').innerHTML = `
+  <div class="ic-wrap">
+
+    <!-- Compressed top bar: selector + objective + delivery + score + primary KPI -->
+    <div class="ic-topbar">
+      <select class="ic-campaign-select" id="ic-camp-select" onchange="icSelectCampaign(this.value)" style="max-width:280px">
+        ${window.ic.campaigns.map(cam =>
+          `<option value="${cam.meta_campaign_id}"${c?.meta_campaign_id===cam.meta_campaign_id?' selected':''}>${cam.name}</option>`
+        ).join('')}
+      </select>
+      ${c ? `
+      <div class="ic-header-meta">
+        <span class="ic-header-pill">${objChip(c.objective)}</span>
+        <span class="ic-header-pill chip ${c.status}" style="background:transparent;padding:0">${c.status}</span>
+      </div>
+      ${icScoreEl(h?.health_score ?? null)}
+      <span class="badge ${h?.health_status||'none'}" style="font-size:11px">${h?.health_status||'Not analyzed'}</span>
+      ${window.ic.insights ? `<span class="ic-header-pill">${icKPI(c.objective).label}: <strong>${icFmtVal(icKPI(c.objective).key, window.ic.insights.metrics?.[icKPI(c.objective).key], window.ic.insights.currency)}</strong></span>
+      <span class="ic-header-pill">Spend: <strong>${icFmtVal('spend', window.ic.insights.metrics?.spend, window.ic.insights.currency)}</strong></span>` : ''}
+      <button class="ic-analyze-btn" id="ic-analyze-btn" style="margin-left:auto" onclick="icAnalyze()">⚡ Analyze</button>
+      ` : ''}
+    </div>
+    ${c ? `<div class="ic-breadcrumb" id="ic-breadcrumb" style="margin-bottom:10px">${buildBreadcrumb()}</div>` : ''}
+
+    ${!c ? '<div class="ic-empty">📋 Select a campaign above to begin<br><span style="font-size:11px;opacity:.7">Choose from the dropdown to view its intelligence workspace</span></div>' : `
+    <!-- Level tabs -->
+    <div class="ic-tabs">
+      <div class="ic-tab${window.ic.level==='campaign'?' active':''}" onclick="icSetLevel('campaign')">
+        📊 Overview
+      </div>
+      <div class="ic-tab${window.ic.level==='adsets'?' active':''}" onclick="icSetLevel('adsets')">
+        📦 Ad Sets
+      </div>
+      <div class="ic-tab${window.ic.level==='ads'?' active':''}" onclick="icSetLevel('ads')">
+        🎯 Ads ${window.ic.selectedAdSet ? '<span class="ic-tab-count">'+window.ic.selectedAdSet.name.slice(0,12)+'…</span>' : ''}
+      </div>
+    </div>
+
+    <!-- Level content -->
+    <div id="ic-level-content"><div class="loader"><span class="spin">◌</span></div></div>
+    `}
+  </div>`;
+
+  if (c) icLoadLevel();
+}
+
+// ── Breadcrumb ──
+function buildBreadcrumb() {
+  const parts = [];
+  const c = window.ic.selectedCampaign;
+  if (c) parts.push(`<span class="bc-item" onclick="icSetLevel('campaign')">${c.name.length>30?c.name.slice(0,30)+'…':c.name}</span>`);
+  if (window.ic.level === 'adsets') parts.push('<span class="bc-sep">›</span><span class="bc-current">Ad Sets</span>');
+  if (window.ic.level === 'ads' && window.ic.selectedAdSet) {
+    parts.push(`<span class="bc-sep">›</span><span class="bc-item" onclick="icSetLevel('adsets')">Ad Sets</span>`);
+    parts.push(`<span class="bc-sep">›</span><span class="bc-current">${window.ic.selectedAdSet.name.length>25?window.ic.selectedAdSet.name.slice(0,25)+'…':window.ic.selectedAdSet.name}</span>`);
+  }
+  if (window.ic.level === 'ads' && !window.ic.selectedAdSet) parts.push('<span class="bc-sep">›</span><span class="bc-current">All Ads</span>');
+  return parts.join(' ');
+}
+
+// ── Campaign selector change ──
+async function icSelectCampaign(metaId) {
+  window.ic.selectedCampaign = window.ic.campaigns.find(c => c.meta_campaign_id === metaId) || null;
+  window.ic.selectedAdSet    = null;
+  window.ic.level            = 'campaign';
+  window.ic.insights         = null;  // force re-fetch
+  window.ic.adsets           = [];    // clear adsets cache
+  window.ic.ads              = [];    // clear ads cache
+  renderIC();
+}
+
+// ── Set level tab ──
+function icSetLevel(level) {
+  if (level === 'ads' && !window.ic.selectedAdSet) {
+    window.ic.level = 'adsets';
+    renderIC(); return;
+  }
+  // Clear cached data for this level so it re-fetches fresh
+  if (level === 'adsets') window.ic.adsets = [];
+  if (level === 'ads')    window.ic.ads    = [];
+  if (level === 'campaign') window.ic.insights = null;
+  window.ic.level = level;
+  renderIC();
+}
+
+// ── Analyze current campaign (refreshes ONLY this entity, no full page reload) ──
+async function icAnalyze() {
+  const c = window.ic.selectedCampaign;
+  if (!c) return;
+  const btn = document.getElementById('ic-analyze-btn');
+  if (btn) { if (btn.disabled) return; btn.textContent = '⏳ Analyzing...'; btn.disabled = true; }
+  try {
+    const r = await api(addDateQ(insightsUrl(`/campaigns/${c.id}/insights`)));
+    window.ic.insights = r;
+    // Phase 8: only update the score map when Meta actually returned data —
+    // an analyzed:false response must not overwrite a previously valid score.
+    if (r.analyzed !== false) {
+      window.ic.scoreMap[c.meta_campaign_id] = { health_score: r.health_score, health_status: r.health_status, calculated_at: r.fetched_at };
+    }
+    // Refresh only the header score pill + current level content (not the whole shell)
+    const scorePill = document.querySelector('.ic-topbar .hs-inline, .ic-topbar .badge');
+    if (window.ic.level === 'campaign') {
+      const el = document.getElementById('ic-level-content');
+      if (el) await icLoadCampaignView(el);
+    }
+    // Update header inline (score + KPI pills) without full re-render
+    icRefreshHeaderOnly();
+  } catch(e) {
+    console.warn('[icAnalyze] failed:', e.message);
+  } finally {
+    const b = document.getElementById('ic-analyze-btn');
+    if (b) { b.textContent = '⚡ Analyze'; b.disabled = false; }
+  }
+}
+
+// ── Refresh only the compressed header bar (score + KPI pills) without rebuilding tabs/content ──
+function icRefreshHeaderOnly() {
+  const c = window.ic.selectedCampaign;
+  if (!c) return;
+  const h = window.ic.scoreMap[c.meta_campaign_id];
+  const topbar = document.querySelector('.ic-topbar');
+  if (!topbar) return;
+  // Update score circle + status badge in place
+  const scoreEl = topbar.querySelector('.ic-score-sm');
+  if (scoreEl) {
+    scoreEl.textContent = h?.health_score ?? '—';
+    scoreEl.style.cssText = icScoreStyle(h?.health_score ?? null);
+  }
+  const badgeEl = topbar.querySelector('.badge');
+  if (badgeEl) {
+    badgeEl.className = `badge ${h?.health_status||'none'}`;
+    badgeEl.textContent = h?.health_status || 'Not analyzed';
+  }
+}
+
+// ── Load content for current level ──
+async function icLoadLevel() {
+  const el = document.getElementById('ic-level-content');
+  if (!el) return;
+
+  if (window.ic.level === 'campaign') { await icLoadCampaignView(el); return; }
+  if (window.ic.level === 'adsets')   { await icLoadAdSetsView(el);   return; }
+  if (window.ic.level === 'ads')      { await icLoadAdsView(el);      return; }
+}
+
+// ── CAMPAIGN OVERVIEW ──
+async function icLoadCampaignView(el) {
+  const c = window.ic.selectedCampaign;
+  el.innerHTML = '<div class="loader"><span class="spin">◌</span> Loading...</div>';
+
+  // Use cached insights or fetch fresh
+  let ins = window.ic.insights;
+  if (!ins) {
+    try { ins = await api(addDateQ(insightsUrl(`/campaigns/${c.id}/insights`))); window.ic.insights = ins; } catch {}
+  }
+  if (!ins) { el.innerHTML = '<div class="ic-empty">📊 Not analyzed yet<br><span style="font-size:11px;opacity:.7">Click ⚡ Analyze above to generate insights for this period</span></div>'; return; }
+
+  // Phase 8: backend now returns analyzed:false instead of fabricated zero metrics
+  // when Meta has no insights for the period. Show that honestly, not a fake "0".
+  if (ins.analyzed === false) {
+    el.innerHTML = `<div class="ic-empty">⚠ ${ins.reason || 'No Meta insights available for the selected period'}<br>
+      <span style="font-size:11px;opacity:.7">Try a different date range, or verify the account's Meta access token.</span></div>`;
+    return;
+  }
+
+  const m   = ins.metrics || {};
+  const kpi = icKPI(c.objective);
+  const cur = window.ic.scoreMap[c.meta_campaign_id];
+  const dl  = ins.deltas || {};
+
+  el.innerHTML = `
+    <!-- Date range context pill -->
+    <div style="margin-bottom:10px;display:flex;align-items:center;gap:8px">
+      ${ins.date_range ? `<span style="font-size:11px;padding:3px 8px;background:var(--bg3);border:1px solid var(--border);border-radius:6px;color:var(--muted)">${ins.date_range.since} → ${ins.date_range.until}</span>` : ''}
+      ${ins.data_freshness?.source === 'mock' ? '<span style="font-size:10px;padding:2px 6px;background:var(--blue-bg);color:var(--blue);border-radius:8px;font-weight:600">MOCK</span>' : ''}
+      ${ins.data_freshness?.data_may_be_incomplete ? '<span style="font-size:10px;padding:2px 6px;background:var(--orange-bg);color:var(--orange);border-radius:8px">⚠ Partial data</span>' : ''}
+    </div>
+    <!-- Primary KPI hero row -->
+    <div class="ic-hero">
+      <div class="ic-kpi-card primary">
+        <div class="ic-kpi-label">🎯 ${kpi.label}</div>
+        <div class="ic-kpi-value">${icFmtVal(kpi.key, m[kpi.key], ins.currency)}</div>
+        <div class="ic-kpi-sub">${kpi.costLabel}: ${icFmtVal(kpi.costKey, m[kpi.costKey], ins.currency)}${icDelta(dl, kpi.costKey, true)}</div>
+      </div>
+      <div class="ic-kpi-card">
+        <div class="ic-kpi-label">Spend</div>
+        <div class="ic-kpi-value">${icFmtVal('spend', m.spend, ins.currency)}</div>
+        <div class="ic-kpi-sub">CTR: ${icFmtVal('ctr', m.ctr)}${icDelta(dl,'ctr',false)}</div>
+      </div>
+      <div class="ic-kpi-card">
+        <div class="ic-kpi-label">CPM</div>
+        <div class="ic-kpi-value">${icFmtVal('cpm', m.cpm, ins.currency)}</div>
+        <div class="ic-kpi-sub">Freq: ${icFmtVal('frequency', m.frequency)}${icDelta(dl,'frequency',true)}</div>
+      </div>
+      <div class="ic-kpi-card">
+        <div class="ic-kpi-label">Reach</div>
+        <div class="ic-kpi-value">${icFmtVal('reach', m.reach)}</div>
+        <div class="ic-kpi-sub">Imp: ${icFmtVal('impressions', m.impressions)}</div>
+      </div>
+    </div>
+
+    <!-- Health Score trend (Phase 7B — Part 4) -->
+    ${buildHealthTrendHtml(ins.health_trend, cur?.health_score)}
+
+    <!-- Score breakdown toggle -->
+    <div id="ic-breakdown-panel"></div>
+    <button class="btn btn-ghost btn-sm" style="margin-bottom:12px" onclick="icToggleBreakdown('${c.meta_campaign_id}','campaign')">🔍 Why score = ${cur?.health_score ?? '?'}?</button>
+
+    <!-- Benchmarks -->
+    ${Object.keys(ins.benchmark?.metrics||{}).length ? `
+    <div class="card" style="margin-bottom:12px">
+      <div class="section-title" style="margin-bottom:10px">📊 Benchmark Comparison</div>
+      ${Object.entries(ins.benchmark.metrics).map(([k,v]) => {
+        const sc = v.status==='above'?'excellent':v.status==='optimal'?'good':v.status==='below'?'warning':'critical';
+        return `<div style="display:flex;align-items:center;justify-content:space-between;padding:5px 0;border-bottom:1px solid var(--border)">
+          <span style="font-size:12px;color:var(--muted);text-transform:uppercase">${k}</span>
+          <div style="display:flex;align-items:center;gap:8px">
+            <span style="font-size:13px">${v.value??'—'}</span>
+            <span class="badge ${sc}" style="font-size:10px">${v.status}</span>
+            ${v.deviation!==null?`<span style="font-size:10px;color:var(--muted)">${v.deviation>0?'▲':'▼'}${Math.abs(v.deviation)}%</span>`:''}
+          </div>
+        </div>`;
+      }).join('')}
+    </div>` : ''}
+
+    <!-- Recommendations -->
+    ${(ins.recommendations||[]).length ? `
+    <div class="card" style="margin-bottom:12px">
+      <div class="section-title" style="margin-bottom:10px">💡 Recommendations (${ins.recommendations.length})</div>
+      ${ins.recommendations.map(r => `
+        <div style="border-left:3px solid ${r.severity==='critical'?'var(--red)':'var(--orange)'};padding:8px 12px;margin-bottom:8px;background:var(--bg3);border-radius:0 6px 6px 0">
+          <div style="display:flex;align-items:center;justify-content:space-between;gap:8px">
+            <div style="font-size:13px;font-weight:600">${r.recommendation_title}</div>
+            ${r.confidence_pct!=null ? `<span style="font-size:10px;padding:2px 7px;background:var(--bg2);border-radius:8px;color:var(--accent2);font-weight:600">${r.confidence_pct}% confidence</span>` : ''}
+          </div>
+          <div style="font-size:12px;color:var(--muted);margin-top:3px">${r.recommendation_body}</div>
+          ${r.metric_key && r.evidence!=null && r.threshold!=null ? `
+          <div style="font-size:11px;color:var(--muted);margin-top:6px;display:flex;gap:10px;flex-wrap:wrap">
+            <span>📊 Evidence: <strong style="color:var(--text)">${r.metric_key.toUpperCase()} = ${r.evidence}</strong></span>
+            <span>🎯 Threshold: <strong style="color:var(--text)">${r.threshold}</strong></span>
+          </div>` : ''}
+        </div>`).join('')}
+    </div>` : ''}
+
+    <!-- Alerts -->
+    ${(ins.alerts||[]).length ? `
+    <div class="card">
+      <div class="section-title" style="margin-bottom:10px">🔔 Alerts (${ins.alerts.length})</div>
+      ${ins.alerts.map(a => `
+        <div style="display:flex;align-items:center;justify-content:space-between;padding:6px 0;border-bottom:1px solid var(--border)">
+          <div><span class="badge ${a.severity}" style="margin-right:8px">${a.severity}</span><span style="font-size:12px">${a.alert_message||a.alert_code}</span></div>
+          <span style="font-size:11px;color:var(--muted)">${a.occurrence_count}x</span>
+        </div>`).join('')}
+    </div>` : ''}
+  `;
+}
+
+// ── AD SETS VIEW ──
+async function icLoadAdSetsView(el) {
+  const c = window.ic.selectedCampaign;
+  el.innerHTML = '<div class="loader"><span class="spin">◌</span> Loading ad sets...</div>';
+  let data = [];
+  try {
+    const acctQ = window._accountId ? '&account_id='+window._accountId : '';
+    const r = await api(`/adsets?campaign_id=${c.meta_campaign_id}&limit=100${acctQ}`);
+    data = r.data || [];
+    window.ic.adsets = data;
+  } catch(e) { el.innerHTML = '<div class="ic-empty">⚠ Could not load ad sets<br><span style="font-size:11px;opacity:.7">Check your connection and try again</span></div>'; return; }
+
+  if (!data.length) { el.innerHTML = '<div class="ic-empty">📦 No Ad Sets Available<br><span style="font-size:11px;opacity:.7">This campaign has no ad sets in the system</span></div>'; return; }
+
+  const kpi = icKPI(c.objective);
+  const curr = ins => ins?.metrics ? ins.metrics : {};
+
+  // Fetch adset insights in parallel (mock)
+  const insightMap = {};
+  await Promise.allSettled(data.map(async s => {
+    try {
+      const r = await api(addDateQ(insightsUrl(`/adsets/${s.meta_adset_id}/insights`)));
+      insightMap[s.meta_adset_id] = r;
+    } catch {}
+  }));
+
+  el.innerHTML = `
+    <div class="ic-col-label ic-adset-label">
+      <span>Ad Set</span><span>Delivery</span><span>Health</span><span>Audience</span>
+      <span>Results (${kpi.label})</span><span>Cost (${kpi.costLabel})</span><span>CTR</span><span>Freq</span><span>Spend</span><span></span>
+    </div>
+    ${data.map(s => {
+      const ins = insightMap[s.meta_adset_id];
+      const m   = ins?.metrics || {};
+      // FIX 6 (Phase 9): Health score from stored DB (s.health_score) always shows,
+      // regardless of whether the live insight call succeeded.
+      // Stored score comes from last successful Analyze run in health_score_history.
+      const hs  = (ins && ins.analyzed !== false) ? ins.health_score : s.health_score;
+      const hasLiveMetrics = ins && ins.analyzed !== false && Object.keys(m).length > 0;
+      const noInsightsReason = ins?.reason || 'No Meta insights for this period';
+      return `<div class="ic-adset-row">
+        <div>
+          <div class="ic-cell-name">${s.name}</div>
+          <div style="margin-top:2px;display:flex;gap:4px">${objChip(s.objective)}</div>
+        </div>
+        <div><span class="chip ${s.status}" style="font-size:10px">${s.status}</span></div>
+        <div style="display:flex;align-items:center;gap:5px">${icScoreEl(hs)}</div>
+        <div class="ic-cell-muted" style="font-size:11px">${s.targeting_summary || '—'}</div>
+        <div class="ic-cell-muted">${hasLiveMetrics ? icFmtVal(kpi.key, m[kpi.key]) : '<span style="font-style:italic;opacity:.5;font-size:10px">Click ⚡</span>'}</div>
+        <div class="ic-cell-muted">${hasLiveMetrics ? icFmtVal(kpi.costKey, m[kpi.costKey]) : '—'}</div>
+        <div class="ic-cell-muted">${hasLiveMetrics ? icFmtVal('ctr', m.ctr) : '—'}</div>
+        <div class="ic-cell-muted">${hasLiveMetrics ? icFmtVal('frequency', m.frequency) : '—'}</div>
+        <div class="ic-cell-muted">${hasLiveMetrics ? icFmtVal('spend', m.spend) : '—'}</div>
+        <div style="display:flex;gap:5px">
+          <button class="ic-drill-btn" onclick="icDrillToAds('${s.meta_adset_id}','${s.name.replace(/'/g,"\'")}')">View Ads →</button>
+          <button class="ic-analyze-btn" onclick="icAnalyzeAdSet('${s.meta_adset_id}','${s.name.replace(/'/g,"\'")}',this)">⚡</button>
+        </div>
+      </div>`;
+    }).join('')}
+  `;
+}
+
+// ── DRILL TO ADS ──
+async function icDrillToAds(metaAdSetId, adSetName) {
+  window.ic.selectedAdSet = { meta_adset_id: metaAdSetId, name: adSetName };
+  window.ic.level = 'ads';
+  renderIC();
+}
+
+// ── ADS VIEW ──
+async function icLoadAdsView(el) {
+  const c  = window.ic.selectedCampaign;
+  const as = window.ic.selectedAdSet;
+  el.innerHTML = '<div class="loader"><span class="spin">◌</span> Loading ads...</div>';
+
+  let data = [];
+  try {
+    const acctQ2 = window._accountId ? '&account_id='+window._accountId : '';
+    const qp = as ? `adset_id=${as.meta_adset_id}` : `campaign_id=${c.meta_campaign_id}`;
+    const r  = await api(`/ads?${qp}&limit=100${acctQ2}`);
+    data = r.data || [];
+    window.ic.ads = data;
+  } catch(e) { el.innerHTML = '<div class="ic-empty">⚠ Could not load ads<br><span style="font-size:11px;opacity:.7">Check your connection and try again</span></div>'; return; }
+
+  if (!data.length) { el.innerHTML = '<div class="ic-empty">🎯 No Ads Available<br><span style="font-size:11px;opacity:.7">No ads found for this selection</span></div>'; return; }
+
+  const kpi = icKPI(c.objective);
+
+  // Fetch ad insights in parallel (mock)
+  const insightMap = {};
+  await Promise.allSettled(data.map(async a => {
+    try {
+      const r = await api(addDateQ(insightsUrl(`/ads/${a.meta_ad_id}/insights`)));
+      insightMap[a.meta_ad_id] = r;
+    } catch {}
+  }));
+
+  el.innerHTML = `
+    <div class="ic-col-label ic-ad-label">
+      <span>Ad</span><span>Delivery</span><span>Health</span><span>Results (${kpi.label})</span>
+      <span>Cost</span><span>CTR</span><span>Spend</span><span>Preview</span><span></span>
+    </div>
+    ${data.map(a => {
+      const ins = insightMap[a.meta_ad_id];
+      const m   = ins?.metrics || {};
+      // FIX 6 (Phase 9): Stored health score always shows; live metrics only when available.
+      const hs  = (ins && ins.analyzed !== false) ? ins.health_score : a.health_score;
+      const hasLiveMetrics = ins && ins.analyzed !== false && Object.keys(m).length > 0;
+      return `<div class="ic-ad-row">
+        <div>
+          <div class="ic-cell-name">${a.name}</div>
+          <div style="margin-top:2px;display:flex;gap:4px">
+            <span class="ic-cell-muted" style="font-size:10px">${a.adset_name||''}</span>
+          </div>
+        </div>
+        <div><span class="chip ${a.status}" style="font-size:10px">${a.status}</span></div>
+        <div style="display:flex;align-items:center;gap:5px">${icScoreEl(hs)}</div>
+        <div class="ic-cell-muted">${hasLiveMetrics ? icFmtVal(kpi.key, m[kpi.key]) : '<span style="font-style:italic;opacity:.5;font-size:10px">Click ⚡</span>'}</div>
+        <div class="ic-cell-muted">${hasLiveMetrics ? icFmtVal(kpi.costKey, m[kpi.costKey]) : '—'}</div>
+        <div class="ic-cell-muted">${hasLiveMetrics ? icFmtVal('ctr', m.ctr) : '—'}</div>
+        <div class="ic-cell-muted">${hasLiveMetrics ? icFmtVal('spend', m.spend) : '—'}</div>
+        <div style="text-align:center">${a.thumbnail_url ? `<img src="${a.thumbnail_url}" style="width:28px;height:28px;border-radius:4px;object-fit:cover" title="Creative preview">` : `<span style="color:var(--muted);font-size:10px;cursor:default" title="Meta Sync has not downloaded creative data for this ad yet">Preview unavailable</span>`}</div>
+        <div style="display:flex;gap:5px">
+          <button class="ic-analyze-btn" onclick="icAnalyzeAd('${a.meta_ad_id}','${a.name.replace(/'/g,"\'")}',this)">⚡</button>
+          <button class="ic-drill-btn" onclick="icShowAdBreakdown('${a.meta_ad_id}','${a.name.replace(/'/g,"\'")}')">🔍</button>
+        </div>
+      </div>`;
+    }).join('')}
+  `;
+}
+
+// ── Ad set analyze ──
+async function icAnalyzeAdSet(metaAdSetId, name, btnEl) {
+  if (btnEl) { if (btnEl.disabled) return; btnEl.textContent = '⏳'; btnEl.disabled = true; }
+  try {
+    await api(addDateQ(insightsUrl(`/adsets/${metaAdSetId}/insights`)));
+    // Refresh the whole ad sets view (table needs updated row data)
+    const el = document.getElementById('ic-level-content');
+    if (el) await icLoadAdSetsView(el);
+  } catch(e) {
+    console.warn('[icAnalyzeAdSet] failed:', e.message);
+    if (btnEl) { btnEl.textContent = '⚡'; btnEl.disabled = false; }
+  }
+}
+
+// ── Ad analyze ──
+async function icAnalyzeAd(metaAdId, name, btnEl) {
+  if (btnEl) { if (btnEl.disabled) return; btnEl.textContent = '⏳'; btnEl.disabled = true; }
+  try {
+    const r = await api(addDateQ(insightsUrl(`/ads/${metaAdId}/insights`)));
+    // Phase 8: honor analyzed:false instead of rendering a modal of fabricated/empty tiles
+    if (r.analyzed === false) {
+      openModal(`
+        <h3>${name}</h3>
+        <div class="ic-empty" style="padding:20px 0">⚠ ${r.reason || 'No Meta insights available for the selected period'}</div>
+        <div class="modal-actions"><button class="btn btn-ghost" onclick="closeModal()">Close</button></div>
+      `);
+      return;
+    }
+    // Show a quick modal with ad insights
+    openModal(`
+      <h3>${name}</h3>
+      <div class="details-grid" style="margin-top:12px">
+        ${Object.entries(r.metrics||{}).filter(([k,v])=>v!==null&&typeof v==='number').slice(0,8).map(([k,v])=>`
+          <div class="detail-item">
+            <div class="detail-label" style="font-size:10px">${k.toUpperCase()}</div>
+            <div class="detail-value small">${typeof v==='number'?v.toFixed(2):v}</div>
+          </div>`).join('')}
+      </div>
+      <div style="margin-top:14px;display:flex;align-items:center;gap:8px">
+        ${icScoreEl(r.health_score)} <span class="badge ${r.health_status||'none'}">${r.health_status||'—'}</span>
+      </div>
+      <div class="modal-actions"><button class="btn btn-ghost" onclick="closeModal()">Close</button></div>
+    `);
+  } catch(e) {
+    console.warn('[icAnalyzeAd] failed:', e.message);
+  } finally {
+    if (btnEl) { btnEl.textContent = '⚡'; btnEl.disabled = false; }
+  }
+}
+
+// ── Score breakdown for campaign (inside IC) ──
+async function icToggleBreakdown(entityId, entityType) {
+  const el = document.getElementById('ic-breakdown-panel');
+  if (!el) return;
+  if (el.innerHTML.trim()) { el.innerHTML = ''; return; }
+  await loadScoreBreakdown(entityId, entityType, 'ic-breakdown-panel');
+}
+
+// ── Ad score breakdown modal ──
+async function icShowAdBreakdown(metaAdId, name) {
+  openModal(`<h3>Score: ${name}</h3><div id="modal-breakdown"><div class="loader"><span class="spin">◌</span></div></div><div class="modal-actions"><button class="btn btn-ghost" onclick="closeModal()">Close</button></div>`);
+  await loadScoreBreakdown(metaAdId, 'ad', 'modal-breakdown');
+}
+
+// ── Legacy viewCampaign compatibility ──
+// (still called from dashboard, portfolio, decisions pages)
+async function analyzeNow(internalId, metaId) {
+  try {
+    await api(insightsUrl(`/campaigns/${internalId}/insights`));
+    // Navigate to campaigns IC and select this campaign
+    window.ic.selectedCampaign = window.ic.campaigns.find(c => c.meta_campaign_id===metaId) || null;
+    window.ic.level = 'campaign';
+    window.ic.insights = null;
+    navigate('campaigns');
+  } catch(e) { alert('Analysis failed: ' + e.message); }
+}
+
+// ═══════════════════════════════════════════════════════════════
+// CAMPAIGN DETAILS
+// ═══════════════════════════════════════════════════════════════
+async function viewCampaign(metaCampaignId) {
+  // Route to Intelligence Center
+  if (!window.ic.campaigns.length) {
+    const r = await api('/campaigns?limit=200');
+    window.ic.campaigns = r.data || [];
+  }
+  const camp = window.ic.campaigns.find(c => c.meta_campaign_id === metaCampaignId);
+  if (!camp) return;
+  window.ic.selectedCampaign = camp;
+  window.ic.selectedAdSet    = null;
+  window.ic.level            = 'campaign';
+  window.ic.insights         = null;
+  navigate('campaigns');
+  return; // IC handles the rest
+}
+
+async function _viewCampaignLegacy(metaCampaignId) {
+  currentPage = 'campaign-detail';
+  document.getElementById('page-title').textContent = 'Campaign Details';
+  document.getElementById('content').innerHTML = '<div class="loader"><span class="spin">◌</span> Loading insights...</div>';
+
+  // Get internal ID
+  const camps = await api(`/campaigns?limit=200`);
+  const camp = camps.data?.find(c => c.meta_campaign_id === metaCampaignId);
+  if (!camp) { document.getElementById('content').innerHTML = '<div class="empty">Campaign not found</div>'; return; }
+
+  const useMock = !camp.meta_campaign_id?.startsWith('act_') ? true : false;
+  const insights = await api(insightsUrl(`/campaigns/${camp.id}/insights`));
+  updateFreshnessBar(insights);
+
+  const m = insights.metrics || {};
+  const h = insights;
+
+  document.getElementById('content').innerHTML = `
+  <div style="margin-bottom:16px">
+    <button class="btn btn-ghost btn-sm" onclick="navigate('campaigns')">← Back to Campaigns</button>
+  </div>
+  <div class="flex items-center gap12" style="margin-bottom:20px;flex-wrap:wrap">
+    <div>
+      <h3 style="font-size:18px;font-weight:700">${camp.name}</h3>
+      <div style="display:flex;align-items:center;gap:8px;margin-top:6px">
+        ${objChip(camp.objective)}
+        <span class="chip ${camp.status}">${camp.status}</span>
+      </div>
+    </div>
+    <div style="margin-left:auto;text-align:center">
+      ${scoreCircle(h.health_score)}
+      <div class="badge ${scoreClass(h.health_score)}" style="margin-top:6px">${scoreLabel(h.health_score)}</div>
+      <button class="btn btn-ghost btn-sm" style="margin-top:6px;font-size:11px" onclick="toggleBreakdown('${camp.meta_campaign_id}','campaign')">Why?</button>
+    </div>
+  </div>
+
+  <div class="tabs" id="detail-tabs">
+    <div class="tab active" onclick="showTab('overview',this)">Overview</div>
+    <div class="tab" onclick="showTab('recommendations',this)">Recommendations (${(h.recommendations||[]).length})</div>
+    <div class="tab" onclick="showTab('alerts',this)">Alerts (${(h.alerts||[]).length})</div>
+    <div class="tab" onclick="showTab('breakdowns',this);loadBreakdownCharts('${camp.meta_campaign_id}')">Breakdowns</div>
+    <div class="tab" onclick="showTab('history',this);loadTrendChartReal('${camp.id}','${insights.date_range?.since||''}','${insights.date_range?.until||''}')">Trend & History</div>
+  </div>
+
+  <div id="tab-overview">
+    <div class="details-grid">
+      ${metricCard('Spend', m.spend, 'EGP', deltaHtml(h.deltas,'spend',false))}
+      ${metricCard('Impressions', m.impressions ? Number(m.impressions).toLocaleString() : null, '', deltaHtml(h.deltas,'impressions',false))}
+      ${metricCard('Reach', m.reach ? Number(m.reach).toLocaleString() : null, '', deltaHtml(h.deltas,'reach',false))}
+      ${metricCard('CTR', m.ctr, '%', deltaHtml(h.deltas,'ctr',false))}
+      ${metricCard('CPM', m.cpm, '', deltaHtml(h.deltas,'cpm',true))}
+      ${metricCard('Frequency', m.frequency, '', deltaHtml(h.deltas,'frequency',true))}
+      ${metricCard('CPC', m.cpc, '', deltaHtml(h.deltas,'cpc',true))}
+      ${m.cpr !== undefined ? metricCard('CPR', m.cpr, '', deltaHtml(h.deltas,'cpr',true)) : ''}
+      ${m.cpl !== undefined ? metricCard('CPL', m.cpl, '', deltaHtml(h.deltas,'cpl',true)) : ''}
+      ${m.roas !== undefined ? metricCard('ROAS', m.roas, 'x', deltaHtml(h.deltas,'roas',false)) : ''}
+      ${m.purchases !== undefined ? metricCard('Purchases', m.purchases, '', deltaHtml(h.deltas,'purchases',false)) : ''}
+      ${m.leads !== undefined ? metricCard('Leads', m.leads, '', deltaHtml(h.deltas,'leads',false)) : ''}
+      ${m.purchase_value !== undefined ? metricCard('Purchase Value', m.purchase_value, 'EGP', deltaHtml(h.deltas,'purchase_value',false)) : ''}
+      ${m.landing_page_views !== undefined ? metricCard('LPV', m.landing_page_views, '', deltaHtml(h.deltas,'landing_page_views',false)) : ''}
+    </div>
+
+    ${h.goal_achievement?.has_targets ? `
+    <div class="card mt16">
+      <div class="section-title" style="margin-bottom:12px">🎯 Goal Achievement — <span class="badge ${h.goal_achievement.composite_status?.toLowerCase().replace(' ','-')||'none'}">${h.goal_achievement.composite_status||'—'}</span></div>
+      ${Object.entries(h.goal_achievement.metric_results||{}).map(([k,v])=>`
+        <div style="display:flex;align-items:center;justify-content:space-between;padding:6px 0;border-bottom:1px solid var(--border)">
+          <span style="text-transform:uppercase;font-size:11px;color:var(--muted)">${k}</span>
+          <div style="display:flex;align-items:center;gap:10px">
+            <span>${v.actual ?? '—'}</span>
+            <span class="text-muted">/ target: ${v.target}</span>
+            <span class="badge ${v.status?.toLowerCase().replace(' ','-')||'none'}">${v.status}</span>
+          </div>
+        </div>
+      `).join('')}
+    </div>
+    ` : '<div class="card mt16 text-muted" style="font-size:13px">No targets set for this account. Set targets in Settings.</div>'}
+
+    <div class="card mt16">
+      <div class="section-title" style="margin-bottom:12px">📊 Benchmark Comparison</div>
+      ${Object.entries(h.benchmark?.metrics||{}).map(([k,v])=>{
+        const sc = v.status==='above'?'excellent':v.status==='optimal'?'good':v.status==='below'?'warning':v.status==='critical'?'critical':'none';
+        const arrow = v.deviation !== null ? (v.deviation > 0 ? `▲ ${Math.abs(v.deviation)}%` : `▼ ${Math.abs(v.deviation)}%`) : '';
+        return `<div style="display:flex;align-items:center;justify-content:space-between;padding:6px 0;border-bottom:1px solid var(--border)">
+          <span style="text-transform:uppercase;font-size:11px;color:var(--muted)">${k}</span>
+          <div style="display:flex;align-items:center;gap:10px">
+            <span>${v.value ?? '—'}</span>
+            <span class="text-muted">vs ${v.target ?? '—'}</span>
+            <span class="badge ${sc}">${v.status||'—'}</span>
+            <span class="text-muted" style="font-size:11px">${arrow}</span>
+          </div>
+        </div>`;
+      }).join('')}
+    </div>
+  </div>
+
+  <div id="tab-recommendations" style="display:none">
+    ${renderRecCards(h.recommendations || [], metaCampaignId)}
+  </div>
+
+  <div id="tab-alerts" style="display:none">
+    ${renderAlertCards(h.alerts || [])}
+  </div>
+
+  <div id="score-breakdown-panel" style="margin-bottom:12px"></div>
+
+  <div id="tab-breakdowns" style="display:none">
+    <div class="loader"><span class="spin">◌</span> Click the Breakdowns tab to load...</div>
+  </div>
+
+  <div id="tab-history" style="display:none">
+    <div id="history-chart-wrap">
+      <div class="loader"><span class="spin">◌</span> Click the Trend tab to load...</div>
+    </div>
+  </div>
+  `;
+
+  // History + breakdowns are loaded on tab click (Phase 4)
+}
+
+function metricCard(label, value, unit, delta) {
+  const v = value !== null && value !== undefined ? fmtNum(value) + (unit ? ' ' + unit : '') : '—';
+  const dHtml = delta ? `<span style="margin-left:6px">${delta}</span>` : '';
+  return `<div class="detail-item">
+    <div class="detail-label">${label}</div>
+    <div class="detail-value small">${v}${dHtml}</div>
+  </div>`;
+}
+
+function showTab(name, el) {
+  document.querySelectorAll('[id^="tab-"]').forEach(t => t.style.display = 'none');
+  document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+  document.getElementById('tab-' + name).style.display = '';
+  el.classList.add('active');
+}
+
+async function loadHistoryChart(metaCampaignId) {
+  const hist = await api(`/health-history?entity_meta_id=${metaCampaignId}&days=30`);
+  const el = document.getElementById('history-chart-wrap');
+  if (!el) return;
+  if (!hist.data?.length) { el.innerHTML = '<div class="empty">No health score history yet. Run analysis to generate scores.</div>'; return; }
+  el.innerHTML = renderHistoryChart(hist.data, 'Health Score Trend (Last 30 Days)');
+}
+
+function renderHistoryChart(data, title) {
+  if (!data?.length) return '<div class="empty">No data</div>';
+  const max = 100;
+  const bars = data.map(d => {
+    const cls = scoreClass(d.health_score);
+    const colorMap = { excellent:'var(--green)', good:'var(--yellow)', warning:'var(--orange)', critical:'var(--red)', none:'var(--muted)' };
+    const h = Math.round((d.health_score / max) * 80);
+    const dt = new Date(d.calculated_at);
+    const lbl = `${dt.getMonth()+1}/${dt.getDate()}`;
+    return `<div class="bar-wrap" title="${d.health_score} on ${dt.toLocaleDateString()}">
+      <div class="bar" style="height:${h}px;background:${colorMap[cls]||'var(--muted)'}"></div>
+      <div class="bar-label">${lbl}</div>
+    </div>`;
+  }).join('');
+
+  return `<div class="card">
+    <div class="section-title" style="margin-bottom:16px">${title}</div>
+    <div class="chart-wrap">
+      <div class="chart-bars">${bars}</div>
+    </div>
+    <div style="display:flex;gap:12px;margin-top:10px;flex-wrap:wrap">
+      <span style="font-size:11px;color:var(--muted)">Min: ${Math.min(...data.map(d=>d.health_score))}</span>
+      <span style="font-size:11px;color:var(--muted)">Max: ${Math.max(...data.map(d=>d.health_score))}</span>
+      <span style="font-size:11px;color:var(--muted)">Latest: ${data[data.length-1]?.health_score}</span>
+      <span style="font-size:11px;color:var(--muted)">${data.length} data points</span>
+    </div>
+  </div>`;
+}
+
+function renderRecCards(recs, campaignMetaId) {
+  if (!recs.length) return '<div class="empty">✓ No active recommendations for this campaign.</div>';
+  return recs.map(r => `
+  <div class="rec-card ${r.severity}">
+    <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:8px">
+      <div class="rec-title">${r.recommendation_title}</div>
+      <span class="badge ${r.severity}">${r.severity}</span>
+    </div>
+    <div class="rec-body">${r.recommendation_body}</div>
+    <div class="rec-meta">
+      <span class="text-muted" style="font-size:11px">Code: ${r.rule_code}</span>
+      <span class="text-muted" style="font-size:11px">Generated: ${fmtDate(r.generated_at)}</span>
+      ${r.action_taken ? '<span class="badge good">✓ Completed</span>' : ''}
+    </div>
+    <div class="rec-actions">
+      ${!r.action_taken ? `<button class="btn btn-success btn-sm" onclick="markRecDone('${r.id}')">✓ Mark Done</button>` : ''}
+      <button class="btn btn-ghost btn-sm" onclick="addRecNote('${r.id}')">Add Note</button>
+      <button class="btn btn-danger btn-sm" onclick="dismissRec('${r.id}')">Dismiss</button>
+    </div>
+    ${r.action_notes ? `<div style="font-size:12px;color:var(--muted);margin-top:8px;padding:8px;background:var(--bg3);border-radius:6px">${r.action_notes}</div>` : ''}
+  </div>`).join('');
+}
+
+function renderAlertCards(alerts) {
+  if (!alerts.length) return '<div class="empty">✓ No active alerts for this campaign.</div>';
+  return `<div class="table-wrap"><table>
+    <thead><tr><th>Severity</th><th>Alert</th><th>Message</th><th>Detected</th><th>Occurrences</th><th>Actions</th></tr></thead>
+    <tbody>
+    ${alerts.map(a=>`
+    <tr class="alert-row ${a.severity}">
+      <td><span class="badge ${a.severity}">${a.severity}</span></td>
+      <td class="td-name">${a.alert_name||a.alert_code}</td>
+      <td class="td-muted" style="max-width:300px">${a.alert_message||'—'}</td>
+      <td class="td-muted">${fmtDate(a.first_detected_at)}</td>
+      <td>${a.occurrence_count||1}</td>
+      <td>
+        <button class="btn btn-ghost btn-sm" onclick="snoozeAlert('${a.id}')">Snooze</button>
+        <button class="btn btn-danger btn-sm" onclick="dismissAlert('${a.id}')">Dismiss</button>
+      </td>
+    </tr>`).join('')}
+    </tbody>
+  </table></div>`;
+}
+
+// ═══════════════════════════════════════════════════════════════
+// RECOMMENDATIONS PAGE
+// ═══════════════════════════════════════════════════════════════
+async function loadRecommendations() {
+  const [recs, camps] = await Promise.all([api('/recommendations?limit=100'), api('/campaigns?limit=200')]);
+  const campMap = {};
+  (camps.data||[]).forEach(c => campMap[c.meta_campaign_id] = c.name);
+
+  document.getElementById('content').innerHTML = `
+  <div class="filter-bar">
+    <select onchange="filterRecs()" id="rf-severity">
+      <option value="">All Severities</option>
+      <option>critical</option><option>warning</option><option>info</option>
+    </select>
+    <select onchange="filterRecs()" id="rf-status">
+      <option value="">Active</option>
+      <option value="completed">Completed</option>
+      <option value="dismissed">Dismissed</option>
+    </select>
+    <select onchange="filterRecs()" id="rf-campaign">
+      <option value="">All Campaigns</option>
+      ${(camps.data||[]).map(c=>`<option value="${c.meta_campaign_id}">${c.name}</option>`).join('')}
+    </select>
+  </div>
+  <div id="rec-list">
+    ${renderFullRecList(recs.data || [], campMap)}
+  </div>
+  `;
+  window._allRecs = recs.data || [];
+  window._campMap = campMap;
+}
+
+function renderFullRecList(data, campMap) {
+  if (!data.length) return '<div class="empty">No recommendations found.</div>';
+  return data.map(r => `
+  <div class="rec-card ${r.severity}" id="rec-${r.id}">
+    <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:8px;flex-wrap:wrap">
+      <div>
+        <div class="rec-title">${r.recommendation_title}</div>
+        <div style="margin-top:4px;display:flex;gap:6px;align-items:center">
+          <span class="badge ${r.severity}">${r.severity}</span>
+          ${r.campaign_name ? `<span class="text-muted" style="font-size:12px">${r.campaign_name}</span>` : ''}
+          ${r.objective ? objChip(r.objective) : ''}
+        </div>
+      </div>
+      ${r.action_taken ? '<span class="badge good">✓ Done</span>' : ''}
+    </div>
+    <div class="rec-body mt8">${r.recommendation_body}</div>
+    <div class="rec-meta">
+      <span class="text-muted" style="font-size:11px">Generated: ${fmtDate(r.generated_at)}</span>
+      <span class="text-muted" style="font-size:11px">Code: ${r.rule_code}</span>
+    </div>
+    ${r.action_notes ? `<div style="font-size:12px;color:var(--muted);margin-top:8px;padding:8px;background:var(--bg3);border-radius:6px">Note: ${r.action_notes}</div>` : ''}
+    <div class="rec-actions">
+      ${!r.action_taken ? `<button class="btn btn-success btn-sm" onclick="markRecDone('${r.id}',true)">✓ Mark Done</button>` : `<button class="btn btn-ghost btn-sm" onclick="markRecDone('${r.id}',false)">↩ Undo</button>`}
+      <button class="btn btn-ghost btn-sm" onclick="addRecNote('${r.id}')">📝 Add Note</button>
+      ${!r.dismissed_at ? `<button class="btn btn-danger btn-sm" onclick="dismissRec('${r.id}')">Dismiss</button>` : ''}
+    </div>
+  </div>`).join('');
+}
+
+function filterRecs() {
+  const sev  = document.getElementById('rf-severity').value;
+  const stat = document.getElementById('rf-status').value;
+  const camp = document.getElementById('rf-campaign').value;
+  let filtered = window._allRecs || [];
+  if (sev)  filtered = filtered.filter(r => r.severity === sev);
+  if (stat === 'completed') filtered = filtered.filter(r => r.action_taken);
+  else if (stat === 'dismissed') filtered = filtered.filter(r => r.dismissed_at);
+  else filtered = filtered.filter(r => !r.dismissed_at);
+  if (camp) filtered = filtered.filter(r => r.entity_meta_id === camp);
+  document.getElementById('rec-list').innerHTML = renderFullRecList(filtered, window._campMap || {});
+}
+
+async function markRecDone(id, done=true) {
+  await apiPatch(`/recommendations/${id}`, { action_taken: done });
+  loadRecommendations();
+}
+async function dismissRec(id) {
+  await apiPatch(`/recommendations/${id}`, { dismiss: true });
+  loadRecommendations();
+}
+function addRecNote(id) {
+  openModal(`
+  <h3>Add Action Note</h3>
+  <div class="form-group">
+    <label class="form-label">What did you do?</label>
+    <textarea class="form-input" id="note-text" placeholder="Describe the action taken..."></textarea>
+  </div>
+  <div class="modal-actions">
+    <button class="btn btn-ghost" onclick="closeModal()">Cancel</button>
+    <button class="btn btn-primary" onclick="saveNote('${id}')">Save Note</button>
+  </div>`);
+}
+async function saveNote(id) {
+  const note = document.getElementById('note-text').value;
+  await apiPatch(`/recommendations/${id}`, { action_notes: note, action_taken: true });
+  closeModal();
+  loadRecommendations();
+}
+
+// ═══════════════════════════════════════════════════════════════
+// ALERTS PAGE
+// ═══════════════════════════════════════════════════════════════
+async function loadAlerts() {
+  const alerts = await api('/alerts?limit=200');
+  document.getElementById('content').innerHTML = `
+  <div class="filter-bar">
+    <select onchange="filterAlerts()" id="af-severity">
+      <option value="">All Severities</option>
+      <option>critical</option><option>warning</option><option>info</option>
+    </select>
+    <select onchange="filterAlerts()" id="af-status">
+      <option value="active">Active</option>
+      <option value="snoozed">Snoozed</option>
+      <option value="resolved">Resolved</option>
+      <option value="dismissed">Dismissed</option>
+    </select>
+  </div>
+  <div class="table-wrap" id="alerts-table">
+    ${renderAlertsTable(alerts.data || [])}
+  </div>
+  `;
+  window._allAlerts = alerts.data || [];
+}
+
+function renderAlertsTable(data) {
+  if (!data.length) return '<div class="empty" style="padding:40px">No alerts found.</div>';
+  return `<table>
+    <thead><tr>
+      <th>Severity</th><th>Campaign</th><th>Alert</th><th>Message</th>
+      <th>Occurrences</th><th>First Detected</th><th>Last Detected</th><th>Actions</th>
+    </tr></thead>
+    <tbody>
+    ${data.map(a=>`
+    <tr class="alert-row ${a.severity}">
+      <td><span class="badge ${a.severity}">${a.severity}</span></td>
+      <td class="td-name">${a.campaign_name||a.entity_label||'—'}</td>
+      <td><code style="font-size:11px;background:var(--bg3);padding:2px 6px;border-radius:4px">${a.alert_code}</code></td>
+      <td class="td-muted" style="max-width:250px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${a.alert_message||'—'}</td>
+      <td>${a.occurrence_count||1}×</td>
+      <td class="td-muted">${fmtDate(a.first_detected_at)}</td>
+      <td class="td-muted">${fmtDate(a.last_detected_at)}</td>
+      <td style="white-space:nowrap">
+        <button class="btn btn-ghost btn-sm" onclick="snoozeAlert('${a.id}')">Snooze</button>
+        <button class="btn btn-danger btn-sm" style="margin-left:4px" onclick="dismissAlert('${a.id}')">Dismiss</button>
+      </td>
+    </tr>`).join('')}
+    </tbody>
+  </table>`;
+}
+
+function filterAlerts() {
+  const sev  = document.getElementById('af-severity').value;
+  const stat = document.getElementById('af-status').value;
+  let filtered = window._allAlerts || [];
+  if (sev) filtered = filtered.filter(a => a.severity === sev);
+  if (stat === 'snoozed') filtered = filtered.filter(a => a.snoozed_until && new Date(a.snoozed_until) > new Date());
+  else if (stat === 'resolved') filtered = filtered.filter(a => a.status === 'resolved');
+  else if (stat === 'dismissed') filtered = filtered.filter(a => a.status === 'dismissed');
+  else filtered = filtered.filter(a => a.status === 'active' && (!a.snoozed_until || new Date(a.snoozed_until) < new Date()));
+  document.getElementById('alerts-table').innerHTML = renderAlertsTable(filtered);
+}
+
+function snoozeAlert(id) {
+  openModal(`
+  <h3>Snooze Alert</h3>
+  <p class="text-muted" style="margin-bottom:16px;font-size:13px">Temporarily suppress this alert. It will reactivate automatically after the snooze period.</p>
+  <div class="form-group">
+    <label class="form-label">Snooze Duration</label>
+    <select class="form-input" id="snooze-hours">
+      <option value="24">24 Hours</option>
+      <option value="72">3 Days</option>
+      <option value="168">7 Days</option>
+    </select>
+  </div>
+  <div class="modal-actions">
+    <button class="btn btn-ghost" onclick="closeModal()">Cancel</button>
+    <button class="btn btn-primary" onclick="confirmSnooze('${id}')">Snooze</button>
+  </div>`);
+}
+async function confirmSnooze(id) {
+  const hours = document.getElementById('snooze-hours').value;
+  await apiPatch(`/alerts/${id}`, { action: 'snooze', snooze_hours: parseInt(hours) });
+  closeModal();
+  loadAlerts();
+}
+async function dismissAlert(id) {
+  await apiPatch(`/alerts/${id}`, { action: 'dismiss' });
+  loadAlerts();
+  updateBadges();
+}
+
+// ═══════════════════════════════════════════════════════════════
+// SETTINGS PAGE
+// ═══════════════════════════════════════════════════════════════
+async function loadSettings() {
+  const settings = await api('/settings');
+  const { accounts, industries, targets, benchmark_overrides } = settings;
+
+  document.getElementById('content').innerHTML = `
+  <div class="tabs">
+    <div class="tab active" onclick="showSettingsTab('accounts',this)">Accounts</div>
+    <div class="tab" onclick="showSettingsTab('targets',this)">Targets</div>
+    <div class="tab" onclick="showSettingsTab('benchmarks',this)">Benchmarks</div>
+  </div>
+
+  <!-- Accounts Tab -->
+  <div id="stab-accounts">
+    ${accounts.map(a=>`
+    <div class="card" style="margin-bottom:12px">
+      <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px">
+        <div>
+          <div style="font-weight:600;font-size:15px">${a.account_name}</div>
+          <div class="text-muted" style="font-size:12px;margin-top:3px">
+            ID: ${a.meta_account_id} · ${a.currency} · ${a.timezone}
+          </div>
+          ${a.client_label ? `<div class="text-muted" style="font-size:12px">Label: ${a.client_label}</div>` : ''}
+        </div>
+        <div style="display:flex;align-items:center;gap:10px">
+          <span class="badge ${a.token_is_valid?'good':'critical'}">${a.token_is_valid?'✓ Token Valid':'⚠ Token Invalid'}</span>
+          <span class="chip ${a.status}">${a.status}</span>
+        </div>
+      </div>
+      <hr class="divider">
+      <div class="grid grid-3" style="font-size:12px;color:var(--muted)">
+        <div>Attribution Window: <strong style="color:var(--text)">${a.attribution_window_days} days</strong></div>
+        <div>Country: <strong style="color:var(--text)">${a.country_code||'—'}</strong></div>
+        <div>Last Verified: <strong style="color:var(--text)">${fmtDate(a.last_token_verified_at)}</strong></div>
+      </div>
+    </div>
+    `).join('')}
+    ${!accounts.length ? '<div class="empty">No accounts connected. Use POST /api/v1/accounts to connect.</div>' : ''}
+  </div>
+
+  <!-- Targets Tab -->
+  <div id="stab-targets" style="display:none">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">
+      <div class="section-title">Account Targets</div>
+      <button class="btn btn-primary" onclick="openAddTarget(${JSON.stringify(accounts).replace(/"/g,'&quot;')})">+ Add Target</button>
+    </div>
+    ${accounts.map(a=>{
+      const acctTargets = targets[a.id] || [];
+      return `<div class="card" style="margin-bottom:12px">
+        <div class="section-title" style="margin-bottom:12px">${a.account_name}</div>
+        ${acctTargets.length ? `
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Objective</th><th>CTR%</th><th>CPR</th><th>CPL</th><th>CPA</th><th>ROAS</th><th>Budget/mo</th><th>From</th></tr></thead>
+            <tbody>
+              ${acctTargets.map(t=>`<tr>
+                <td>${objChip(t.objective)}</td>
+                <td>${t.target_ctr??'—'}</td>
+                <td>${t.target_cpr??'—'}</td>
+                <td>${t.target_cpl??'—'}</td>
+                <td>${t.target_cpa??'—'}</td>
+                <td>${t.target_roas??'—'}</td>
+                <td>${t.monthly_budget_target??'—'}</td>
+                <td class="td-muted">${fmtDate(t.effective_from)}</td>
+              </tr>`).join('')}
+            </tbody>
+          </table>
+        </div>` : '<div class="text-muted" style="font-size:13px">No targets set for this account.</div>'}
+      </div>`;
+    }).join('')}
+  </div>
+
+  <!-- Benchmarks Tab -->
+  <div id="stab-benchmarks" style="display:none">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">
+      <div class="section-title">Benchmark Overrides</div>
+      <button class="btn btn-primary" onclick="openAddBenchmark()">+ Add Override</button>
+    </div>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Industry</th><th>Objective</th><th>Metric</th><th>Excellent</th><th>Good</th><th>Warning</th><th>Critical</th><th>Direction</th><th></th></tr></thead>
+        <tbody>
+          ${benchmark_overrides.map(b=>`<tr>
+            <td>${b.industry_name||'Global'}</td>
+            <td>${objChip(b.objective)}</td>
+            <td><code style="font-size:11px;background:var(--bg3);padding:2px 6px;border-radius:4px">${b.metric_key}</code></td>
+            <td class="text-green">${b.excellent_threshold}</td>
+            <td class="text-yellow">${b.good_threshold}</td>
+            <td class="text-orange">${b.warning_threshold}</td>
+            <td class="text-red">${b.critical_threshold}</td>
+            <td class="td-muted" style="font-size:11px">${b.comparison_direction}</td>
+            <td><button class="btn btn-danger btn-sm" onclick="deleteBenchmark('${b.id}')">×</button></td>
+          </tr>`).join('')}
+          ${!benchmark_overrides.length?'<tr><td colspan="9" class="empty">No custom overrides. Platform defaults are in use.</td></tr>':''}
+        </tbody>
+      </table>
+    </div>
+  </div>
+  `;
+  window._settingsAccounts = accounts;
+}
+
+function showSettingsTab(name, el) {
+  document.querySelectorAll('[id^="stab-"]').forEach(t => t.style.display = 'none');
+  document.querySelectorAll('.tabs .tab').forEach(t => t.classList.remove('active'));
+  document.getElementById('stab-' + name).style.display = '';
+  el.classList.add('active');
+}
+
+function openAddTarget(accounts) {
+  const accts = typeof accounts === 'string' ? JSON.parse(accounts.replace(/&quot;/g,'"')) : accounts;
+  openModal(`
+  <h3>Add Account Target</h3>
+  <div class="form-group">
+    <label class="form-label">Account</label>
+    <select class="form-input" id="tgt-account">
+      ${accts.map(a=>`<option value="${a.id}">${a.account_name}</option>`).join('')}
+    </select>
+  </div>
+  <div class="form-group">
+    <label class="form-label">Objective</label>
+    <select class="form-input" id="tgt-obj">
+      <option>messaging</option><option>leads</option><option>sales</option><option>traffic</option><option>awareness</option>
+    </select>
+  </div>
+  <div class="form-row">
+    <div class="form-group"><label class="form-label">Target CTR %</label><input class="form-input" type="number" step="0.1" id="tgt-ctr" placeholder="e.g. 2.5"></div>
+    <div class="form-group"><label class="form-label">Target CPR</label><input class="form-input" type="number" id="tgt-cpr" placeholder="e.g. 15"></div>
+  </div>
+  <div class="form-row">
+    <div class="form-group"><label class="form-label">Target CPL</label><input class="form-input" type="number" id="tgt-cpl" placeholder="e.g. 20"></div>
+    <div class="form-group"><label class="form-label">Target CPA</label><input class="form-input" type="number" id="tgt-cpa" placeholder="e.g. 50"></div>
+  </div>
+  <div class="form-row">
+    <div class="form-group"><label class="form-label">Target ROAS</label><input class="form-input" type="number" step="0.1" id="tgt-roas" placeholder="e.g. 3.0"></div>
+    <div class="form-group"><label class="form-label">Monthly Budget</label><input class="form-input" type="number" id="tgt-budget" placeholder="e.g. 10000"></div>
+  </div>
+  <div class="form-group"><label class="form-label">Effective From</label><input class="form-input" type="date" id="tgt-from" value="${new Date().toISOString().slice(0,10)}"></div>
+  <div class="modal-actions">
+    <button class="btn btn-ghost" onclick="closeModal()">Cancel</button>
+    <button class="btn btn-primary" onclick="saveTarget()">Save Target</button>
+  </div>`);
+}
+
+async function saveTarget() {
+  const body = {
+    ad_account_id:        document.getElementById('tgt-account').value,
+    objective:            document.getElementById('tgt-obj').value,
+    target_ctr:           parseFloat(document.getElementById('tgt-ctr').value)||null,
+    target_cpr:           parseFloat(document.getElementById('tgt-cpr').value)||null,
+    target_cpl:           parseFloat(document.getElementById('tgt-cpl').value)||null,
+    target_cpa:           parseFloat(document.getElementById('tgt-cpa').value)||null,
+    target_roas:          parseFloat(document.getElementById('tgt-roas').value)||null,
+    monthly_budget_target:parseFloat(document.getElementById('tgt-budget').value)||null,
+    effective_from:       document.getElementById('tgt-from').value,
+  };
+  await apiPost('/settings/targets', body);
+  closeModal();
+  loadSettings();
+}
+
+function openAddBenchmark() {
+  openModal(`
+  <h3>Add Benchmark Override</h3>
+  <div class="form-row">
+    <div class="form-group"><label class="form-label">Objective</label>
+      <select class="form-input" id="bm-obj">
+        <option>messaging</option><option>leads</option><option>sales</option><option>traffic</option><option>awareness</option>
+      </select>
+    </div>
+    <div class="form-group"><label class="form-label">Metric Key</label>
+      <select class="form-input" id="bm-metric">
+        <option>ctr</option><option>cpm</option><option>cpr</option><option>cpl</option><option>cpa</option>
+        <option>roas</option><option>frequency</option><option>reach</option>
+      </select>
+    </div>
+  </div>
+  <div class="form-group">
+    <label class="form-label">Direction</label>
+    <select class="form-input" id="bm-dir">
+      <option value="lower_is_better">Lower is Better</option>
+      <option value="higher_is_better">Higher is Better</option>
+      <option value="optimal_range">Optimal Range</option>
+    </select>
+  </div>
+  <div class="form-row">
+    <div class="form-group"><label class="form-label">Excellent</label><input class="form-input" type="number" step="0.01" id="bm-exc" placeholder="Best threshold"></div>
+    <div class="form-group"><label class="form-label">Good</label><input class="form-input" type="number" step="0.01" id="bm-good" placeholder="Good threshold"></div>
+  </div>
+  <div class="form-row">
+    <div class="form-group"><label class="form-label">Warning</label><input class="form-input" type="number" step="0.01" id="bm-warn" placeholder="Warning threshold"></div>
+    <div class="form-group"><label class="form-label">Critical</label><input class="form-input" type="number" step="0.01" id="bm-crit" placeholder="Critical threshold"></div>
+  </div>
+  <div class="modal-actions">
+    <button class="btn btn-ghost" onclick="closeModal()">Cancel</button>
+    <button class="btn btn-primary" onclick="saveBenchmark()">Save</button>
+  </div>`);
+}
+
+async function saveBenchmark() {
+  const body = {
+    objective:            document.getElementById('bm-obj').value,
+    metric_key:           document.getElementById('bm-metric').value,
+    comparison_direction: document.getElementById('bm-dir').value,
+    excellent_threshold:  parseFloat(document.getElementById('bm-exc').value),
+    good_threshold:       parseFloat(document.getElementById('bm-good').value),
+    warning_threshold:    parseFloat(document.getElementById('bm-warn').value),
+    critical_threshold:   parseFloat(document.getElementById('bm-crit').value),
+  };
+  if (isNaN(body.excellent_threshold)) { alert('Please fill in all thresholds'); return; }
+  await apiPost('/settings/benchmarks', body);
+  closeModal();
+  loadSettings();
+  // Trigger settings tab to benchmarks
+  setTimeout(()=>{ showSettingsTab('benchmarks', document.querySelectorAll('.tabs .tab')[2]); },100);
+}
+
+async function deleteBenchmark(id) {
+  if (!confirm('Remove this benchmark override?')) return;
+  await apiDelete(`/settings/benchmarks/${id}`);
+  loadSettings();
+}
+
+
+// ─── Phase 4: Freshness bar ──────────────────────────────────
+function updateFreshnessBar(insights) {
+  const bar  = document.getElementById('freshness-bar');
+  const text = document.getElementById('freshness-text');
+  if (!bar || !text) return;
+
+  const df = insights?.data_freshness || {};
+  const fetchedAt = df.fetched_at || insights?.fetched_at;
+  if (!fetchedAt) { bar.style.display = 'none'; return; }
+
+  const dt = new Date(fetchedAt);
+  const isMock = insights?.is_mock;
+  const incomplete = df.data_may_be_incomplete;
+
+  const sourceLabel = isMock
+    ? '<span class="source-badge mock">mock</span>'
+    : df.from_cache
+      ? '<span class="source-badge cached">cached</span>'
+      : '<span class="source-badge live">live</span>';
+
+  bar.style.display = '';
+  bar.className = 'freshness-bar' + (incomplete ? ' warn' : '');
+
+  text.innerHTML = `Data as of ${dt.toLocaleString()} ${sourceLabel}`
+    + (incomplete ? ' · <span class="text-orange">⚠ Conversion data may be incomplete (within attribution window)</span>' : '');
+}
+
+// ─── Phase 4: Delta indicator helper ─────────────────────────
+function deltaHtml(deltas, metric, lowerIsBetter = false) {
+  const d = deltas?.[metric];
+  if (!d || d.delta_pct === undefined) return '';
+  const pct = d.delta_pct;
+  const isGood = lowerIsBetter ? pct < 0 : pct > 0;
+  const isBad  = lowerIsBetter ? pct > 0 : pct < 0;
+  const cls    = isGood ? 'pos' : isBad ? 'neg' : 'neu';
+  const arrow  = pct > 0 ? '▲' : pct < 0 ? '▼' : '▸';
+  return `<span class="delta ${cls}">${arrow} ${Math.abs(pct)}%</span>`;
+}
+
+// ─── Phase 4: Trend chart from real API ──────────────────────
+async function loadTrendChartReal(campaignId, since, until) {
+  const el = document.getElementById('history-chart-wrap');
+  if (!el) return;
+  try {
+    const r = await api(addDateQ(insightsUrl(`/campaigns/${campaignId}/insights/trend`)));
+    const data = r.data || [];
+    if (!data.length) { el.innerHTML = '<div class="empty">No trend data for this period.</div>'; return; }
+
+    // Show metric selector
+    const metrics = ['spend','ctr','cpm','cpc','frequency'];
+    let selectedMetric = 'ctr';
+
+    function renderTrendBars(metric) {
+      const values = data.map(d => parseFloat(d[metric]) || 0);
+      const max = Math.max(...values, 0.001);
+      const bars = data.map((d, i) => {
+        const h = Math.round((values[i] / max) * 80);
+        const lbl = d.date_start ? d.date_start.slice(5) : i;
+        return `<div class="bar-wrap" title="${d.date_start}: ${values[i].toFixed(2)}">
+          <div class="bar" style="height:${h}px;background:var(--accent)"></div>
+          <div class="bar-label">${lbl}</div>
+        </div>`;
+      }).join('');
+
+      const avg = values.length ? (values.reduce((a,b)=>a+b,0)/values.length).toFixed(2) : '—';
+      const min = Math.min(...values).toFixed(2);
+      const max2 = Math.max(...values).toFixed(2);
+
+      return `<div class="chart-bars">${bars}</div>
+        <div style="display:flex;gap:16px;margin-top:10px;flex-wrap:wrap">
+          <span style="font-size:11px;color:var(--muted)">Min: ${min}</span>
+          <span style="font-size:11px;color:var(--muted)">Avg: ${avg}</span>
+          <span style="font-size:11px;color:var(--muted)">Max: ${max2}</span>
+          <span style="font-size:11px;color:var(--muted)">${data.length} days</span>
+        </div>`;
+    }
+
+    el.innerHTML = `<div class="card">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;flex-wrap:wrap;gap:8px">
+        <div class="section-title">📈 Daily Trend</div>
+        <div class="tabs-inner" id="trend-metric-tabs">
+          ${metrics.map(m => `<div class="tab-inner${m===selectedMetric?' active':''}" onclick="switchTrendMetric('${m}',this)">${m.toUpperCase()}</div>`).join('')}
+        </div>
+      </div>
+      <div class="chart-wrap" id="trend-bars">${renderTrendBars(selectedMetric)}</div>
+    </div>`;
+
+    window._trendData = data;
+    window.switchTrendMetric = function(metric, el) {
+      document.querySelectorAll('#trend-metric-tabs .tab-inner').forEach(t=>t.classList.remove('active'));
+      el.classList.add('active');
+      document.getElementById('trend-bars').innerHTML = renderTrendBars(metric);
+    };
+  } catch(e) {
+    el.innerHTML = '<div class="empty">Could not load trend data.</div>';
+  }
+}
+
+// ─── Phase 4: Breakdown charts ───────────────────────────────
+async function loadBreakdownCharts(campaignId) {
+  const el = document.getElementById('tab-breakdowns');
+  if (!el) return;
+  el.innerHTML = '<div class="loader"><span class="spin">◌</span> Loading breakdowns...</div>';
+
+  try {
+    const r = await api(addDateQ(insightsUrl(`/campaigns/${campaignId}/insights/breakdowns`)));
+
+    function breakdownSection(title, rows, valueKey = 'spend') {
+      if (!rows?.length) return `<div class="empty">${title}: No data</div>`;
+      return `<div class="card" style="margin-bottom:12px">
+        <div class="section-title" style="margin-bottom:12px">${title}</div>
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:12px">
+          <span style="font-size:11px;color:var(--muted)">Sorted by spend</span>
+        </div>
+        ${rows.slice(0,8).map(row => {
+          const pct = row.spend_pct || 0;
+          return `<div class="breakdown-bar-row">
+            <div class="breakdown-bar-label">${row.dimension_value}</div>
+            <div class="breakdown-bar-track"><div class="breakdown-bar-fill" style="width:${Math.min(pct,100)}%"></div></div>
+            <div class="breakdown-bar-val">${pct}% · ${(row.spend||0).toFixed(0)} EGP</div>
+          </div>
+          <div style="font-size:11px;color:var(--muted);margin-bottom:8px;padding-left:98px">
+            CTR: ${(row.ctr||0).toFixed(2)}% · CPM: ${(row.cpm||0).toFixed(2)} · Freq: ${(row.frequency||0).toFixed(2)}
+          </div>`;
+        }).join('')}
+      </div>`;
+    }
+
+    el.innerHTML = `
+      ${breakdownSection('👥 Age Breakdown', r.age?.data)}
+      ${breakdownSection('⚧ Gender Breakdown', r.gender?.data)}
+      ${breakdownSection('📍 Region Breakdown', r.region?.data)}
+      <div class="text-muted" style="font-size:11px;margin-top:8px">Fetched: ${r.fetched_at || new Date().toISOString()}</div>
+    `;
+  } catch(e) {
+    el.innerHTML = '<div class="empty">Could not load breakdown data: ' + e.message + '</div>';
+  }
+}
+
+
+// ═══════════════════════════════════════════════════════════════
+// DECISION CENTER — Phase 5
+// ═══════════════════════════════════════════════════════════════
+async function loadDecisions() {
+  document.getElementById('content').innerHTML = '<div class="loader"><span class="spin">◌</span> Generating decisions...</div>';
+  const [dec, winners, losers, opps] = await Promise.all([
+    api('/decisions'),
+    api('/decisions/winners?limit=5'),
+    api('/decisions/losers?limit=5'),
+    api('/decisions/opportunities?limit=8'),
+  ]);
+
+  const decisions = dec.decisions || [];
+
+  document.getElementById('content').innerHTML = `
+  <!-- Priority summary bar -->
+  <div class="priority-bar">
+    <div class="priority-pill critical" onclick="filterDecisions('critical')">🔴 Critical (${dec.by_priority?.critical||0})</div>
+    <div class="priority-pill high"     onclick="filterDecisions('high')"    >🟠 High (${dec.by_priority?.high||0})</div>
+    <div class="priority-pill medium"   onclick="filterDecisions('medium')"  >🟡 Medium (${dec.by_priority?.medium||0})</div>
+    <div class="priority-pill low"      onclick="filterDecisions('low')"     >⚪ Low (${dec.by_priority?.low||0})</div>
+    <span class="text-muted" style="font-size:12px;margin-left:auto">Generated: ${new Date(dec.generated_at).toLocaleTimeString()}</span>
+  </div>
+
+  <div style="display:grid;grid-template-columns:1fr 360px;gap:20px">
+    <!-- Left: Today's Actions -->
+    <div>
+      <div class="section-header" style="margin-bottom:12px">
+        <div class="section-title">⚡ Today's Priority Actions</div>
+        <button class="btn btn-ghost btn-sm" onclick="loadDecisions()">↻ Refresh</button>
+      </div>
+      <div id="decisions-list">
+        ${renderDecisionCards(decisions)}
+      </div>
+    </div>
+
+    <!-- Right: Winners + Losers + Opportunities -->
+    <div>
+      <div class="section-title" style="margin-bottom:10px">🏆 Top Winners</div>
+      ${(winners.data||[]).map(w => `
+      <div class="winner-card">
+        <div>
+          <div style="font-size:13px;font-weight:600;cursor:pointer;color:var(--accent2)" onclick="viewCampaign('${w.meta_campaign_id}')">${w.campaign_name}</div>
+          <div style="margin-top:3px;display:flex;gap:6px">${objChip(w.objective)}<span class="chip ${w.status}">${w.status}</span></div>
+          ${w.strengths?.length ? '<div style="font-size:11px;color:var(--green);margin-top:3px">' + w.strengths[0] + '</div>' : ''}
+        </div>
+        <div style="text-align:center">
+          ${scoreCircle(w.health_score, true)}
+          <div style="font-size:10px;color:var(--muted);margin-top:3px">W:${w.winner_score}</div>
+        </div>
+      </div>`).join('') || '<div class="empty">No winners yet — run analysis</div>'}
+
+      <div class="section-title" style="margin:16px 0 10px">🔻 Needs Attention</div>
+      ${(losers.data||[]).map(l => `
+      <div class="loser-card">
+        <div>
+          <div style="font-size:13px;font-weight:600;cursor:pointer;color:var(--accent2)" onclick="viewCampaign('${l.meta_campaign_id}')">${l.campaign_name}</div>
+          <div style="font-size:11px;color:var(--red);margin-top:3px">${(l.problems||[])[0]||''}</div>
+        </div>
+        <div style="text-align:center">
+          ${scoreCircle(l.health_score, true)}
+        </div>
+      </div>`).join('') || '<div class="empty">No losers detected</div>'}
+
+      <div class="section-title" style="margin:16px 0 10px">💡 Opportunities</div>
+      ${(opps.data||[]).slice(0,4).map(o => `
+      <div class="opp-card">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px">
+          <div class="opp-type">${o.type}</div>
+          <span class="confidence-badge ${o.confidence}">${o.confidence} confidence</span>
+        </div>
+        <div style="font-size:13px;font-weight:600;cursor:pointer;color:var(--accent2);margin-bottom:4px" onclick="viewCampaign('${o.meta_campaign_id}')">${o.campaign_name}</div>
+        <div class="opp-reason">${o.reason}</div>
+        ${o.expected_impact ? '<div style="font-size:11px;color:var(--green);margin-top:4px">→ ' + o.expected_impact + '</div>' : ''}
+      </div>`).join('') || '<div class="empty">No opportunities detected</div>'}
+    </div>
+  </div>
+  `;
+
+  window._allDecisions = decisions;
+}
+
+function renderDecisionCards(decisions) {
+  if (!decisions.length) return '<div class="empty">✓ No decisions pending. Run campaign analysis to generate insights.</div>';
+  return decisions.map(d => `
+  <div class="decision-card ${d.priority}" id="dec-${d.id}">
+    <div class="decision-header">
+      <div>
+        <div class="decision-label">${d.decision_label || d.decision_type}</div>
+        <div style="font-size:12px;color:var(--muted);margin-top:2px;cursor:pointer;color:var(--accent2)" onclick="viewCampaign('${d.meta_campaign_id}')">${d.campaign_name}</div>
+      </div>
+      <div style="display:flex;align-items:center;gap:6px;flex-shrink:0">
+        <span class="badge ${d.priority}">${d.priority}</span>
+        ${d.health_score !== null ? scoreCircle(d.health_score, true) : ''}
+      </div>
+    </div>
+    <div class="decision-reason">${d.reason}</div>
+    <div class="decision-action">→ ${d.suggested_action}</div>
+    ${Object.keys(d.supporting_metrics||{}).length ? `
+    <div class="decision-metrics">
+      ${Object.entries(d.supporting_metrics).slice(0,4).map(([k,v]) =>
+        v !== null && v !== undefined ? `<span class="decision-metric">${k}: ${typeof v==='number'?v.toFixed(2):v}</span>` : ''
+      ).join('')}
+    </div>` : ''}
+    <div class="decision-actions">
+      <button class="btn btn-success btn-sm" onclick="completeDecision('${d.id}','${d.decision_type}','${(d.campaign_name||'').replace(/'/g,"\'")}')">✓ Done</button>
+      <button class="btn btn-ghost btn-sm"   onclick="dismissDecision('${d.id}')">Dismiss</button>
+      ${d.expected_impact ? `<span class="text-muted" style="font-size:11px;margin-left:4px;align-self:center">Expected: ${d.expected_impact}</span>` : ''}
+    </div>
+  </div>`).join('');
+}
+
+function filterDecisions(priority) {
+  const all = window._allDecisions || [];
+  const filtered = priority ? all.filter(d => d.priority === priority) : all;
+  document.getElementById('decisions-list').innerHTML = renderDecisionCards(filtered);
+}
+
+async function completeDecision(id, type, name) {
+  openModal(`
+  <h3>✓ Mark Decision Complete</h3>
+  <p class="text-muted" style="font-size:13px;margin-bottom:14px">What action did you take for "${name}"?</p>
+  <div class="form-group">
+    <label class="form-label">Action Notes (optional)</label>
+    <textarea class="form-input" id="dec-note" placeholder="Describe what you did..."></textarea>
+  </div>
+  <div class="modal-actions">
+    <button class="btn btn-ghost" onclick="closeModal()">Cancel</button>
+    <button class="btn btn-primary" onclick="saveDecisionComplete('${id}')">Mark Complete</button>
+  </div>`);
+}
+
+async function saveDecisionComplete(id) {
+  const notes = document.getElementById('dec-note')?.value || '';
+  try {
+    await apiPatch('/decisions/history/' + id, { status: 'completed', action_notes: notes, action_taken: true });
+  } catch {}
+  closeModal();
+  loadDecisions();
+}
+
+async function dismissDecision(id) {
+  try { await apiPatch('/decisions/history/' + id, { status: 'dismissed' }); } catch {}
+  loadDecisions();
+}
+
+// ═══════════════════════════════════════════════════════════════
+// REPORTS — Phase 5
+// ═══════════════════════════════════════════════════════════════
+async function loadReports() {
+  document.getElementById('content').innerHTML = '<div class="loader"><span class="spin">◌</span> Loading report...</div>';
+  const summary = await api('/reports/summary?period=weekly');
+
+  const hs = summary.health || {};
+  const recs = summary.recommendations || {};
+  const alerts = summary.alerts || {};
+
+  const scoreColor = (s) => {
+    if (!s) return 'var(--muted)';
+    if (s >= 80) return 'var(--green)';
+    if (s >= 60) return 'var(--yellow)';
+    if (s >= 40) return 'var(--orange)';
+    return 'var(--red)';
+  };
+
+  document.getElementById('content').innerHTML = `
+  <!-- Period selector + export buttons -->
+  <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:20px;flex-wrap:wrap;gap:10px">
+    <div class="filter-bar" style="margin:0">
+      <select id="report-period" onchange="changeReportPeriod()" class="form-input" style="padding:7px 12px">
+        <option value="daily">Today</option>
+        <option value="weekly" selected>Last 7 Days</option>
+        <option value="monthly">This Month</option>
+      </select>
+    </div>
+    <div style="display:flex;gap:8px">
+      <button class="btn btn-ghost btn-sm" onclick="exportReport('csv')">⬇ CSV</button>
+      <button class="btn btn-ghost btn-sm" onclick="exportReport('xlsx')">⬇ Excel</button>
+      <button class="btn btn-ghost btn-sm" onclick="exportReport('pdf')">⬇ PDF / Print</button>
+    </div>
+  </div>
+
+  <!-- Summary stats -->
+  <div class="report-grid">
+    <div class="report-stat">
+      <div class="report-stat-val" style="color:${scoreColor(hs.avg_score)}">${hs.avg_score ?? '—'}</div>
+      <div class="report-stat-lbl">Avg Health Score</div>
+    </div>
+    <div class="report-stat">
+      <div class="report-stat-val" style="color:var(--red)">${alerts.critical || 0}</div>
+      <div class="report-stat-lbl">Critical Alerts</div>
+    </div>
+    <div class="report-stat">
+      <div class="report-stat-val" style="color:var(--accent)">${recs.total || 0}</div>
+      <div class="report-stat-lbl">Recommendations</div>
+    </div>
+    <div class="report-stat">
+      <div class="report-stat-val" style="color:var(--green)">${recs.completed || 0}</div>
+      <div class="report-stat-lbl">Actions Completed</div>
+    </div>
+  </div>
+
+  <!-- Top / Worst campaigns -->
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:20px">
+    <div>
+      <div class="section-title" style="margin-bottom:10px">🏆 Top Campaigns</div>
+      ${(summary.top_campaigns||[]).map(c=>`
+      <div style="display:flex;align-items:center;justify-content:space-between;padding:8px 0;border-bottom:1px solid var(--border)">
+        <div>
+          <div style="font-size:13px;font-weight:500;cursor:pointer;color:var(--accent2)" onclick="viewCampaign('${c.entity_meta_id}')">${c.entity_label}</div>
+          ${objChip(c.objective||'')}
+        </div>
+        <div style="display:flex;align-items:center;gap:8px">
+          ${scoreCircle(c.health_score,true)}
+          <span class="badge ${c.health_status}">${c.health_status}</span>
+        </div>
+      </div>`).join('') || '<div class="empty">No data</div>'}
+    </div>
+    <div>
+      <div class="section-title" style="margin-bottom:10px">⚠ Worst Campaigns</div>
+      ${(summary.worst_campaigns||[]).filter(c=>c.health_status==='warning'||c.health_status==='critical').map(c=>`
+      <div style="display:flex;align-items:center;justify-content:space-between;padding:8px 0;border-bottom:1px solid var(--border)">
+        <div>
+          <div style="font-size:13px;font-weight:500;cursor:pointer;color:var(--accent2)" onclick="viewCampaign('${c.entity_meta_id}')">${c.entity_label}</div>
+          ${objChip(c.objective||'')}
+        </div>
+        <div style="display:flex;align-items:center;gap:8px">
+          ${scoreCircle(c.health_score,true)}
+          <span class="badge ${c.health_status}">${c.health_status}</span>
+        </div>
+      </div>`).join('') || '<div class="empty">No campaigns below Good</div>'}
+    </div>
+  </div>
+
+  <!-- Recommendations summary -->
+  <div class="section-title" style="margin-bottom:10px">💡 Recommendations (${recs.total||0})</div>
+  <div class="table-wrap" style="margin-bottom:20px">
+    <table>
+      <thead><tr><th>Campaign</th><th>Severity</th><th>Recommendation</th><th>Status</th><th>Date</th></tr></thead>
+      <tbody>
+        ${(recs.items||[]).slice(0,8).map(r=>`
+        <tr>
+          <td class="td-name">${r.entity_label}</td>
+          <td><span class="badge ${r.severity}">${r.severity}</span></td>
+          <td>${r.recommendation_title}</td>
+          <td>${r.action_taken?'<span class="badge good">✓ Done</span>':'<span class="text-muted">Pending</span>'}</td>
+          <td class="td-muted">${r.generated_at?.slice(0,10)||'—'}</td>
+        </tr>`).join('') || '<tr><td colspan="5" class="empty">No recommendations in this period</td></tr>'}
+      </tbody>
+    </table>
+  </div>
+
+  <!-- Alerts summary -->
+  <div class="section-title" style="margin-bottom:10px">🔔 Alerts (${alerts.total||0})</div>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Campaign</th><th>Alert</th><th>Severity</th><th>Occurrences</th><th>Detected</th></tr></thead>
+      <tbody>
+        ${(alerts.items||[]).slice(0,8).map(a=>`
+        <tr class="alert-row ${a.severity}">
+          <td class="td-name">${a.entity_label}</td>
+          <td><code style="font-size:11px;background:var(--bg3);padding:2px 6px;border-radius:4px">${a.alert_code}</code></td>
+          <td><span class="badge ${a.severity}">${a.severity}</span></td>
+          <td>${a.occurrence_count}</td>
+          <td class="td-muted">${a.first_detected_at?.slice(0,10)||'—'}</td>
+        </tr>`).join('') || '<tr><td colspan="5" class="empty">No alerts in this period</td></tr>'}
+      </tbody>
+    </table>
+  </div>
+  `;
+
+  window._reportPeriod = 'weekly';
+}
+
+async function changeReportPeriod() {
+  const period = document.getElementById('report-period')?.value || 'weekly';
+  window._reportPeriod = period;
+  const summary = await api('/reports/summary?period=' + period);
+  // Re-render — simplified: just reload
+  loadReports();
+}
+
+function exportReport(format) {
+  const period = window._reportPeriod || 'weekly';
+  const url = `/api/v1/reports/export?format=${format}&period=${period}`;
+  if (format === 'pdf') {
+    window.open(url, '_blank');
+  } else {
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = '';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+  }
+}
+
+
+// ════════════════════════════════════════════
+// PHASE 6C — Global State + Helpers
+// ════════════════════════════════════════════
+
+// Global date range state
+window._dr = { preset: 'last_7_days', since: null, until: null };
+window._accountId = '';
+
+// Load accounts into selector on boot
+async function loadAccountSelector() {
+  try {
+    const r = await fetch(API + '/accounts');
+    const j = await r.json();
+    window._accountsCache = j.data || []; // Phase 8: populate cache used by hasValidToken()
+    const sel = document.getElementById('acct-selector');
+    if (!sel) return;
+    (j.data || []).forEach(a => {
+      const opt = document.createElement('option');
+      opt.value = a.id;
+      opt.textContent = a.account_name + (a.client_label ? ' — ' + a.client_label : '') + (a.token_is_valid ? '' : ' (no live data)');
+      sel.appendChild(opt);
+    });
+  } catch {}
+}
+
+function setAccount(id) {
+  window._accountId = id;
+  refreshData();
+}
+
+function setPreset(preset) {
+  window._dr = { preset, since: null, until: null };
+  document.querySelectorAll('.date-btn').forEach(b => b.classList.remove('active'));
+  const btn = document.getElementById('dbtn-' + preset);
+  if (btn) btn.classList.add('active');
+  refreshData();
+}
+
+function setCustomRange() {
+  const since = document.getElementById('custom-since')?.value;
+  const until = document.getElementById('custom-until')?.value;
+  if (since && until) {
+    window._dr = { preset: 'custom', since, until };
+    document.querySelectorAll('.date-btn').forEach(b => b.classList.remove('active'));
+    refreshData();
+  }
+}
+
+// Build query string from global date state
+function dateParams() {
+  const p = [];
+  if (window._dr.preset && window._dr.preset !== 'custom') p.push('preset=' + window._dr.preset);
+  if (window._dr.since)  p.push('since=' + window._dr.since);
+  if (window._dr.until)  p.push('until=' + window._dr.until);
+  if (window._accountId) p.push('account_id=' + window._accountId);
+  return p.length ? '?' + p.join('&') : '';
+}
+
+// API call with automatic date range params appended
+function apiDate(path) {
+  const sep = path.includes('?') ? '&' : '?';
+  return api(path + (icDateQ().length ? sep + icDateQ() : ''));
+}
+
+// Build date+account query string (used everywhere)
+function icDateQ() {
+  const p = [];
+  if (window._dr.preset && window._dr.preset !== 'custom') p.push('preset=' + window._dr.preset);
+  if (window._dr.since)  p.push('since=' + window._dr.since);
+  if (window._dr.until)  p.push('until=' + window._dr.until);
+  if (window._accountId) p.push('account_id=' + window._accountId);
+  return p.join('&');
+}
+
+// Append date+account params to any URL.
+function addDateQ(url) {
+  const q = icDateQ();
+  return q ? url + (url.includes('?') ? '&' : '?') + q : url;
+}
+
+// ════════════════════════════════════════════
+// PHASE 8 — Production Readiness: real-vs-mock decision
+// ════════════════════════════════════════════
+// window._accountsCache holds the /accounts response so we can check
+// token_is_valid without re-fetching on every insight call.
+window._accountsCache = null;
+
+async function ensureAccountsCache() {
+  if (window._accountsCache) return window._accountsCache;
+  try {
+    const r = await fetch(API + '/accounts');
+    const j = await r.json();
+    window._accountsCache = j.data || [];
+  } catch { window._accountsCache = []; }
+  return window._accountsCache;
+}
+
+// Does the currently selected account (or the campaign's own account) have
+// a token marked valid? If not, fall back to mock ONLY in that case —
+// never hardcode it. This makes mock mode an explicit, visible fallback
+// rather than a silent default, and the UI will show "(mock data)" when active.
+function hasValidToken() {
+  const accounts = window._accountsCache || [];
+  if (!accounts.length) return false; // no accounts loaded yet — be conservative, do not assume real data
+  const targetId = window._accountId || (window.ic?.selectedCampaign?.ad_account_id);
+  const acct = targetId
+    ? accounts.find(a => a.id === targetId)
+    : accounts[0]; // single-account fallback for convenience
+  return !!(acct && acct.token_is_valid);
+}
+
+// Build the correct insights URL: real data by default, mock ONLY as an
+// explicit, visible fallback when no valid token exists anywhere.
+// Never silently hardcoded — this is the single source of truth Phase 8 requires.
+function insightsUrl(baseUrl) {
+  return hasValidToken() ? baseUrl : (baseUrl + (baseUrl.includes('?') ? '&' : '?') + 'mock=true');
+}
+
+// ════════════════════════════════════════════
+// PORTFOLIO PAGE — Phase 6C
+// ════════════════════════════════════════════
+async function loadPortfolio() {
+  document.getElementById('content').innerHTML = '<div class="loader"><span class="spin">◌</span> Loading portfolio...</div>';
+  const [overview, rankings, objectives, alerts] = await Promise.all([
+    apiDate('/portfolio'),
+    apiDate('/portfolio/accounts'),
+    apiDate('/portfolio/objectives'),
+    api('/portfolio/alerts'),
+  ]);
+
+  const ph = overview.data?.portfolio_health || {};
+  const sc  = ph.score;
+  const scCls = scoreClass(sc);
+
+  document.getElementById('content').innerHTML = `
+  <!-- Portfolio Health Header -->
+  <div style="display:grid;grid-template-columns:auto 1fr;gap:20px;margin-bottom:20px;align-items:center">
+    <div style="text-align:center">
+      ${scoreCircle(sc)}
+      <div class="badge ${scCls}" style="margin-top:6px">${scoreLabel(sc)}</div>
+      <div style="font-size:11px;color:var(--muted);margin-top:4px">${ph.weighting === 'spend_weighted' ? 'Spend-weighted' : 'Equal weight'}</div>
+    </div>
+    <div class="grid grid-4">
+      <div class="stat-card">
+        <div class="stat-label">Accounts</div>
+        <div class="stat-value">${overview.data?.accounts?.total ?? '—'}</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">Campaigns</div>
+        <div class="stat-value">${overview.data?.campaigns?.total ?? '—'}</div>
+        <div class="stat-sub">${overview.data?.campaigns?.scored ?? 0} scored</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">Cross-Account Alerts</div>
+        <div class="stat-value text-red">${(overview.data?.cross_account_alerts || []).length}</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">Health Dist.</div>
+        <div style="font-size:12px;margin-top:4px">
+          🟢 ${overview.data?.health_distribution?.excellent ?? 0}
+          🟡 ${overview.data?.health_distribution?.good ?? 0}
+          🟠 ${overview.data?.health_distribution?.warning ?? 0}
+          🔴 ${overview.data?.health_distribution?.critical ?? 0}
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:20px">
+    <!-- Account Rankings -->
+    <div class="card">
+      <div class="section-title" style="margin-bottom:12px">🏢 Account Rankings</div>
+      ${(rankings.data || []).map((a, i) => `
+      <div class="portfolio-rank">
+        <div>
+          <div style="font-size:13px;font-weight:600">${i+1}. ${a.account_name}</div>
+          <div style="font-size:11px;color:var(--muted)">${a.active_campaigns} active campaigns · ${a.active_alerts} alerts</div>
+        </div>
+        <div style="display:flex;align-items:center;gap:8px">
+          ${a.health_score !== null ? scoreCircle(a.health_score, true) : '<span class="text-muted">—</span>'}
+          ${a.health_status ? `<span class="badge ${a.health_status}">${a.health_status}</span>` : ''}
+        </div>
+      </div>`).join('') || '<div class="empty">No accounts found</div>'}
+    </div>
+
+    <!-- Objective Summary -->
+    <div class="card">
+      <div class="section-title" style="margin-bottom:12px">🎯 By Objective</div>
+      ${Object.values(objectives.data || {}).map(o => `
+      <div style="display:flex;align-items:center;justify-content:space-between;padding:7px 0;border-bottom:1px solid var(--border)">
+        <div>
+          <div style="display:flex;align-items:center;gap:6px">
+            ${objChip(o.objective)}
+            <span style="font-size:12px;color:var(--muted)">${o.campaign_count} campaigns</span>
+          </div>
+          <div style="font-size:11px;color:var(--muted);margin-top:2px">Primary: ${o.primary_kpi?.label || '—'}</div>
+        </div>
+        ${scoreCircle(o.health_score, true)}
+      </div>`).join('') || '<div class="empty">No objective data yet</div>'}
+    </div>
+  </div>
+
+  <!-- Cross-account alerts -->
+  ${(overview.data?.cross_account_alerts || []).length > 0 ? `
+  <div class="section-title" style="margin-bottom:10px">🔔 Cross-Account Alerts</div>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Account</th><th>Alert</th><th>Campaign</th><th>Severity</th><th>Occurrences</th></tr></thead>
+      <tbody>
+        ${overview.data.cross_account_alerts.map(a => `
+        <tr class="alert-row ${a.severity}">
+          <td class="td-muted">${a.account_name}</td>
+          <td><code style="font-size:11px;background:var(--bg3);padding:2px 6px;border-radius:4px">${a.alert_code}</code></td>
+          <td class="td-name">${a.entity_label}</td>
+          <td><span class="badge ${a.severity}">${a.severity}</span></td>
+          <td>${a.occurrence_count}</td>
+        </tr>`).join('')}
+      </tbody>
+    </table>
+  </div>` : ''}
+  `;
+}
+
+// ════════════════════════════════════════════
+// SCORE BREAKDOWN PANEL — Phase 6C
+// ════════════════════════════════════════════
+async function loadScoreBreakdown(entityId, entityType, containerId) {
+  const el = document.getElementById(containerId);
+  if (!el) return;
+  el.innerHTML = '<div class="loader"><span class="spin">◌</span></div>';
+
+  try {
+    const typeMap = { campaign: 'campaigns', ad_set: 'adsets', ad: 'ads' };
+    const prefix  = typeMap[entityType] || 'campaigns';
+    const r = await api(`/${prefix}/${entityId}/score-breakdown`);
+    const d = r.data;
+
+    if (!d.analyzed) {
+      el.innerHTML = `<div class="breakdown-panel"><div class="empty">${d.message}</div></div>`;
+      return;
+    }
+
+    const contribs = (d.contributions || []).map(c => {
+      const barColor = c.classification === 'positive' ? 'var(--green)' : c.classification === 'negative' ? 'var(--red)' : 'var(--yellow)';
+      const barW = c.normalized_score !== null ? c.normalized_score : 0;
+      return `<div>
+        <div class="breakdown-row">
+          <div class="breakdown-metric">${c.display_label}</div>
+          <div class="breakdown-bar-outer"><div class="breakdown-bar-inner" style="width:${barW}%;background:${barColor}"></div></div>
+          <div class="breakdown-val">${c.formatted_value}</div>
+          <div class="breakdown-weight">${c.weight_pct}%</div>
+          <div style="width:60px;text-align:right;font-size:11px;color:${barColor}">${c.normalized_score ?? '—'}/100</div>
+        </div>
+        <div class="breakdown-interp" style="padding-left:188px">${c.interpretation}</div>
+      </div>`;
+    }).join('');
+
+    const pos = d.positive_factors?.length ? `<div style="color:var(--green);font-size:12px;margin-top:8px">✓ ${d.positive_factors.join(' · ')}</div>` : '';
+    const neg = d.negative_factors?.length ? `<div style="color:var(--red);font-size:12px;margin-top:4px">✗ ${d.negative_factors.join(' · ')}</div>` : '';
+
+    el.innerHTML = `<div class="breakdown-panel">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">
+        <div class="section-title">Why score = ${d.health_score}?</div>
+        <span class="badge ${d.health_status}">${d.health_status} · ${d.score_reference}</span>
+      </div>
+      <div style="display:flex;align-items:center;gap:8px;font-size:11px;color:var(--muted);margin-bottom:10px">
+        <span>Metric</span><span style="margin-left:auto">Value</span><span style="width:40px;text-align:right">Weight</span><span style="width:60px;text-align:right">Score</span>
+      </div>
+      ${contribs}
+      ${pos}${neg}
+    </div>`;
+  } catch(e) {
+    el.innerHTML = `<div class="breakdown-panel"><div class="empty">Could not load breakdown.</div></div>`;
+  }
+}
+
+function toggleBreakdown(entityId, entityType) {
+  const el = document.getElementById('score-breakdown-panel');
+  if (!el) return;
+  if (el.innerHTML.trim()) { el.innerHTML = ''; return; }
+  loadScoreBreakdown(entityId, entityType, 'score-breakdown-panel');
+}
+
+// ─── Boot ──────────────────────────────────────────────────────
+loadAccountSelector();
+navigate('dashboard');
+</script>
+</body>
+</html>

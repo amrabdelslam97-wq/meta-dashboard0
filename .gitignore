@@ -1,0 +1,10 @@
+node_modules/
+data/
+.env
+*.db
+*.log
+.claude/
+coverage/
+meta-ads-system@1.0.0
+/node
+/npm

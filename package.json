@@ -1,0 +1,23 @@
+{
+  "name": "meta-ads-system",
+  "version": "1.0.0",
+  "description": "Meta Ads Intelligence System — Single-User Internal Platform",
+  "main": "src/app.js",
+  "scripts": {
+    "start": "node src/app.js",
+    "dev": "node --watch src/app.js",
+    "seed": "node scripts/seed.js",
+    "verify": "node scripts/verify.js",
+    "test": "node scripts/verify.js"
+  },
+  "keywords": ["meta-ads", "marketing", "analytics"],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "axios": "^1.18.1",
+    "dotenv": "^17.4.2",
+    "express": "^5.2.1",
+    "sql.js": "^1.14.1",
+    "uuid": "^14.0.1"
+  }
+}

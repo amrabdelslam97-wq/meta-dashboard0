@@ -1,0 +1,233 @@
+/**
+ * Opportunity Engine — Phase 5
+ *
+ * Detects four categories of opportunity per campaign:
+ *   1. Ready To Scale     — strong performance, low frequency saturation
+ *   2. Audience Expansion — good performance but audience showing saturation signs
+ *   3. Creative Testing   — CTR declining with otherwise healthy metrics
+ *   4. Budget Reallocation— strong performance but constrained by low budget
+ *
+ * Each opportunity includes:
+ *   - type, campaign info, reason, expected_impact, confidence, supporting_metrics
+ *
+ * Reuses: health_score_history, recommendation_log, active_alerts (DB only)
+ */
+
+const db = require('../db/database');
+const { detectTrend } = require('./topWinnersEngine');
+
+// ─────────────────────────────────────────────
+// Opportunity type definitions
+// ─────────────────────────────────────────────
+const OPPORTUNITY_TYPES = {
+  READY_TO_SCALE:        'Ready To Scale',
+  AUDIENCE_EXPANSION:    'Audience Expansion',
+  CREATIVE_TESTING:      'Creative Testing',
+  BUDGET_REALLOCATION:   'Budget Reallocation',
+};
+
+// ─────────────────────────────────────────────
+// Confidence level based on data strength
+// ─────────────────────────────────────────────
+function computeConfidence(healthScore, historyCount, alertCount) {
+  let pts = 0;
+  if (healthScore >= 80) pts += 3;
+  else if (healthScore >= 60) pts += 2;
+  else pts += 1;
+  if (historyCount >= 5) pts += 2;
+  else if (historyCount >= 2) pts += 1;
+  if (alertCount === 0) pts += 1;
+  if (pts >= 5) return 'high';
+  if (pts >= 3) return 'medium';
+  return 'low';
+}
+
+// ─────────────────────────────────────────────
+// Extract metric from score_breakdown JSONB
+// ─────────────────────────────────────────────
+function extractFromBreakdown(breakdownJson, metricKey) {
+  try {
+    const bd = breakdownJson ? JSON.parse(breakdownJson) : {};
+    return bd[metricKey]?.value ?? null;
+  } catch {
+    return null;
+  }
+}
+
+// ─────────────────────────────────────────────
+// Detect opportunities for one campaign
+// ─────────────────────────────────────────────
+function detectOpportunitiesForCampaign(camp, latestScore, scoreHistory, alertCounts, activeRecs) {
+  const opportunities = [];
+  const hs    = latestScore.health_score;
+  const freq  = extractFromBreakdown(latestScore.score_breakdown, 'frequency');
+  const ctr   = extractFromBreakdown(latestScore.score_breakdown, 'ctr');
+  const trend = detectTrend(scoreHistory);
+  const criticalAlerts = alertCounts?.critical || 0;
+  const warningAlerts  = alertCounts?.warning  || 0;
+
+  const histCount = scoreHistory.length;
+  const confidence = computeConfidence(hs, histCount, criticalAlerts + warningAlerts);
+
+  // ── 1. Ready To Scale ─────────────────────
+  // Criteria: health >= 70, frequency < 3.5, no critical alerts, not declining
+  if (
+    hs >= 70 &&
+    (freq === null || parseFloat(freq) < 3.5) &&
+    criticalAlerts === 0 &&
+    trend !== 'declining'
+  ) {
+    const scalePct = hs >= 85 ? 50 : hs >= 75 ? 30 : 20;
+    opportunities.push({
+      type:         OPPORTUNITY_TYPES.READY_TO_SCALE,
+      priority:     hs >= 80 ? 'high' : 'medium',
+      reason:       `Health score ${hs}/100 with low frequency saturation${freq ? ` (${parseFloat(freq).toFixed(1)})` : ''} and ${trend} trend. Budget increase is justified.`,
+      suggested_action: `Increase budget by +${scalePct}% and monitor frequency daily.`,
+      expected_impact:  `Estimated +${scalePct}% result volume with controlled cost increase.`,
+      confidence,
+      supporting_metrics: {
+        health_score: hs,
+        frequency:    freq ? parseFloat(freq).toFixed(1) : 'N/A',
+        trend_direction: trend,
+        critical_alerts: criticalAlerts,
+      },
+    });
+  }
+
+  // ── 2. Audience Expansion ─────────────────
+  // Criteria: health >= 65, frequency >= 3.5, performance still decent
+  if (
+    hs >= 65 &&
+    freq !== null && parseFloat(freq) >= 3.5 && parseFloat(freq) < 6.0 &&
+    criticalAlerts === 0
+  ) {
+    opportunities.push({
+      type:         OPPORTUNITY_TYPES.AUDIENCE_EXPANSION,
+      priority:     parseFloat(freq) >= 5.0 ? 'high' : 'medium',
+      reason:       `Frequency ${parseFloat(freq).toFixed(1)} indicates current audience is approaching saturation while performance is still strong.`,
+      suggested_action: 'Duplicate this ad set with a lookalike or expanded interest audience to reach fresh users.',
+      expected_impact:  'Maintain current performance levels while reaching new potential customers.',
+      confidence,
+      supporting_metrics: {
+        health_score: hs,
+        frequency:    parseFloat(freq).toFixed(1),
+        health_status: latestScore.health_status,
+      },
+    });
+  }
+
+  // ── 3. Creative Testing ───────────────────
+  // Criteria: check if HIGH_FREQUENCY or AD_FATIGUE rec exists without ROAS/CPL being critical
+  const hasFatigueRec = activeRecs.some(r =>
+    r.entity_meta_id === camp.meta_campaign_id &&
+    ['HIGH_FREQUENCY', 'AD_FATIGUE', 'LOW_CTR'].includes(r.rule_code)
+  );
+  const hasROASCritical = activeRecs.some(r =>
+    r.entity_meta_id === camp.meta_campaign_id && r.rule_code === 'LOW_ROAS'
+  );
+
+  if (hasFatigueRec && !hasROASCritical && hs >= 40) {
+    opportunities.push({
+      type:         OPPORTUNITY_TYPES.CREATIVE_TESTING,
+      priority:     'medium',
+      reason:       'CTR signals and/or frequency indicate creative fatigue. Core metrics are still viable — a creative refresh can extend campaign life.',
+      suggested_action: 'Launch 2–3 new creative variations (new hook, different format, or fresh visual) within this ad set.',
+      expected_impact:  'Restore CTR to previous levels and reduce CPR/CPL by 15–25%.',
+      confidence:   'medium',
+      supporting_metrics: {
+        health_score: hs,
+        frequency:    freq ? parseFloat(freq).toFixed(1) : 'N/A',
+        fatigue_signals: activeRecs.filter(r => r.entity_meta_id === camp.meta_campaign_id).map(r => r.rule_code),
+      },
+    });
+  }
+
+  // ── 4. Budget Reallocation ────────────────
+  // Criteria: top-scoring campaign (winner) — flag that budget could shift here from losers
+  if (hs >= 75 && trend !== 'declining' && criticalAlerts === 0) {
+    opportunities.push({
+      type:         OPPORTUNITY_TYPES.BUDGET_REALLOCATION,
+      priority:     'low',
+      reason:       `This campaign shows strong results (score ${hs}/100). Reallocating budget from underperforming campaigns could amplify returns.`,
+      suggested_action: 'Review budget distribution across all campaigns. Consider moving 10–20% of budget from Critical-score campaigns here.',
+      expected_impact:  'Improved overall account ROAS by concentrating spend on proven performers.',
+      confidence:   'medium',
+      supporting_metrics: {
+        health_score: hs,
+        trend_direction: trend,
+      },
+    });
+  }
+
+  return opportunities;
+}
+
+// ─────────────────────────────────────────────
+// MAIN: Run opportunity engine across all campaigns
+// ─────────────────────────────────────────────
+function detectAllOpportunities(limit = 10) {
+  const campaigns = db.all(`
+    SELECT c.id, c.meta_campaign_id, c.name, c.objective, c.status,
+           a.account_name, a.currency
+    FROM campaigns c
+    JOIN ad_accounts a ON c.ad_account_id = a.id
+    WHERE c.status IN ('active','paused')
+  `);
+
+  const activeRecs = db.all(`
+    SELECT rule_code, entity_meta_id, severity FROM recommendation_log
+    WHERE dismissed_at IS NULL AND action_taken IS NOT 1
+  `);
+
+  const allOpportunities = [];
+
+  for (const camp of campaigns) {
+    const latestScore = db.get(`
+      SELECT health_score, health_status, score_breakdown, calculated_at
+      FROM health_score_history
+      WHERE entity_meta_id = ? AND entity_type = 'campaign'
+      ORDER BY calculated_at DESC LIMIT 1
+    `, [camp.meta_campaign_id]);
+
+    if (!latestScore) continue;
+
+    const scoreHistory = db.all(`
+      SELECT health_score, calculated_at FROM health_score_history
+      WHERE entity_meta_id = ? AND entity_type = 'campaign'
+      ORDER BY calculated_at DESC LIMIT 10
+    `, [camp.meta_campaign_id]);
+
+    const alertCounts = db.get(`
+      SELECT
+        SUM(CASE WHEN severity='critical' THEN 1 ELSE 0 END) as critical,
+        SUM(CASE WHEN severity='warning'  THEN 1 ELSE 0 END) as warning
+      FROM active_alerts WHERE entity_meta_id = ? AND status = 'active'
+    `, [camp.meta_campaign_id]);
+
+    const opportunities = detectOpportunitiesForCampaign(
+      camp, latestScore, scoreHistory, alertCounts, activeRecs
+    );
+
+    for (const opp of opportunities) {
+      allOpportunities.push({
+        ...opp,
+        meta_campaign_id: camp.meta_campaign_id,
+        campaign_name:    camp.name,
+        objective:        camp.objective,
+        account_name:     camp.account_name,
+        health_score:     latestScore.health_score,
+      });
+    }
+  }
+
+  // Sort: high priority first, then by health score
+  const priorityRank = { high: 3, medium: 2, low: 1 };
+  allOpportunities.sort((a, b) =>
+    (priorityRank[b.priority] || 0) - (priorityRank[a.priority] || 0) ||
+    b.health_score - a.health_score
+  );
+
+  return allOpportunities.slice(0, limit);
+}
+
+module.exports = { detectAllOpportunities, OPPORTUNITY_TYPES };
