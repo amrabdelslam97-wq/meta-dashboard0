@@ -5,7 +5,17 @@
  *  - objective_scoring_configs  (weights + default thresholds per objective)
  *  - recommendation_rules       (Phase 2 minimal: 3 rules)
  *  - alert_rules                (Phase 2 minimal: 3 rules)
- *  - benchmark_metrics          (global defaults, no industry required)
+ *
+ * Does NOT seed benchmark_metrics or benchmark_industries -- those remain
+ * empty until an operator explicitly configures account- or
+ * industry-specific overrides via POST /settings/benchmarks. This is
+ * intentional, not an oversight: benchmarkEngine/healthScoreEngine's
+ * 3-tier resolution (account benchmark -> global benchmark -> platform
+ * default) already falls back to objective_scoring_configs when no
+ * benchmark_metrics row exists, so scoring works correctly with these
+ * tables empty. (An earlier version of this comment claimed
+ * benchmark_metrics was seeded here -- it never was; fixed to describe
+ * what this file actually does.)
  *
  * Safe to run multiple times — uses INSERT OR IGNORE.
  */

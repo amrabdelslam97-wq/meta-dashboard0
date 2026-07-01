@@ -13,6 +13,12 @@ const path = require('path');
 const { v4: uuidv4 } = require('uuid');
 const { initializeDatabase, run, get } = require('../src/db/database');
 const { runMigrations } = require('../src/db/schema');
+const { runPhase2Migrations } = require('../src/db/schema.phase2');
+const { runPhase5Migrations } = require('../src/db/schema.phase5');
+const { runPhase6Migrations } = require('../src/db/schema.phase6');
+const { runPhase7BMigrations } = require('../src/db/schema.phase7b');
+const { runUniqueConstraintsMigration } = require('../src/db/schema.uniqueConstraints');
+const { seedIntelligenceConfig } = require('../src/db/seedIntelligence');
 const { requireEncryptionKey, encryptToken } = require('../src/services/tokenCrypto');
 
 const DB_PATH = process.env.DB_PATH || './data/meta_ads.db';
@@ -20,7 +26,18 @@ const DB_PATH = process.env.DB_PATH || './data/meta_ads.db';
 async function seed() {
   requireEncryptionKey();
   await initializeDatabase(path.resolve(DB_PATH));
+  // Run the full migration set, matching what app.js does on a real boot --
+  // previously this only ran Phase 1, meaning a database seeded standalone
+  // (without ever having started the real server) was missing every
+  // intelligence table (benchmark_metrics, health_score_history,
+  // recommendation_log, active_alerts, decision_history, etc.).
   runMigrations();
+  runPhase2Migrations();
+  runPhase5Migrations();
+  runPhase6Migrations();
+  runPhase7BMigrations();
+  runUniqueConstraintsMigration();
+  seedIntelligenceConfig();
 
   const now = new Date().toISOString();
 
