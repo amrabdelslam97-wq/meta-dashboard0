@@ -10,7 +10,11 @@
     "verify": "node scripts/verify.js",
     "test": "node scripts/verify.js"
   },
-  "keywords": ["meta-ads", "marketing", "analytics"],
+  "keywords": [
+    "meta-ads",
+    "marketing",
+    "analytics"
+  ],
   "author": "",
   "license": "ISC",
   "dependencies": {
@@ -19,5 +23,8 @@
     "express": "^5.2.1",
     "sql.js": "^1.14.1",
     "uuid": "^14.0.1"
+  },
+  "devDependencies": {
+    "nock": "^14.0.16"
   }
 }

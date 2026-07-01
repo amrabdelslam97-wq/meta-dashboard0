@@ -167,6 +167,14 @@ function upsertAdSet(adAccountId, campaignId, metaAdSet) {
 function upsertAd(adAccountId, campaignId, adSetId, metaAd) {
   const now = new Date().toISOString();
 
+  // metaAd.creative comes from the creative{id,thumbnail_url,image_url}
+  // field expansion in metaApiClient.fetchAds(). Not every ad has a
+  // creative attached (e.g. a newly-created ad still in draft), so these
+  // are genuinely nullable, not fabricated defaults.
+  const creativeId    = metaAd.creative?.id ?? null;
+  const thumbnailUrl  = metaAd.creative?.thumbnail_url ?? null;
+  const imageUrl      = metaAd.creative?.image_url ?? null;
+
   const existing = db.get(
     'SELECT id FROM ads WHERE meta_ad_id = ?',
     [metaAd.id]
@@ -178,12 +186,18 @@ function upsertAd(adAccountId, campaignId, adSetId, metaAd) {
         name = ?,
         status = ?,
         meta_updated_time = ?,
+        creative_id = ?,
+        thumbnail_url = ?,
+        image_url = ?,
         updated_at = ?
       WHERE meta_ad_id = ?`,
       [
         metaAd.name,
         normalizeStatus(metaAd.status),
         metaAd.updated_time || now,
+        creativeId,
+        thumbnailUrl,
+        imageUrl,
         now,
         metaAd.id,
       ]
@@ -194,8 +208,9 @@ function upsertAd(adAccountId, campaignId, adSetId, metaAd) {
     db.run(
       `INSERT INTO ads (
         id, ad_set_id, campaign_id, ad_account_id, meta_ad_id, name, status,
-        meta_created_time, meta_updated_time, created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        meta_created_time, meta_updated_time, creative_id, thumbnail_url,
+        image_url, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         id,
         adSetId,
@@ -206,6 +221,9 @@ function upsertAd(adAccountId, campaignId, adSetId, metaAd) {
         normalizeStatus(metaAd.status),
         metaAd.created_time || now,
         metaAd.updated_time || now,
+        creativeId,
+        thumbnailUrl,
+        imageUrl,
         now,
         now,
       ]

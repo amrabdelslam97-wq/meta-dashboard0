@@ -25,6 +25,7 @@ const { runAlertEngine, loadActiveAlerts }                   = require('./alertE
 const { fetchAdMetrics, computeDeltas } = require('./metricsFetcher');
 const { resolveDateRange, priorPeriod } = require('./dateRangeHelper');
 const { decryptToken } = require('./tokenCrypto');
+const { fetchAdPreview } = require('./metaApiClient');
 
 // ─────────────────────────────────────────────
 // Stable variance index derived from entity ID (Phase 7B)
@@ -123,6 +124,23 @@ async function runAdIntelligence(adId, options = {}) {
     currentMetrics = getMockAdMetrics(entity.objective, idx);
     priorMetrics   = getMockAdMetrics(entity.objective, idx + 1);
   } else {
+    // Ad preview is fetched once, on-demand, and cached in the ads table --
+    // not during bulk sync (Meta's /previews endpoint is a per-ad call and
+    // would multiply the request volume of a sync by one call per ad for
+    // no benefit, since previews are only useful when someone is actually
+    // looking at this specific ad).
+    if (!ad.preview_url) {
+      try {
+        const previewUrl = await fetchAdPreview(ad.meta_ad_id, ad.access_token_encrypted);
+        if (previewUrl) {
+          db.run('UPDATE ads SET preview_url = ? WHERE id = ?', [previewUrl, ad.id]);
+          ad.preview_url = previewUrl;
+        }
+      } catch (previewErr) {
+        console.warn(`[AdIntelligence] Preview fetch failed for ${ad.meta_ad_id}:`, previewErr.message);
+      }
+    }
+
     let fetchError = null;
     let metaErrorDetails = null;
     try {
@@ -206,6 +224,13 @@ async function runAdIntelligence(adId, options = {}) {
     meta_campaign_id: campaign?.meta_campaign_id || null,
     account_name:     ad.account_name,
     currency:         ad.currency,
+
+    creative: {
+      creative_id:   ad.creative_id   || null,
+      thumbnail_url: ad.thumbnail_url || null,
+      image_url:     ad.image_url     || null,
+      preview_url:   ad.preview_url   || null,
+    },
 
     date_range: { since, until },
 

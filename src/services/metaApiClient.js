@@ -179,13 +179,45 @@ async function fetchAds(metaAdSetId, accessToken) {
   const ads = await metaGetAll(
     `${metaAdSetId}/ads`,
     {
-      fields: 'id,name,status,created_time,updated_time',
+      // creative{...} requests the AdCreative sub-object inline on the same
+      // call -- no extra request needed for id/thumbnail_url/image_url.
+      fields: 'id,name,status,created_time,updated_time,creative{id,thumbnail_url,image_url}',
       limit: 100,
     },
     accessToken
   );
 
   return ads;
+}
+
+/**
+ * Fetch a rendered ad preview for one ad.
+ *
+ * Meta's Ad Previews endpoint (GET /{ad_id}/previews) does not return a
+ * plain preview URL -- it returns an HTML snippet containing an <iframe>
+ * whose src attribute is the actual preview URL. This extracts that URL
+ * from the real response rather than fabricating one; if Meta's response
+ * shape ever changes such that no iframe src can be found, this returns
+ * null instead of guessing.
+ *
+ * @param {string} metaAdId
+ * @param {string} accessToken
+ * @param {string} adFormat - one of Meta's supported ad_format values,
+ *   e.g. DESKTOP_FEED_STANDARD, MOBILE_FEED_STANDARD, INSTAGRAM_STANDARD
+ * @returns {string|null} the extracted iframe src URL, or null
+ */
+async function fetchAdPreview(metaAdId, accessToken, adFormat = 'DESKTOP_FEED_STANDARD') {
+  const response = await metaGet(
+    `${metaAdId}/previews`,
+    { ad_format: adFormat },
+    accessToken
+  );
+
+  const body = response?.data?.[0]?.body;
+  if (!body) return null;
+
+  const match = body.match(/src="([^"]+)"/);
+  return match ? match[1].replace(/&amp;/g, '&') : null;
 }
 
 /**
@@ -203,6 +235,7 @@ module.exports = {
   fetchCampaigns,
   fetchAdSets,
   fetchAds,
+  fetchAdPreview,
   verifyToken,
   metaGet,
   metaGetAll,
