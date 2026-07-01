@@ -35,6 +35,7 @@ const { fetchCampaignMetrics, fetchAdSetMetrics, fetchAdMetrics, fetchTrendData 
 const { fetchBreakdown, fetchAllBreakdowns, enrichBreakdown } = require('../../services/breakdownsFetcher');
 const { runIntelligencePipeline } = require('../../services/intelligenceOrchestrator');
 const { asyncHandler }            = require('../../middleware/errorHandler');
+const { isMockRequested, rejectMockInProduction } = require('../../services/mockGuard');
 
 // ─────────────────────────────────────────────
 // Mock data (development / no Meta token)
@@ -96,7 +97,8 @@ function loadCampaign(id) {
 // ─────────────────────────────────────────────
 router.get('/', asyncHandler(async (req, res) => {
   const { id }      = req.params;
-  const useMock     = req.query.mock === 'true';
+  if (rejectMockInProduction(req, res)) return;
+  const useMock     = isMockRequested(req);
   const forceRefresh = req.query.refresh === 'true';
 
   const campaign = loadCampaign(id);
@@ -219,8 +221,9 @@ router.get('/', asyncHandler(async (req, res) => {
 // GET /insights/trend — Daily time series
 // ─────────────────────────────────────────────
 router.get('/trend', asyncHandler(async (req, res) => {
+  if (rejectMockInProduction(req, res)) return;
   const { id }  = req.params;
-  const useMock = req.query.mock === 'true';
+  const useMock = isMockRequested(req);
   const campaign = loadCampaign(id);
   if (!campaign) return res.status(404).json({ error: 'Campaign not found' });
 
@@ -266,9 +269,10 @@ router.get('/trend', asyncHandler(async (req, res) => {
 // GET /insights/breakdowns — Age, Gender, Region
 // ─────────────────────────────────────────────
 router.get('/breakdowns', asyncHandler(async (req, res) => {
+  if (rejectMockInProduction(req, res)) return;
   const { id }       = req.params;
   const { dimension } = req.query;  // age | gender | region | (omit for all)
-  const useMock      = req.query.mock === 'true';
+  const useMock      = isMockRequested(req);
   const campaign     = loadCampaign(id);
   if (!campaign) return res.status(404).json({ error: 'Campaign not found' });
 
@@ -321,8 +325,9 @@ router.get('/breakdowns', asyncHandler(async (req, res) => {
 // GET /insights/adsets — Per-ad-set breakdown
 // ─────────────────────────────────────────────
 router.get('/adsets', asyncHandler(async (req, res) => {
+  if (rejectMockInProduction(req, res)) return;
   const { id }  = req.params;
-  const useMock = req.query.mock === 'true';
+  const useMock = isMockRequested(req);
   const campaign = loadCampaign(id);
   if (!campaign) return res.status(404).json({ error: 'Campaign not found' });
 
@@ -348,8 +353,9 @@ router.get('/adsets', asyncHandler(async (req, res) => {
 // GET /insights/ads — Per-ad breakdown
 // ─────────────────────────────────────────────
 router.get('/ads', asyncHandler(async (req, res) => {
+  if (rejectMockInProduction(req, res)) return;
   const { id }  = req.params;
-  const useMock = req.query.mock === 'true';
+  const useMock = isMockRequested(req);
   const campaign = loadCampaign(id);
   if (!campaign) return res.status(404).json({ error: 'Campaign not found' });
 

@@ -16,6 +16,7 @@ const { buildComparisons } = require('../../services/comparisonEngine');
 const { formatScoreBreakdown }          = require('../../services/scoreBreakdownService');
 const { resolveDateRange }              = require('../../services/dateRangeHelper');
 const { asyncHandler }                  = require('../../middleware/errorHandler');
+const { isMockRequested, rejectMockInProduction } = require('../../services/mockGuard');
 
 // ─────────────────────────────────────────────
 // GET /ads
@@ -90,8 +91,9 @@ router.get('/:id', asyncHandler(async (req, res) => {
 // GET /ads/:id/insights
 // ─────────────────────────────────────────────
 router.get('/:id/insights', asyncHandler(async (req, res) => {
+  if (rejectMockInProduction(req, res)) return;
   const { id }  = req.params;
-  const useMock = req.query.mock === 'true';
+  const useMock = isMockRequested(req);
 
   const result = await runAdIntelligence(id, {
     useMock,
