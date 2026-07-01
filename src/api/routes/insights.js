@@ -395,9 +395,13 @@ router.post('/refresh', asyncHandler(async (req, res) => {
 }));
 
 // ─────────────────────────────────────────────
-// GET /insights/cache-stats — Debug
+// GET /insights/cache-stats — Debug (development only, see sync.js's
+// /cache/stats for the same reasoning)
 // ─────────────────────────────────────────────
 router.get('/cache-stats', asyncHandler(async (req, res) => {
+  if (process.env.NODE_ENV === 'production') {
+    return res.status(404).json({ error: 'Not found' });
+  }
   return res.json(cache.stats());
 }));
 

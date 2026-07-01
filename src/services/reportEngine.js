@@ -203,7 +203,18 @@ function generateCSV(summaryData) {
 
   return rows.map(row =>
     row.map(cell => {
-      const s = String(cell ?? '');
+      let s = String(cell ?? '');
+      // CSV/formula injection: a cell beginning with =, +, -, or @ is
+      // interpreted as a formula by Excel/Sheets when the file is opened.
+      // entity_label/recommendation_title/alert_message all ultimately
+      // originate from Meta campaign names or rule text an operator could
+      // influence (e.g. by naming a campaign "=cmd|...!A1"), so prefix
+      // with a leading apostrophe to force plain-text interpretation --
+      // this is the standard mitigation and is invisible in the rendered
+      // cell in every common spreadsheet application.
+      if (/^[=+\-@]/.test(s)) {
+        s = `'${s}`;
+      }
       return s.includes(',') || s.includes('"') || s.includes('\n')
         ? `"${s.replace(/"/g, '""')}"`
         : s;

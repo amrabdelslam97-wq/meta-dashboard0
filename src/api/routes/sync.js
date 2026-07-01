@@ -117,8 +117,16 @@ router.post('/cache/flush', asyncHandler(async (req, res) => {
 
 /**
  * GET /sync/cache/stats — Phase 4
+ * Internal diagnostics (cache size/hit/miss counts) -- not needed by the
+ * shipped frontend and not appropriate to expose in production. Unlike
+ * POST /cache/flush (a real operator action the frontend actually uses),
+ * this is pure debug output, so it's disabled outside development rather
+ * than left permanently public.
  */
 router.get('/cache/stats', asyncHandler(async (req, res) => {
+  if (process.env.NODE_ENV === 'production') {
+    return res.status(404).json({ error: 'Not found' });
+  }
   return res.json(cache.stats());
 }));
 

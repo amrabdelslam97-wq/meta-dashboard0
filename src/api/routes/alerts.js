@@ -75,7 +75,11 @@ router.patch('/:id', asyncHandler(async (req, res) => {
   } else if (action === 'snooze') {
     let until;
     if (snooze_until) {
-      until = snooze_until;
+      const parsed = new Date(snooze_until);
+      if (isNaN(parsed.getTime())) {
+        return res.status(400).json({ error: 'snooze_until must be a valid date string' });
+      }
+      until = parsed.toISOString();
     } else {
       const hours = parseInt(snooze_hours, 10) || 24;
       const d = new Date();

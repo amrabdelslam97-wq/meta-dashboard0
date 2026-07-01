@@ -84,20 +84,32 @@ router.patch('/:id', asyncHandler(async (req, res) => {
   const rec = db.get('SELECT id FROM recommendation_log WHERE id = ?', [id]);
   if (!rec) return res.status(404).json({ error: 'Recommendation not found' });
 
-  if (dismiss === true) {
-    db.run('UPDATE recommendation_log SET dismissed_at = ?, updated_at = ? WHERE id = ?',
-      [now, now, id]);
+  // Accept both a real boolean (JSON body) and the string "true" (a
+  // form-urlencoded body always arrives as a string, and app.js accepts
+  // both content types) -- a strict `=== true` silently no-ops for the
+  // latter with no error, which looked like a successful dismiss to the
+  // caller but never wrote anything.
+  //
+  // Note: recommendation_log has no updated_at column (confirmed in
+  // recommendationEngine.js's own resolveRecommendation() comment) -- the
+  // three UPDATE statements below previously referenced it anyway, which
+  // meant every single call to this route, with any body shape, failed
+  // with "no such column: updated_at" (found via live verification against
+  // a real database, not part of the original audit findings).
+  if (dismiss === true || dismiss === 'true') {
+    db.run('UPDATE recommendation_log SET dismissed_at = ? WHERE id = ?',
+      [now, id]);
   }
   if (action_taken !== undefined) {
     db.run(
       `UPDATE recommendation_log
-       SET action_taken = ?, action_taken_at = ?, updated_at = ? WHERE id = ?`,
-      [action_taken ? 1 : 0, action_taken ? now : null, now, id]
+       SET action_taken = ?, action_taken_at = ? WHERE id = ?`,
+      [action_taken ? 1 : 0, action_taken ? now : null, id]
     );
   }
   if (action_notes !== undefined) {
-    db.run('UPDATE recommendation_log SET action_notes = ?, updated_at = ? WHERE id = ?',
-      [action_notes, now, id]);
+    db.run('UPDATE recommendation_log SET action_notes = ? WHERE id = ?',
+      [action_notes, id]);
   }
 
   const updated = db.get('SELECT * FROM recommendation_log WHERE id = ?', [id]);
