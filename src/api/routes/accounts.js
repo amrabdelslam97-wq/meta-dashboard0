@@ -10,6 +10,7 @@ const router = express.Router();
 const { v4: uuidv4 } = require('uuid');
 const db = require('../../db/database');
 const { verifyToken } = require('../../services/metaApiClient');
+const { encryptToken } = require('../../services/tokenCrypto');
 const { asyncHandler } = require('../../middleware/errorHandler');
 
 /**
@@ -125,7 +126,7 @@ router.post(
         metaAccountInfo.timezone_name || 'UTC',
         metaAccountInfo.country || null,
         7, // default attribution window
-        access_token, // Phase 1: stored as plain text — encrypt in Phase 2
+        encryptToken(access_token),
         1,
         now,
         'active',

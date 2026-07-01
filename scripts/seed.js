@@ -13,10 +13,12 @@ const path = require('path');
 const { v4: uuidv4 } = require('uuid');
 const { initializeDatabase, run, get } = require('../src/db/database');
 const { runMigrations } = require('../src/db/schema');
+const { requireEncryptionKey, encryptToken } = require('../src/services/tokenCrypto');
 
 const DB_PATH = process.env.DB_PATH || './data/meta_ads.db';
 
 async function seed() {
+  requireEncryptionKey();
   await initializeDatabase(path.resolve(DB_PATH));
   runMigrations();
 
@@ -51,7 +53,7 @@ async function seed() {
         'Africa/Cairo',
         'EG',
         7,
-        'FAKE_TOKEN_FOR_DEVELOPMENT',
+        encryptToken('FAKE_TOKEN_FOR_DEVELOPMENT'),
         1,
         now,
         'active',

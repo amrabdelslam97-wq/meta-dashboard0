@@ -36,6 +36,7 @@ const { fetchBreakdown, fetchAllBreakdowns, enrichBreakdown } = require('../../s
 const { runIntelligencePipeline } = require('../../services/intelligenceOrchestrator');
 const { asyncHandler }            = require('../../middleware/errorHandler');
 const { isMockRequested, rejectMockInProduction } = require('../../services/mockGuard');
+const { decryptToken } = require('../../services/tokenCrypto');
 
 // ─────────────────────────────────────────────
 // Mock data (development / no Meta token)
@@ -82,7 +83,7 @@ function getMockDeltas(current, prior) {
 // Load campaign + account from DB
 // ─────────────────────────────────────────────
 function loadCampaign(id) {
-  return db.get(
+  const campaign = db.get(
     `SELECT c.*, a.access_token_encrypted, a.id as internal_account_id,
             a.meta_account_id, a.account_name, a.attribution_window_days, a.currency
      FROM campaigns c
@@ -90,6 +91,10 @@ function loadCampaign(id) {
      WHERE c.id = ? OR c.meta_campaign_id = ?`,
     [id, id]
   );
+  // Decrypted here once so every call site below can keep using
+  // campaign.access_token_encrypted unchanged.
+  if (campaign) campaign.access_token_encrypted = decryptToken(campaign.access_token_encrypted);
+  return campaign;
 }
 
 // ─────────────────────────────────────────────

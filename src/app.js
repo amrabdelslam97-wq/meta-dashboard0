@@ -15,6 +15,8 @@ const { runPhase5Migrations }    = require('./db/schema.phase5');
 const { runPhase6Migrations } = require('./db/schema.phase6');
 const { runPhase7BMigrations } = require('./db/schema.phase7b');
 const { seedIntelligenceConfig } = require('./db/seedIntelligence');
+const { encryptLegacyTokens }    = require('./db/encryptLegacyTokens');
+const { requireEncryptionKey }   = require('./services/tokenCrypto');
 const apiRouter                  = require('./api/router');
 const { errorHandler }           = require('./middleware/errorHandler');
 
@@ -22,12 +24,17 @@ const PORT    = parseInt(process.env.PORT || '3000', 10);
 const DB_PATH = process.env.DB_PATH || './data/meta_ads.db';
 
 async function start() {
+  // Fail fast and explain exactly what's needed rather than silently
+  // starting with tokens stored in plaintext.
+  requireEncryptionKey();
+
   await initializeDatabase(DB_PATH);
   runMigrations();
   runPhase2Migrations();
   runPhase5Migrations();
   runPhase6Migrations();
   runPhase7BMigrations();
+  encryptLegacyTokens();
   seedIntelligenceConfig();
 
   const app = express();

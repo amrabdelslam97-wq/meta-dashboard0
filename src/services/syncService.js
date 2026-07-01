@@ -16,6 +16,7 @@ const { v4: uuidv4 } = require('uuid');
 const db = require('../db/database');
 const { fetchCampaigns, fetchAdSets, fetchAds } = require('./metaApiClient');
 const { mapObjective } = require('./objectiveMapper');
+const { decryptToken } = require('./tokenCrypto');
 
 /**
  * Normalize a Meta status string to our internal enum.
@@ -238,8 +239,7 @@ async function syncAccount(adAccount, options = {}) {
 
   console.log(`[Sync] Starting sync for account: ${adAccount.meta_account_id}`);
 
-  // Decrypt token — in Phase 1, stored as plain text (encryption in Phase 2)
-  const accessToken = adAccount.access_token_encrypted;
+  const accessToken = decryptToken(adAccount.access_token_encrypted);
 
   // ── Step 1: Fetch and upsert campaigns ──
   let metaCampaigns;

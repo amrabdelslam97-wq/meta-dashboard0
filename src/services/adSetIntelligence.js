@@ -24,6 +24,7 @@ const { runRecommendationEngine, loadActiveRecommendations } = require('./recomm
 const { runAlertEngine, loadActiveAlerts }                   = require('./alertEngine');
 const { fetchAdSetMetrics, computeDeltas } = require('./metricsFetcher');
 const { resolveDateRange, priorPeriod } = require('./dateRangeHelper');
+const { decryptToken } = require('./tokenCrypto');
 
 // ─────────────────────────────────────────────
 // Stable variance index derived from entity ID (Phase 7B)
@@ -52,6 +53,7 @@ function loadAdSetWithParent(id) {
     [id, id]
   );
   if (!adSet) return null;
+  adSet.access_token_encrypted = decryptToken(adSet.access_token_encrypted);
 
   const campaign = db.get(
     `SELECT id, meta_campaign_id, name, objective, status
