@@ -126,17 +126,22 @@ function getAccountRankings(dateRange) {
   const accounts = db.all("SELECT id, meta_account_id, account_name, client_label, currency, status FROM ad_accounts ORDER BY account_name");
   const df       = buildDateFilter(dateRange);
 
+  // Alert/campaign counts are grouped across ALL accounts in 2 queries
+  // total instead of 2 queries PER account.
+  const alertCountsByAccount = new Map();
+  for (const row of db.all("SELECT ad_account_id, COUNT(*) as c FROM active_alerts WHERE status='active' GROUP BY ad_account_id")) {
+    alertCountsByAccount.set(row.ad_account_id, row.c);
+  }
+  const campCountsByAccount = new Map();
+  for (const row of db.all("SELECT ad_account_id, COUNT(*) as total, SUM(CASE WHEN status='active' THEN 1 ELSE 0 END) as active FROM campaigns GROUP BY ad_account_id")) {
+    campCountsByAccount.set(row.ad_account_id, row);
+  }
+
   return accounts.map(acct => {
     const scores = getLatestScoresForAccount(acct.id, 'campaign', df);
 
-    const alertCount = db.get(
-      "SELECT COUNT(*) as c FROM active_alerts WHERE ad_account_id=? AND status='active'",
-      [acct.id]
-    );
-    const campCount = db.get(
-      "SELECT COUNT(*) as total, SUM(CASE WHEN status='active' THEN 1 ELSE 0 END) as active FROM campaigns WHERE ad_account_id=?",
-      [acct.id]
-    );
+    const alertCount = { c: alertCountsByAccount.get(acct.id) || 0 };
+    const campCount = campCountsByAccount.get(acct.id) || { total: 0, active: 0 };
 
     const ws = scores.length ? weightedScore(scores) : null;
 
@@ -199,13 +204,31 @@ function getPortfolioSummary(dateRange) {
   topCampaigns.sort((a, b) => b.health_score - a.health_score);
   worstCampaigns.push(...topCampaigns.slice().reverse().slice(0, 5));
 
+  // portfolio_health is the same weighted score across the same set of
+  // scored campaigns already collected above -- reusing that set instead
+  // of calling getPortfolioHealth(dateRange) avoids redundantly re-fetching
+  // the account list and re-running getLatestScoresForAccount for every
+  // account a second time.
+  const portfolioHealth = topCampaigns.length
+    ? (() => {
+        const result = weightedScore(topCampaigns);
+        return {
+          score:        result.score,
+          status:       scoreToStatus(result.score),
+          weighting:    result.weighting,
+          total_spend:  result.total_spend,
+          entity_count: topCampaigns.length,
+        };
+      })()
+    : { score: null, status: null, weighting: null, entity_count: 0, message: 'No analyzed campaigns found.' };
+
   return {
     accounts:        { total: accounts.length },
     campaigns:       { total: totalCampaigns, active: activeCampaigns, scored: scoredCampaigns },
     health_distribution: distribution,
     top_campaigns:   topCampaigns.slice(0, 5),
     worst_campaigns: worstCampaigns,
-    portfolio_health: getPortfolioHealth(dateRange),
+    portfolio_health: portfolioHealth,
   };
 }
 

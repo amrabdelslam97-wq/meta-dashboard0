@@ -257,32 +257,36 @@ function getAdSetsList(filters = {}) {
 
   const where = conditions.length ? 'WHERE ' + conditions.join(' AND ') : '';
 
+  // Latest health score is joined in-query instead of one extra db.get()
+  // per row in a .map() (same N+1 fix as adIntelligence.getAdsList).
   const adSets = db.all(
     `SELECT
        s.id, s.meta_adset_id, s.name, s.status,
        s.daily_budget, s.lifetime_budget,
        s.campaign_id, s.ad_account_id,
        c.meta_campaign_id, c.name as campaign_name, c.objective,
-       a.account_name, a.currency
+       a.account_name, a.currency,
+       h.health_score, h.health_status, h.calculated_at as last_scored_at
      FROM ad_sets s
      JOIN campaigns c ON s.campaign_id = c.id
      JOIN ad_accounts a ON s.ad_account_id = a.id
+     LEFT JOIN health_score_history h ON h.entity_meta_id = s.meta_adset_id
+       AND h.entity_type = 'ad_set'
+       AND h.calculated_at = (
+         SELECT MAX(h2.calculated_at) FROM health_score_history h2
+         WHERE h2.entity_meta_id = s.meta_adset_id AND h2.entity_type = 'ad_set'
+       )
      ${where}
      ORDER BY s.name ASC`,
     params
   );
 
-  // Attach latest health score from history
-  return adSets.map(s => {
-    const latest = db.get(
-      `SELECT health_score, health_status, calculated_at
-       FROM health_score_history
-       WHERE entity_meta_id = ? AND entity_type = 'ad_set'
-       ORDER BY calculated_at DESC LIMIT 1`,
-      [s.meta_adset_id]
-    );
-    return { ...s, health_score: latest?.health_score || null, health_status: latest?.health_status || null, last_scored_at: latest?.calculated_at || null };
-  });
+  return adSets.map(s => ({
+    ...s,
+    health_score:   s.health_score ?? null,
+    health_status:  s.health_status ?? null,
+    last_scored_at: s.last_scored_at ?? null,
+  }));
 }
 
 module.exports = {

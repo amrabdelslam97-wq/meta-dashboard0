@@ -14,7 +14,7 @@
  */
 
 const db = require('../db/database');
-const { detectTrend } = require('./topWinnersEngine');
+const { detectTrend, loadLatestScoresMap, loadScoreHistoryMap, loadAlertCountsMap } = require('./topWinnersEngine');
 
 // ─────────────────────────────────────────────
 // Opportunity type definitions
@@ -182,30 +182,21 @@ function detectAllOpportunities(limit = 10) {
     WHERE dismissed_at IS NULL AND action_taken IS NOT 1
   `);
 
+  // Bulk-loaded once for every campaign instead of 3 queries PER campaign
+  // (latest score, 10-row history, alert counts) -- same fix and same
+  // shared loaders as topWinnersEngine.js/topLosersEngine.js.
+  const latestScores = loadLatestScoresMap('campaign');
+  const scoreHistories = loadScoreHistoryMap('campaign', 10);
+  const alertCountsByEntity = loadAlertCountsMap();
+
   const allOpportunities = [];
 
   for (const camp of campaigns) {
-    const latestScore = db.get(`
-      SELECT health_score, health_status, score_breakdown, calculated_at
-      FROM health_score_history
-      WHERE entity_meta_id = ? AND entity_type = 'campaign'
-      ORDER BY calculated_at DESC LIMIT 1
-    `, [camp.meta_campaign_id]);
-
+    const latestScore = latestScores.get(camp.meta_campaign_id);
     if (!latestScore) continue;
 
-    const scoreHistory = db.all(`
-      SELECT health_score, calculated_at FROM health_score_history
-      WHERE entity_meta_id = ? AND entity_type = 'campaign'
-      ORDER BY calculated_at DESC LIMIT 10
-    `, [camp.meta_campaign_id]);
-
-    const alertCounts = db.get(`
-      SELECT
-        SUM(CASE WHEN severity='critical' THEN 1 ELSE 0 END) as critical,
-        SUM(CASE WHEN severity='warning'  THEN 1 ELSE 0 END) as warning
-      FROM active_alerts WHERE entity_meta_id = ? AND status = 'active'
-    `, [camp.meta_campaign_id]);
+    const scoreHistory = scoreHistories.get(camp.meta_campaign_id) || [];
+    const alertCounts = alertCountsByEntity.get(camp.meta_campaign_id);
 
     const opportunities = detectOpportunitiesForCampaign(
       camp, latestScore, scoreHistory, alertCounts, activeRecs

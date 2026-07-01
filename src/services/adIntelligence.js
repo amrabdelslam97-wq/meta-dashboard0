@@ -284,6 +284,11 @@ function getAdsList(filters = {}) {
 
   const where = conditions.length ? 'WHERE ' + conditions.join(' AND ') : '';
 
+  // Latest health score is joined in-query (correlated subquery for the
+  // per-entity MAX(calculated_at), same pattern dashboard.js already uses)
+  // instead of one extra db.get() per row in a .map() -- that N+1 pattern
+  // meant listing 2,000 ads issued 1 (list) + 2,000 (score lookups) queries
+  // to return a single page.
   const ads = db.all(
     `SELECT
        ad.id, ad.meta_ad_id, ad.name, ad.status,
@@ -291,28 +296,30 @@ function getAdsList(filters = {}) {
        ad.creative_id, ad.thumbnail_url, ad.image_url, ad.preview_url,
        s.meta_adset_id, s.name as adset_name,
        c.meta_campaign_id, c.name as campaign_name, c.objective,
-       a.account_name, a.currency
+       a.account_name, a.currency,
+       h.health_score, h.health_status, h.calculated_at as last_scored_at
      FROM ads ad
      JOIN ad_sets s ON ad.ad_set_id = s.id
      JOIN campaigns c ON ad.campaign_id = c.id
      JOIN ad_accounts a ON ad.ad_account_id = a.id
+     LEFT JOIN health_score_history h ON h.entity_meta_id = ad.meta_ad_id
+       AND h.entity_type = 'ad'
+       AND h.calculated_at = (
+         SELECT MAX(h2.calculated_at) FROM health_score_history h2
+         WHERE h2.entity_meta_id = ad.meta_ad_id AND h2.entity_type = 'ad'
+       )
      ${where}
      ORDER BY ad.name ASC`,
     params
   );
   // Phase 7B: creative_id/thumbnail_url/image_url/preview_url now explicitly selected (may be null)
 
-  // Attach latest health score from history
-  return ads.map(a => {
-    const latest = db.get(
-      `SELECT health_score, health_status, calculated_at
-       FROM health_score_history
-       WHERE entity_meta_id = ? AND entity_type = 'ad'
-       ORDER BY calculated_at DESC LIMIT 1`,
-      [a.meta_ad_id]
-    );
-    return { ...a, health_score: latest?.health_score || null, health_status: latest?.health_status || null, last_scored_at: latest?.calculated_at || null };
-  });
+  return ads.map(a => ({
+    ...a,
+    health_score:   a.health_score ?? null,
+    health_status:  a.health_status ?? null,
+    last_scored_at: a.last_scored_at ?? null,
+  }));
 }
 
 module.exports = {

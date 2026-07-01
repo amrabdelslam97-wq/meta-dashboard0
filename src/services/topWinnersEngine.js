@@ -73,6 +73,109 @@ function detectTrend(scores) {
   return 'stable';
 }
 
+// ─────────────────────────────────────────────
+// Bulk data loaders, shared with topLosersEngine.js/opportunityEngine.js.
+//
+// The original design issued 1 query to list campaigns, then 3-4 MORE
+// queries PER CAMPAIGN (latest score, 10-row history, alert counts, rec
+// count) -- O(4n) queries to return a top-5 list. These loaders instead
+// fetch each signal for every relevant campaign in a single query and
+// return a Map keyed by entity_meta_id, turning the per-campaign lookups
+// below into O(1) in-memory Map.get() calls. The scoring logic itself
+// (computeWinnerScore, detectTrend, etc.) is unchanged -- only how the
+// underlying data is fetched.
+// ─────────────────────────────────────────────
+
+/**
+ * Latest health score (with score_breakdown) per entity, one query.
+ */
+function loadLatestScoresMap(entityType = 'campaign') {
+  const rows = db.all(`
+    SELECT h.entity_meta_id, h.health_score, h.health_status, h.score_breakdown, h.calculated_at
+    FROM health_score_history h
+    INNER JOIN (
+      SELECT entity_meta_id, MAX(calculated_at) as latest
+      FROM health_score_history WHERE entity_type = ?
+      GROUP BY entity_meta_id
+    ) m ON h.entity_meta_id = m.entity_meta_id AND h.calculated_at = m.latest
+    WHERE h.entity_type = ?
+  `, [entityType, entityType]);
+
+  const map = new Map();
+  for (const row of rows) map.set(row.entity_meta_id, row);
+  return map;
+}
+
+/**
+ * Up to `limitPerEntity` most recent (health_score, calculated_at) rows
+ * per entity, one query total. SQLite has no portable "LIMIT N per group",
+ * so this loads every row ordered per-entity and trims to N in JS -- still
+ * one query regardless of campaign count, trading some extra rows fetched
+ * for eliminating the N+1 round trips.
+ */
+function loadScoreHistoryMap(entityType = 'campaign', limitPerEntity = 10) {
+  const rows = db.all(`
+    SELECT entity_meta_id, health_score, calculated_at
+    FROM health_score_history
+    WHERE entity_type = ?
+    ORDER BY entity_meta_id, calculated_at DESC
+  `, [entityType]);
+
+  const map = new Map();
+  for (const row of rows) {
+    let arr = map.get(row.entity_meta_id);
+    if (!arr) { arr = []; map.set(row.entity_meta_id, arr); }
+    if (arr.length < limitPerEntity) arr.push(row);
+  }
+  return map;
+}
+
+/**
+ * Active critical/warning alert counts per entity, one query.
+ */
+function loadAlertCountsMap() {
+  const rows = db.all(`
+    SELECT entity_meta_id,
+      SUM(CASE WHEN severity='critical' THEN 1 ELSE 0 END) as critical,
+      SUM(CASE WHEN severity='warning'  THEN 1 ELSE 0 END) as warning
+    FROM active_alerts
+    WHERE status = 'active'
+    GROUP BY entity_meta_id
+  `);
+  const map = new Map();
+  for (const row of rows) map.set(row.entity_meta_id, row);
+  return map;
+}
+
+/**
+ * Non-dismissed recommendation counts per entity, one query.
+ * `dismissedFilter` also excludes action_taken rows when requested (used
+ * by topLosersEngine's "unresolved recommendations" signal).
+ */
+function loadRecommendationCountsMap({ excludeActionTaken = false } = {}) {
+  const rows = db.all(`
+    SELECT entity_meta_id, COUNT(*) as count
+    FROM recommendation_log
+    WHERE dismissed_at IS NULL ${excludeActionTaken ? 'AND action_taken IS NOT 1' : ''}
+    GROUP BY entity_meta_id
+  `);
+  const map = new Map();
+  for (const row of rows) map.set(row.entity_meta_id, row.count);
+  return map;
+}
+
+/**
+ * Extract the frequency value from a stored score_breakdown JSON blob.
+ */
+function extractFrequency(scoreBreakdownJson) {
+  try {
+    const breakdown = scoreBreakdownJson ? JSON.parse(scoreBreakdownJson) : {};
+    return breakdown.frequency?.value ?? null;
+  } catch {
+    return null;
+  }
+}
+
 /**
  * Main function: returns top N winner campaigns.
  */
@@ -86,51 +189,22 @@ function getTopWinners(limit = 5) {
     WHERE c.status IN ('active','paused')
   `);
 
+  const latestScores = loadLatestScoresMap('campaign');
+  const scoreHistories = loadScoreHistoryMap('campaign', 10);
+  const alertCountsByEntity = loadAlertCountsMap();
+  const recCountsByEntity = loadRecommendationCountsMap();
+
   const results = [];
 
   for (const camp of campaigns) {
-    // Latest health score
-    const latestScore = db.get(`
-      SELECT health_score, health_status, score_breakdown, calculated_at
-      FROM health_score_history
-      WHERE entity_meta_id = ? AND entity_type = 'campaign'
-      ORDER BY calculated_at DESC LIMIT 1
-    `, [camp.meta_campaign_id]);
+    const latestScore = latestScores.get(camp.meta_campaign_id);
+    if (!latestScore) continue;
 
-    if (!latestScore) continue; // skip unscored campaigns
+    const scoreHistory = scoreHistories.get(camp.meta_campaign_id) || [];
+    const alertCounts = alertCountsByEntity.get(camp.meta_campaign_id);
+    const recCount = recCountsByEntity.get(camp.meta_campaign_id) || 0;
 
-    // Recent score history for trend
-    const scoreHistory = db.all(`
-      SELECT health_score, calculated_at
-      FROM health_score_history
-      WHERE entity_meta_id = ? AND entity_type = 'campaign'
-      ORDER BY calculated_at DESC LIMIT 10
-    `, [camp.meta_campaign_id]);
-
-    // Alert counts
-    const alertCounts = db.get(`
-      SELECT
-        SUM(CASE WHEN severity='critical' THEN 1 ELSE 0 END) as critical,
-        SUM(CASE WHEN severity='warning'  THEN 1 ELSE 0 END) as warning
-      FROM active_alerts
-      WHERE entity_meta_id = ? AND status = 'active'
-    `, [camp.meta_campaign_id]);
-
-    // Active recommendation count
-    const recCount = db.get(`
-      SELECT COUNT(*) as count FROM recommendation_log
-      WHERE entity_meta_id = ? AND dismissed_at IS NULL
-    `, [camp.meta_campaign_id]);
-
-    // Extract frequency from score_breakdown if stored
-    let frequency = null;
-    try {
-      const breakdown = latestScore.score_breakdown
-        ? JSON.parse(latestScore.score_breakdown)
-        : {};
-      frequency = breakdown.frequency?.value ?? null;
-    } catch {}
-
+    const frequency = extractFrequency(latestScore.score_breakdown);
     const trendDirection = detectTrend(scoreHistory);
 
     const data = {
@@ -158,7 +232,7 @@ function getTopWinners(limit = 5) {
       frequency,
       critical_alerts:  alertCounts?.critical || 0,
       warning_alerts:   alertCounts?.warning  || 0,
-      recommendation_count: recCount?.count || 0,
+      recommendation_count: recCount,
       last_scored_at:   latestScore.calculated_at,
       strengths: buildStrengths(latestScore, trendDirection, alertCounts),
     });
@@ -180,4 +254,13 @@ function buildStrengths(score, trend, alerts) {
   return s;
 }
 
-module.exports = { getTopWinners, computeWinnerScore, detectTrend };
+module.exports = {
+  getTopWinners,
+  computeWinnerScore,
+  detectTrend,
+  loadLatestScoresMap,
+  loadScoreHistoryMap,
+  loadAlertCountsMap,
+  loadRecommendationCountsMap,
+  extractFrequency,
+};

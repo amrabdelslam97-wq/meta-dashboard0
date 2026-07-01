@@ -12,7 +12,14 @@
  */
 
 const db = require('../db/database');
-const { detectTrend } = require('./topWinnersEngine');
+const {
+  detectTrend,
+  loadLatestScoresMap,
+  loadScoreHistoryMap,
+  loadAlertCountsMap,
+  loadRecommendationCountsMap,
+  extractFrequency,
+} = require('./topWinnersEngine');
 
 /**
  * Compute a "loser score" — higher = worse performer = more urgent attention.
@@ -69,6 +76,10 @@ function buildProblems(score, trend, alerts, frequency, recCount) {
 
 /**
  * Main function: returns top N loser campaigns (most problematic first).
+ *
+ * Uses the same bulk-loaded Maps as topWinnersEngine (one query per signal
+ * for every campaign, instead of 3-4 queries PER campaign) -- see the
+ * loaders' own comments in topWinnersEngine.js for why.
  */
 function getTopLosers(limit = 5) {
   const campaigns = db.all(`
@@ -79,42 +90,23 @@ function getTopLosers(limit = 5) {
     WHERE c.status IN ('active','paused')
   `);
 
+  const latestScores = loadLatestScoresMap('campaign');
+  const scoreHistories = loadScoreHistoryMap('campaign', 10);
+  const alertCountsByEntity = loadAlertCountsMap();
+  // Losers additionally exclude recommendations already marked action_taken.
+  const recCountsByEntity = loadRecommendationCountsMap({ excludeActionTaken: true });
+
   const results = [];
 
   for (const camp of campaigns) {
-    const latestScore = db.get(`
-      SELECT health_score, health_status, score_breakdown, calculated_at
-      FROM health_score_history
-      WHERE entity_meta_id = ? AND entity_type = 'campaign'
-      ORDER BY calculated_at DESC LIMIT 1
-    `, [camp.meta_campaign_id]);
-
+    const latestScore = latestScores.get(camp.meta_campaign_id);
     if (!latestScore) continue;
 
-    const scoreHistory = db.all(`
-      SELECT health_score, calculated_at FROM health_score_history
-      WHERE entity_meta_id = ? AND entity_type = 'campaign'
-      ORDER BY calculated_at DESC LIMIT 10
-    `, [camp.meta_campaign_id]);
+    const scoreHistory = scoreHistories.get(camp.meta_campaign_id) || [];
+    const alertCounts = alertCountsByEntity.get(camp.meta_campaign_id);
+    const recCount = recCountsByEntity.get(camp.meta_campaign_id) || 0;
 
-    const alertCounts = db.get(`
-      SELECT
-        SUM(CASE WHEN severity='critical' THEN 1 ELSE 0 END) as critical,
-        SUM(CASE WHEN severity='warning'  THEN 1 ELSE 0 END) as warning
-      FROM active_alerts WHERE entity_meta_id = ? AND status = 'active'
-    `, [camp.meta_campaign_id]);
-
-    const recCount = db.get(`
-      SELECT COUNT(*) as count FROM recommendation_log
-      WHERE entity_meta_id = ? AND dismissed_at IS NULL AND action_taken IS NOT 1
-    `, [camp.meta_campaign_id]);
-
-    let frequency = null;
-    try {
-      const bd = latestScore.score_breakdown ? JSON.parse(latestScore.score_breakdown) : {};
-      frequency = bd.frequency?.value ?? null;
-    } catch {}
-
+    const frequency = extractFrequency(latestScore.score_breakdown);
     const trendDirection = detectTrend(scoreHistory);
 
     const data = {
@@ -124,7 +116,7 @@ function getTopLosers(limit = 5) {
       trend_direction:     trendDirection,
       critical_alerts:     alertCounts?.critical || 0,
       warning_alerts:      alertCounts?.warning  || 0,
-      recommendation_count: recCount?.count || 0,
+      recommendation_count: recCount,
     };
 
     const loserScore = computeLoserScore(data);
@@ -134,7 +126,7 @@ function getTopLosers(limit = 5) {
       || (alertCounts?.critical || 0) > 0
       || (alertCounts?.warning  || 0) > 0
       || trendDirection === 'declining'
-      || (recCount?.count || 0) > 0;
+      || recCount > 0;
 
     if (!hasProblem) continue;
 
@@ -151,9 +143,9 @@ function getTopLosers(limit = 5) {
       frequency,
       critical_alerts:  alertCounts?.critical || 0,
       warning_alerts:   alertCounts?.warning  || 0,
-      recommendation_count: recCount?.count || 0,
+      recommendation_count: recCount,
       last_scored_at:   latestScore.calculated_at,
-      problems: buildProblems(latestScore, trendDirection, alertCounts, frequency, recCount?.count || 0),
+      problems: buildProblems(latestScore, trendDirection, alertCounts, frequency, recCount),
     });
   }
 
