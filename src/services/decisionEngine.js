@@ -24,30 +24,49 @@
 
 const { v4: uuidv4 } = require('uuid');
 const db                 = require('../db/database');
-const { getTopWinners }  = require('./topWinnersEngine');
+const { getTopWinners, detectTrend }  = require('./topWinnersEngine');
 const { getTopLosers }   = require('./topLosersEngine');
 const { detectAllOpportunities } = require('./opportunityEngine');
 const { computePriorityScore, scoreToLabel } = require('./prioritizationEngine');
 
 // ─────────────────────────────────────────────
-// Map recommendation rule codes to decision types
+// Map recommendation rule codes to decision types.
+// Only rule_code/alert_code values that recommendationEngine.js/
+// alertEngine.js can actually produce belong here -- those two engines
+// only ever write a rule_code/alert_code sourced from a DB row in
+// recommendation_rules/alert_rules, and seedIntelligence.js only ever
+// seeds LOW_ROAS/LOW_CTR/HIGH_FREQUENCY and CPM_SPIKE/CTR_DROP/
+// ROAS_BELOW_ONE, with no other code path inserting further rows. Entries
+// for any other code (AD_FATIGUE, REAL_ROAS_DIVERGENCE, BUDGET_EXHAUSTION,
+// FREQUENCY_SPIKE, AD_REJECTED) could never match a real row and were
+// removed rather than kept as dead mappings for rules that don't exist.
 // ─────────────────────────────────────────────
 const REC_TO_DECISION = {
   LOW_ROAS:       { type: 'PAUSE_CAMPAIGN',   base_priority: 'critical' },
   LOW_CTR:        { type: 'REFRESH_CREATIVE', base_priority: 'warning'  },
   HIGH_FREQUENCY: { type: 'EXPAND_AUDIENCE',  base_priority: 'warning'  },
-  AD_FATIGUE:     { type: 'REFRESH_CREATIVE', base_priority: 'warning'  },
-  REAL_ROAS_DIVERGENCE: { type: 'FIX_TRACKING', base_priority: 'critical' },
 };
 
 const ALERT_TO_DECISION = {
   ROAS_BELOW_ONE:   { type: 'PAUSE_CAMPAIGN',   base_priority: 'critical' },
   CPM_SPIKE:        { type: 'REVIEW_PERFORMANCE', base_priority: 'warning' },
   CTR_DROP:         { type: 'REFRESH_CREATIVE',  base_priority: 'warning'  },
-  BUDGET_EXHAUSTION:{ type: 'BUDGET_WARNING',    base_priority: 'critical' },
-  FREQUENCY_SPIKE:  { type: 'EXPAND_AUDIENCE',   base_priority: 'warning'  },
-  AD_REJECTED:      { type: 'FIX_TRACKING',      base_priority: 'critical' },
 };
+
+// ─────────────────────────────────────────────
+// Load recent health-score history for one entity and derive its trend,
+// reusing topWinnersEngine's own detectTrend() rather than hardcoding
+// 'stable' -- that hardcode meant the trend component of every
+// recommendation-/alert-derived decision's priority score never reflected
+// whether the campaign was actually improving or declining.
+// ─────────────────────────────────────────────
+function getTrendForEntity(entityMetaId) {
+  const history = db.all(`
+    SELECT health_score, calculated_at FROM health_score_history
+    WHERE entity_meta_id = ? ORDER BY calculated_at DESC LIMIT 10
+  `, [entityMetaId]);
+  return detectTrend(history);
+}
 
 const OPPORTUNITY_TO_DECISION = {
   'Ready To Scale':          { type: 'SCALE_CAMPAIGN',     base_priority: 'high'   },
@@ -94,7 +113,7 @@ function decisionsFromRecommendations(adAccountId) {
       healthScore:    latestScore?.health_score || 50,
       alertSeverity:  rec.severity,
       alertCount:     1,
-      trendDirection: 'stable',
+      trendDirection: getTrendForEntity(rec.entity_meta_id),
     });
 
     decisions.push({
@@ -146,7 +165,7 @@ function decisionsFromAlerts(adAccountId) {
       healthScore:    latestScore?.health_score || 50,
       alertSeverity:  alert.severity,
       alertCount:     alert.occurrence_count || 1,
-      trendDirection: 'stable',
+      trendDirection: getTrendForEntity(alert.entity_meta_id),
     });
 
     decisions.push({

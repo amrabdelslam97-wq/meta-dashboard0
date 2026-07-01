@@ -209,6 +209,17 @@ function runRecommendationEngine(campaign, metrics, adAccountId, healthScore = n
       continue;
     }
 
+    // Defend against syntactically-valid JSON that's still the wrong shape
+    // (e.g. missing `metric`) -- condition.metric.toUpperCase() below would
+    // otherwise throw and abort the whole engine run for every remaining
+    // rule and campaign in this pass. There is currently no write path
+    // that can create such a row (no POST route for recommendation_rules),
+    // but nothing enforces that invariant at read time either.
+    if (typeof condition?.metric !== 'string' || !condition.metric) {
+      console.warn(`[Recommendations] condition_logic for rule ${rule.rule_code} is missing a valid "metric" field`);
+      continue;
+    }
+
     // Evaluate
     const fires = evaluateCondition(condition, metrics);
     if (!fires) {

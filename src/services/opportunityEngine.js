@@ -117,10 +117,13 @@ function detectOpportunitiesForCampaign(camp, latestScore, scoreHistory, alertCo
   }
 
   // ── 3. Creative Testing ───────────────────
-  // Criteria: check if HIGH_FREQUENCY or AD_FATIGUE rec exists without ROAS/CPL being critical
+  // Criteria: check if a HIGH_FREQUENCY or LOW_CTR rec exists without
+  // ROAS/CPL being critical. ('AD_FATIGUE' was removed from this list --
+  // it is not a seeded recommendation_rules code and recommendationEngine
+  // never produces it, so it could never match a real row.)
   const hasFatigueRec = activeRecs.some(r =>
     r.entity_meta_id === camp.meta_campaign_id &&
-    ['HIGH_FREQUENCY', 'AD_FATIGUE', 'LOW_CTR'].includes(r.rule_code)
+    ['HIGH_FREQUENCY', 'LOW_CTR'].includes(r.rule_code)
   );
   const hasROASCritical = activeRecs.some(r =>
     r.entity_meta_id === camp.meta_campaign_id && r.rule_code === 'LOW_ROAS'
