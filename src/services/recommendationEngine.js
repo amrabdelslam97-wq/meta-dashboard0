@@ -88,22 +88,10 @@ function loadApplicableRules(objective) {
 }
 
 // ─────────────────────────────────────────────
-// Dedup check: has the same rule fired for this
-// entity today already?
-// ─────────────────────────────────────────────
-function alreadyLoggedToday(ruleCode, entityMetaId) {
-  const row = db.get(
-    `SELECT id FROM recommendation_log
-     WHERE rule_code = ?
-       AND entity_meta_id = ?
-       AND date(generated_at) = date('now')`,
-    [ruleCode, entityMetaId]
-  );
-  return !!row;
-}
-
-// ─────────────────────────────────────────────
-// Write or update a recommendation log entry
+// Write or update a recommendation log entry.
+// Dedup is handled inline in upsertRecommendation() by checking for an
+// existing non-dismissed row for the same rule+entity and updating it
+// in place, rather than a separate once-per-day check.
 // ─────────────────────────────────────────────
 function upsertRecommendation(rule, campaign, adAccountId, metrics, healthScore, entityType = 'campaign') {
   const now = new Date().toISOString();

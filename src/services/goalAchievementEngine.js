@@ -75,6 +75,17 @@ function evaluateTarget(actualValue, targetValue, targetKey) {
 
   const isLower   = LOWER_IS_BETTER_TARGETS.includes(targetKey);
   const isCeiling = CEILING_TARGETS.includes(targetKey);
+  const isHigher  = HIGHER_IS_BETTER_TARGETS.includes(targetKey);
+
+  if (!isLower && !isCeiling && !isHigher) {
+    // Every target_* column added to account_targets must be classified
+    // into one of the three lists above -- silently defaulting an
+    // unclassified key to "higher is better" could invert its math
+    // (e.g. treating a new cost target as if lower were worse).
+    console.warn(`[GoalAchievement] Unclassified target key "${targetKey}" — skipping.`);
+    return null;
+  }
+
   let achievementPct;
 
   if (isCeiling) {

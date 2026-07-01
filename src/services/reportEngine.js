@@ -8,8 +8,6 @@
  */
 
 const db = require('../db/database');
-const path = require('path');
-const fs   = require('fs');
 
 // ─────────────────────────────────────────────
 // Build summary data from DB for a date range

@@ -12,7 +12,7 @@
  */
 
 const db = require('./database');
-const { ensureMigrationsTable, isMigrationApplied, markMigrationApplied } = require('./migrationTracker');
+const { ensureMigrationsTable, markMigrationApplied } = require('./migrationTracker');
 
 const MIGRATION_NAME = 'phase1_core_tables';
 

@@ -258,23 +258,11 @@ async function fetchAdPreview(metaAdId, accessToken, adFormat = 'DESKTOP_FEED_ST
   return match ? match[1].replace(/&amp;/g, '&') : null;
 }
 
-/**
- * Verify that a Meta access token is valid by calling /me.
- * Returns basic account info on success, throws on failure.
- *
- * @param {string} accessToken
- */
-async function verifyToken(accessToken) {
-  const response = await metaGet('me', { fields: 'id,name' }, accessToken);
-  return response;
-}
-
 module.exports = {
   fetchCampaigns,
   fetchAdSets,
   fetchAds,
   fetchAdPreview,
-  verifyToken,
   metaGet,
   metaGetAll,
 };

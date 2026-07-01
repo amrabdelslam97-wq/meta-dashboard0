@@ -1,7 +1,7 @@
 /**
- * Meta Ads Intelligence System — Phase 3
- * Adds static file serving for the dashboard UI.
- * All Phase 1 and Phase 2 logic unchanged.
+ * Meta Ads Intelligence System
+ * Express app entry point: runs migrations, wires security middleware,
+ * serves the dashboard UI, and mounts the versioned API router.
  */
 
 require('dotenv').config();
@@ -95,7 +95,7 @@ async function start() {
     next();
   });
 
-  // Phase 3: serve static dashboard
+  // Serve static dashboard
   app.use(express.static(path.join(__dirname, '../public')));
 
   // API routes
@@ -114,7 +114,7 @@ async function start() {
     console.log('');
     console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
     console.log('  Meta Ads Intelligence System');
-    console.log('  Phase 6A — Multi-Entity Intelligence');
+    console.log('  Phase 6C — Full Integration');
     console.log(`  Open:  http://localhost:${PORT}`);
     console.log(`  API:   http://localhost:${PORT}/api/v1`);
     console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');

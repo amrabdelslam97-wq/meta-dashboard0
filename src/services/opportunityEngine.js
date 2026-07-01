@@ -61,7 +61,6 @@ function detectOpportunitiesForCampaign(camp, latestScore, scoreHistory, alertCo
   const opportunities = [];
   const hs    = latestScore.health_score;
   const freq  = extractFromBreakdown(latestScore.score_breakdown, 'frequency');
-  const ctr   = extractFromBreakdown(latestScore.score_breakdown, 'ctr');
   const trend = detectTrend(scoreHistory);
   const criticalAlerts = alertCounts?.critical || 0;
   const warningAlerts  = alertCounts?.warning  || 0;

@@ -10,7 +10,7 @@
  */
 
 const db = require('../db/database');
-const { getAggregationRule, getPrimaryKPI } = require('./objectiveKPIMap');
+const { getPrimaryKPI } = require('./objectiveKPIMap');
 const { scoreToStatus } = require('./healthScoreEngine');
 
 // ─────────────────────────────────────────────

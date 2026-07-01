@@ -15,19 +15,19 @@
  *   REALLOCATE_BUDGET    — shift spend from loser to winner
  *
  * Reuses:
- *   - topWinnersEngine
- *   - topLosersEngine
- *   - opportunityEngine
+ *   - topWinnersEngine (detectTrend)
+ *   - opportunityEngine (drives REALLOCATE_BUDGET via its own
+ *     Budget Reallocation opportunity type -- no direct call into
+ *     topLosersEngine needed here)
  *   - prioritizationEngine
  *   - DB tables: health_score_history, recommendation_log, active_alerts
  */
 
 const { v4: uuidv4 } = require('uuid');
 const db                 = require('../db/database');
-const { getTopWinners, detectTrend }  = require('./topWinnersEngine');
-const { getTopLosers }   = require('./topLosersEngine');
+const { detectTrend }  = require('./topWinnersEngine');
 const { detectAllOpportunities } = require('./opportunityEngine');
-const { computePriorityScore, scoreToLabel } = require('./prioritizationEngine');
+const { computePriorityScore } = require('./prioritizationEngine');
 
 // ─────────────────────────────────────────────
 // Map recommendation rule codes to decision types.

@@ -9,7 +9,6 @@ const express = require('express');
 const router = express.Router();
 const { v4: uuidv4 } = require('uuid');
 const db = require('../../db/database');
-const { verifyToken } = require('../../services/metaApiClient');
 const { encryptToken } = require('../../services/tokenCrypto');
 const { asyncHandler } = require('../../middleware/errorHandler');
 

@@ -81,41 +81,21 @@ function loadScoringConfigs(objective) {
 }
 
 // ─────────────────────────────────────────────────────────────
-// Extract the relevant metric value from a metrics object
-// Handles aliasing (e.g. "cpr" might come in as "cost_per_result")
+// Extract the relevant metric value from a metrics object.
+// metricsFetcher.js's normalizeRow() (real Meta data) and every mock
+// generator in campaign/adSet/ad intelligence already produce the
+// canonical metric_key names used by objective_scoring_configs (cpr,
+// cpl, cpa, roas, purchases, leads, ctr, cpm, cpc, frequency, reach,
+// impressions, landing_page_views) directly, so no aliasing is needed
+// here -- an earlier alias-fallback table referenced raw Meta field
+// names (e.g. "cost_per_result", "purchase_roas") that no code path
+// in this app ever produces, since metricsFetcher already normalizes
+// them before they reach this function.
 // ─────────────────────────────────────────────────────────────
 function extractMetric(metrics, key) {
-  // Direct match
   if (metrics[key] !== undefined && metrics[key] !== null) {
     return parseFloat(metrics[key]);
   }
-
-  // Aliases
-  const aliases = {
-    cpr:               ['cost_per_result', 'cost_per_message', 'cost_per_action'],
-    cpl:               ['cost_per_lead'],
-    cpa:               ['cost_per_purchase', 'cost_per_conversion'],
-    roas:              ['purchase_roas', 'website_purchase_roas'],
-    purchases:         ['actions_purchase', 'website_purchases'],
-    leads:             ['actions_lead', 'onsite_conversion_lead_grouped'],
-    landing_page_views:['landing_page_view'],
-    impressions:       ['impressions'],
-    reach:             ['reach'],
-    spend:             ['spend'],
-    clicks:            ['clicks', 'link_clicks'],
-    ctr:               ['ctr', 'link_ctr'],
-    cpm:               ['cpm'],
-    cpc:               ['cpc', 'cost_per_link_click'],
-    frequency:         ['frequency'],
-  };
-
-  const aliasList = aliases[key] || [];
-  for (const alias of aliasList) {
-    if (metrics[alias] !== undefined && metrics[alias] !== null) {
-      return parseFloat(metrics[alias]);
-    }
-  }
-
   return null;
 }
 

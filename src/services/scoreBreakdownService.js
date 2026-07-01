@@ -150,8 +150,6 @@ function formatScoreBreakdown(entityMetaId, entityType = 'campaign', currency = 
   }
 
   const contributions = [];
-  let totalWeightedScore = 0;
-  let totalWeight        = 0;
   const positiveFactors  = [];
   const negativeFactors  = [];
   const suggestions      = [];
@@ -161,10 +159,6 @@ function formatScoreBreakdown(entityMetaId, entityType = 'campaign', currency = 
     const thresholds = loadThresholds(row.objective, metricKey);
 
     const weightedContribution = normalized !== null ? normalized * weight : null;
-    if (weightedContribution !== null) {
-      totalWeightedScore += weightedContribution;
-      totalWeight        += weight;
-    }
 
     const label       = METRIC_LABELS[metricKey] || metricKey;
     const direction   = thresholds?.comparison_direction || 'lower_is_better';

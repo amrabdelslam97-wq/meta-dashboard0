@@ -32,8 +32,12 @@ function evaluateMetric(value, benchmark) {
     return { status: 'no_benchmark', deviation: null, target: null, source: 'none' };
   }
 
+  // critical_threshold is stored per-benchmark but not used as a status
+  // boundary here: with 4 statuses (above/optimal/below/critical) only 3
+  // boundaries are needed (excellent, good, warning) -- anything worse
+  // than warning_threshold is already 'critical'.
   const { comparison_direction, excellent_threshold, good_threshold,
-          warning_threshold, critical_threshold,
+          warning_threshold,
           optimal_low, optimal_high, source } = benchmark;
 
   // Optimal range (e.g. frequency)

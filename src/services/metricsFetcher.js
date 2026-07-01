@@ -56,8 +56,6 @@ function parseActions(actions, costPerAction, actionValues) {
     // Traffic
     'link_click':                             'link_clicks',
     'landing_page_view':                      'landing_page_views',
-    // General results proxy
-    'offsite_conversion':                     'offsite_conversions',
   };
 
   for (const { action_type, value } of actions) {
