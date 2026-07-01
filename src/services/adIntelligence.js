@@ -4,24 +4,16 @@
  * Pure orchestration layer for ad level intelligence.
  * Reuses existing engines 100%. Contains NO scoring logic.
  *
- * Engines called:
- *   calculateHealthScore()     — healthScoreEngine (unmodified)
- *   saveHealthScore()          — healthScoreEngine (entityType='ad')
- *   evaluateBenchmarks()       — benchmarkEngine (unmodified)
- *   runRecommendationEngine()  — recommendationEngine (entityType='ad')
- *   loadActiveRecommendations()— recommendationEngine (entityType='ad')
- *   runAlertEngine()           — alertEngine (entityType='ad')
- *   loadActiveAlerts()         — alertEngine (entityType='ad')
- *   getHealthScoreTrend()      — healthScoreEngine (entityType='ad')
- *   fetchAdMetrics()           — metricsFetcher (unmodified)
+ * The shared health/benchmark/recommendation/alert/trend sequence is
+ * delegated to intelligenceOrchestrator.runScoringPipeline() (entityType=
+ * 'ad') instead of duplicating it inline -- this file previously had its
+ * own copy of the exact same sequence found in intelligenceOrchestrator.js
+ * and adSetIntelligence.js.
  */
 
 const db                    = require('../db/database');
 
-const { calculateHealthScore, saveHealthScore, getHealthScoreTrend } = require('./healthScoreEngine');
-const { evaluateBenchmarks }      = require('./benchmarkEngine');
-const { runRecommendationEngine, loadActiveRecommendations } = require('./recommendationEngine');
-const { runAlertEngine, loadActiveAlerts }                   = require('./alertEngine');
+const { runScoringPipeline } = require('./intelligenceOrchestrator');
 const { fetchAdMetrics, computeDeltas } = require('./metricsFetcher');
 const { resolveDateRange, priorPeriod } = require('./dateRangeHelper');
 const { decryptToken } = require('./tokenCrypto');
@@ -201,19 +193,13 @@ async function runAdIntelligence(adId, options = {}) {
 
   const startedAt = Date.now();
 
-  // FIX 4 (Phase 9): Sequential-safety pattern.
-  const healthResult = calculateHealthScore(entity, currentMetrics, adAccountId);
-  saveHealthScore(entity, adAccountId, healthResult, 'ad');
-
-  const benchmarkResult = evaluateBenchmarks(entity, currentMetrics, adAccountId);
-
-  runRecommendationEngine(entity, currentMetrics, adAccountId, healthResult.health_score, 'ad');
-  const recommendations = loadActiveRecommendations(ad.meta_ad_id, 'ad');
-
-  runAlertEngine(entity, currentMetrics, priorMetrics, adAccountId, 'ad');
-  const alerts = loadActiveAlerts(ad.meta_ad_id, 'ad');
-
-  const trend = getHealthScoreTrend(ad.meta_ad_id, 30, 'ad');
+  // FIX 4 (Phase 9): Sequential-safety pattern -- preserved by
+  // runScoringPipeline (shared with intelligenceOrchestrator.js and
+  // adSetIntelligence.js instead of duplicated inline): scoring is
+  // computed first (pure, no DB writes), and only if it succeeds do the
+  // writes proceed.
+  const { healthResult, benchmarkResult, recommendations, alerts, trend } =
+    runScoringPipeline(entity, currentMetrics, priorMetrics, adAccountId, 'ad');
 
   return {
     meta_ad_id:       ad.meta_ad_id,

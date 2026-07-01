@@ -11,6 +11,7 @@
 
 const db = require('../db/database');
 const { getAggregationRule, getPrimaryKPI } = require('./objectiveKPIMap');
+const { scoreToStatus } = require('./healthScoreEngine');
 
 // ─────────────────────────────────────────────
 // Helper: parse score_breakdown JSONB safely
@@ -80,16 +81,6 @@ function weightedScore(entities) {
   // Equal weighting
   const avg = entities.reduce((sum, e) => sum + e.health_score, 0) / entities.length;
   return { score: Math.round(avg), weighting: 'equal', total_spend: null };
-}
-
-// ─────────────────────────────────────────────
-// Status from score
-// ─────────────────────────────────────────────
-function scoreToStatus(score) {
-  if (score >= 80) return 'excellent';
-  if (score >= 60) return 'good';
-  if (score >= 40) return 'warning';
-  return 'critical';
 }
 
 // ─────────────────────────────────────────────

@@ -121,9 +121,14 @@ async function runTests() {
   const campCount = db.get('SELECT COUNT(*) as c FROM campaigns');
   if (!campCount || campCount.c === 0) {
     console.log('  → No data found, running seed...');
-    // Run seed inline
+    // seed.js runs as a separate process with its own sql.js in-memory
+    // instance -- it writes the seeded rows to disk and exits, but this
+    // process's `db` handle was already loaded from the (empty) file
+    // before that happened, so it keeps serving stale empty results
+    // until reloaded from the file the subprocess just wrote.
     const { execSync } = require('child_process');
     execSync('node scripts/seed.js', { stdio: 'inherit' });
+    await initializeDatabase(path.resolve(dbPath));
   }
 
   const accountCount = db.get('SELECT COUNT(*) as c FROM ad_accounts');

@@ -4,24 +4,16 @@
  * Pure orchestration layer for ad set level intelligence.
  * Reuses existing engines 100%. Contains NO scoring logic.
  *
- * Engines called:
- *   calculateHealthScore()     — healthScoreEngine (unmodified)
- *   saveHealthScore()          — healthScoreEngine (entityType='ad_set')
- *   evaluateBenchmarks()       — benchmarkEngine (unmodified)
- *   runRecommendationEngine()  — recommendationEngine (entityType='ad_set')
- *   loadActiveRecommendations()— recommendationEngine (entityType='ad_set')
- *   runAlertEngine()           — alertEngine (entityType='ad_set')
- *   loadActiveAlerts()         — alertEngine (entityType='ad_set')
- *   getHealthScoreTrend()      — healthScoreEngine (entityType='ad_set')
- *   fetchAdSetMetrics()        — metricsFetcher (unmodified)
+ * The shared health/benchmark/recommendation/alert/trend sequence is
+ * delegated to intelligenceOrchestrator.runScoringPipeline() (entityType=
+ * 'ad_set') instead of duplicating it inline -- this file previously had
+ * its own copy of the exact same sequence found in
+ * intelligenceOrchestrator.js and adIntelligence.js.
  */
 
 const db                    = require('../db/database');
 
-const { calculateHealthScore, saveHealthScore, getHealthScoreTrend } = require('./healthScoreEngine');
-const { evaluateBenchmarks }      = require('./benchmarkEngine');
-const { runRecommendationEngine, loadActiveRecommendations } = require('./recommendationEngine');
-const { runAlertEngine, loadActiveAlerts }                   = require('./alertEngine');
+const { runScoringPipeline } = require('./intelligenceOrchestrator');
 const { fetchAdSetMetrics, computeDeltas } = require('./metricsFetcher');
 const { resolveDateRange, priorPeriod } = require('./dateRangeHelper');
 const { decryptToken } = require('./tokenCrypto');
@@ -183,22 +175,14 @@ async function runAdSetIntelligence(adSetId, options = {}) {
 
   const startedAt = Date.now();
 
-  // FIX 4 (Phase 9): Sequential-safety pattern.
-  // sql.js auto-persists on every db.run(), making SQLite BEGIN/COMMIT transactions
-  // incompatible with the module-level db API. Scoring is computed first (pure, no
-  // DB writes). Only if scoring succeeds do writes proceed — this prevents partial data.
-  const healthResult = calculateHealthScore(entity, currentMetrics, adAccountId);
-  saveHealthScore(entity, adAccountId, healthResult, 'ad_set');
-
-  const benchmarkResult = evaluateBenchmarks(entity, currentMetrics, adAccountId);
-
-  runRecommendationEngine(entity, currentMetrics, adAccountId, healthResult.health_score, 'ad_set');
-  const recommendations = loadActiveRecommendations(adSet.meta_adset_id, 'ad_set');
-
-  runAlertEngine(entity, currentMetrics, priorMetrics, adAccountId, 'ad_set');
-  const alerts = loadActiveAlerts(adSet.meta_adset_id, 'ad_set');
-
-  const trend = getHealthScoreTrend(adSet.meta_adset_id, 30, 'ad_set');
+  // FIX 4 (Phase 9): Sequential-safety pattern -- preserved by
+  // runScoringPipeline (shared with intelligenceOrchestrator.js and
+  // adIntelligence.js instead of duplicated inline). sql.js auto-persists
+  // on every db.run(), making SQLite BEGIN/COMMIT transactions
+  // incompatible with the module-level db API used here, so scoring is
+  // computed first (pure, no DB writes) and only written if it succeeds.
+  const { healthResult, benchmarkResult, recommendations, alerts, trend } =
+    runScoringPipeline(entity, currentMetrics, priorMetrics, adAccountId, 'ad_set');
 
   return {
     meta_adset_id:    adSet.meta_adset_id,
