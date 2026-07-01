@@ -26,11 +26,16 @@ router.get('/', asyncHandler(async (req, res) => {
   const hasDateFilter = !!(req.query.preset || (req.query.since && req.query.until));
   const dateClause  = hasDateFilter ? 'AND calculated_at >= ? AND calculated_at <= ?' : '';
   const dateParams  = hasDateFilter ? [dateRange.since, dateRange.until + 'T23:59:59'] : [];
-  // Account filter clause
-  const acctClause  = account_id ? 'AND c.ad_account_id = ?' : '';
-  const acctParam   = account_id ? [account_id] : [];
+  // Account filter clause — applied to every query with an account dimension.
+  // health_score_history/active_alerts/recommendation_log all carry
+  // ad_account_id directly (no join needed); campaigns carries it natively.
+  const acctClause  = account_id ? 'AND ad_account_id = ?' : '';
+  const acctParamsFirst = account_id ? [account_id] : [];
 
-  // ── Account summary ──
+  // ── Account summary (portfolio-wide by design — not scoped by account_id,
+  // since it answers "how many accounts exist", which is meaningful
+  // regardless of which single account the rest of the dashboard is
+  // currently filtered to) ──
   const accountCounts = db.get(`
     SELECT
       COUNT(*) as total,
@@ -39,12 +44,14 @@ router.get('/', asyncHandler(async (req, res) => {
   `);
 
   // ── Campaign counts ──
-  const campaignCounts = db.get(`
-    SELECT
+  const campaignCounts = db.get(
+    `SELECT
       COUNT(*) as total,
       SUM(CASE WHEN status = 'active' THEN 1 ELSE 0 END) as active
     FROM campaigns
-  `);
+    WHERE 1=1 ${account_id ? 'AND ad_account_id = ?' : ''}`,
+    account_id ? [account_id] : []
+  );
 
   // ── Average health score from history (latest per campaign) ──
   const avgHealth = db.get(
@@ -53,16 +60,16 @@ router.get('/', asyncHandler(async (req, res) => {
      INNER JOIN (
        SELECT entity_meta_id, MAX(calculated_at) as latest
        FROM health_score_history
-       WHERE entity_type = 'campaign' ${dateClause}
+       WHERE entity_type = 'campaign' ${dateClause} ${acctClause}
        GROUP BY entity_meta_id
      ) latest ON h.entity_meta_id = latest.entity_meta_id
               AND h.calculated_at = latest.latest`,
-    [...dateParams]
+    [...dateParams, ...acctParamsFirst]
   );
 
   // ── Alert counts ──
-  const alertCounts = db.get(`
-    SELECT
+  const alertCounts = db.get(
+    `SELECT
       SUM(CASE WHEN severity = 'critical' THEN 1 ELSE 0 END) as critical,
       SUM(CASE WHEN severity = 'warning'  THEN 1 ELSE 0 END) as warning,
       SUM(CASE WHEN severity = 'info'     THEN 1 ELSE 0 END) as info,
@@ -70,22 +77,28 @@ router.get('/', asyncHandler(async (req, res) => {
     FROM active_alerts
     WHERE status = 'active'
       AND (snoozed_until IS NULL OR snoozed_until < datetime('now'))
-  `);
+      ${acctClause}`,
+    acctParamsFirst
+  );
 
   // ── Recommendation counts ──
-  const recCounts = db.get(`
-    SELECT
+  const recCounts = db.get(
+    `SELECT
       COUNT(*) as total,
       SUM(CASE WHEN severity = 'critical' THEN 1 ELSE 0 END) as critical,
       SUM(CASE WHEN severity = 'warning'  THEN 1 ELSE 0 END) as warning,
       SUM(CASE WHEN action_taken = 1 THEN 1 ELSE 0 END) as completed
     FROM recommendation_log
     WHERE dismissed_at IS NULL
-  `);
+      ${acctClause}`,
+    acctParamsFirst
+  );
 
-  // ── Top 10 campaigns by latest health score ──
-  const topCampaigns = db.all(`
-    SELECT
+  // ── Top 10 campaigns by latest health score (scoped to account_id and
+  // to the requested date range, matching what the response's date_range/
+  // account_filter fields already claim to represent) ──
+  const topCampaigns = db.all(
+    `SELECT
       c.id,
       c.meta_campaign_id,
       c.name,
@@ -116,14 +129,17 @@ router.get('/', asyncHandler(async (req, res) => {
         FROM health_score_history h2
         WHERE h2.entity_meta_id = c.meta_campaign_id
           AND h2.entity_type = 'campaign'
+          ${dateClause}
       )
+    WHERE 1=1 ${account_id ? 'AND c.ad_account_id = ?' : ''}
     ORDER BY COALESCE(h.health_score, -1) DESC
-    LIMIT 10
-  `);
+    LIMIT 10`,
+    [...dateParams, ...(account_id ? [account_id] : [])]
+  );
 
-  // ── Campaigns needing attention (critical/warning) ──
-  const needsAttention = db.all(`
-    SELECT DISTINCT
+  // ── Campaigns needing attention (critical/warning), scoped the same way ──
+  const needsAttention = db.all(
+    `SELECT DISTINCT
       c.id,
       c.meta_campaign_id,
       c.name,
@@ -138,16 +154,18 @@ router.get('/', asyncHandler(async (req, res) => {
       AND h.calculated_at = (
         SELECT MAX(h2.calculated_at) FROM health_score_history h2
         WHERE h2.entity_meta_id = c.meta_campaign_id AND h2.entity_type = 'campaign'
+          ${dateClause}
       )
     LEFT JOIN active_alerts al ON al.entity_meta_id = c.meta_campaign_id
       AND al.status = 'active'
       AND al.severity = 'critical'
-    WHERE h.health_status IN ('warning','critical')
-       OR al.id IS NOT NULL
+    WHERE (h.health_status IN ('warning','critical') OR al.id IS NOT NULL)
+      ${account_id ? 'AND c.ad_account_id = ?' : ''}
     GROUP BY c.id
     ORDER BY COALESCE(h.health_score, 100) ASC
-    LIMIT 5
-  `);
+    LIMIT 5`,
+    [...dateParams, ...(account_id ? [account_id] : [])]
+  );
 
   return res.json({
     summary: {
