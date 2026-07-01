@@ -130,7 +130,7 @@ router.get('/', asyncHandler(async (req, res) => {
   } else {
     let metricsResult;
     try {
-      metricsResult  = await fetchCampaignMetrics(campaign.meta_campaign_id, campaign.access_token_encrypted, dateRange);
+      metricsResult  = await fetchCampaignMetrics(campaign.meta_campaign_id, campaign.access_token_encrypted, dateRange, campaign.attribution_window_days);
       currentMetrics = metricsResult.current;
       priorMetrics   = metricsResult.prior;
       deltas         = metricsResult.deltas;
@@ -165,7 +165,7 @@ router.get('/', asyncHandler(async (req, res) => {
   }
 
   // Attribution window check
-  const dataIncomplete = isInAttributionWindow(since, campaign.attribution_window_days || 7);
+  const dataIncomplete = isInAttributionWindow(until, campaign.attribution_window_days || 7);
 
   // Run intelligence pipeline (health score, recommendations, alerts)
   const intelligence = runIntelligencePipeline(
@@ -260,7 +260,7 @@ router.get('/trend', asyncHandler(async (req, res) => {
 
   if (req.query.refresh === 'true') cache.invalidateCampaign(campaign.meta_campaign_id);
 
-  const trend = await fetchTrendData(campaign.meta_campaign_id, campaign.access_token_encrypted, since, until);
+  const trend = await fetchTrendData(campaign.meta_campaign_id, campaign.access_token_encrypted, since, until, campaign.attribution_window_days);
 
   return res.json({
     data:        trend,
@@ -350,7 +350,7 @@ router.get('/adsets', asyncHandler(async (req, res) => {
     return res.json({ data, date_range: { since, until }, source: 'mock', fetched_at: new Date().toISOString() });
   }
 
-  const data = await fetchAdSetMetrics(campaign.meta_campaign_id, campaign.access_token_encrypted, since, until);
+  const data = await fetchAdSetMetrics(campaign.meta_campaign_id, campaign.access_token_encrypted, since, until, campaign.attribution_window_days);
   return res.json({ data, date_range: { since, until }, source: 'meta_api', fetched_at: new Date().toISOString() });
 }));
 
@@ -378,7 +378,7 @@ router.get('/ads', asyncHandler(async (req, res) => {
     return res.json({ data, date_range: { since, until }, source: 'mock', fetched_at: new Date().toISOString() });
   }
 
-  const data = await fetchAdMetrics(campaign.meta_campaign_id, campaign.access_token_encrypted, since, until);
+  const data = await fetchAdMetrics(campaign.meta_campaign_id, campaign.access_token_encrypted, since, until, campaign.attribution_window_days);
   return res.json({ data, date_range: { since, until }, source: 'meta_api', fetched_at: new Date().toISOString() });
 }));
 

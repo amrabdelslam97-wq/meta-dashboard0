@@ -217,6 +217,20 @@ function computeDeltas(current, prior) {
 }
 
 // ─────────────────────────────────────────────
+// Build the action_attribution_windows param from the account's configured
+// attribution_window_days. Previously this value was stored, editable via
+// the API, and displayed in the UI, but never actually sent to Meta --
+// every Insights call used whichever attribution setting Meta defaults to
+// for the ad account, regardless of what was configured here. Matches the
+// same JSON-array-as-string convention Meta's API already uses for
+// time_range in this file.
+// ─────────────────────────────────────────────
+function attributionWindowParams(attributionWindowDays) {
+  if (!attributionWindowDays) return {};
+  return { action_attribution_windows: JSON.stringify([`${attributionWindowDays}d_click`]) };
+}
+
+// ─────────────────────────────────────────────
 // Core fetch helper: one Meta Insights API call
 // ─────────────────────────────────────────────
 async function fetchInsights(entityId, accessToken, since, until, extraParams = {}) {
@@ -234,7 +248,7 @@ async function fetchInsights(entityId, accessToken, since, until, extraParams = 
 // ─────────────────────────────────────────────
 // CAMPAIGN METRICS
 // ─────────────────────────────────────────────
-async function fetchCampaignMetrics(metaCampaignId, accessToken, dateRange) {
+async function fetchCampaignMetrics(metaCampaignId, accessToken, dateRange, attributionWindowDays) {
   const range = dateRange || defaultRange();
   const { since, until } = range;
   const prior  = priorPeriod(since, until);
@@ -246,7 +260,7 @@ async function fetchCampaignMetrics(metaCampaignId, accessToken, dateRange) {
 
   if (!currentMetrics) {
     try {
-      const raw = await fetchInsights(metaCampaignId, accessToken, since, until);
+      const raw = await fetchInsights(metaCampaignId, accessToken, since, until, attributionWindowParams(attributionWindowDays));
       currentMetrics = normalizeInsights(raw);
       if (currentMetrics) cache.set(currentKey, currentMetrics, 'current');
     } catch (err) {
@@ -261,7 +275,7 @@ async function fetchCampaignMetrics(metaCampaignId, accessToken, dateRange) {
 
   if (!priorMetrics) {
     try {
-      const raw = await fetchInsights(metaCampaignId, accessToken, prior.since, prior.until);
+      const raw = await fetchInsights(metaCampaignId, accessToken, prior.since, prior.until, attributionWindowParams(attributionWindowDays));
       priorMetrics = normalizeInsights(raw);
       if (priorMetrics) cache.set(priorKey, priorMetrics, 'prior'); // 24h TTL
     } catch (err) {
@@ -286,7 +300,7 @@ async function fetchCampaignMetrics(metaCampaignId, accessToken, dateRange) {
 // ─────────────────────────────────────────────
 // AD SET METRICS (for campaign detail breakdown)
 // ─────────────────────────────────────────────
-async function fetchAdSetMetrics(metaCampaignId, accessToken, since, until) {
+async function fetchAdSetMetrics(metaCampaignId, accessToken, since, until, attributionWindowDays) {
   const key = `${metaCampaignId}:adsets:${since}:${until}`;
   const cached = cache.get(key);
   if (cached) return cached;
@@ -307,6 +321,7 @@ async function fetchAdSetMetrics(metaCampaignId, accessToken, since, until) {
         fields:     CORE_FIELDS,
         time_range: JSON.stringify({ since, until }),
         level:      'adset',
+        ...attributionWindowParams(attributionWindowDays),
       },
       accessToken
     );
@@ -348,7 +363,7 @@ async function fetchAdSetMetrics(metaCampaignId, accessToken, since, until) {
 // ─────────────────────────────────────────────
 // AD METRICS
 // ─────────────────────────────────────────────
-async function fetchAdMetrics(metaCampaignId, accessToken, since, until) {
+async function fetchAdMetrics(metaCampaignId, accessToken, since, until, attributionWindowDays) {
   const key = `${metaCampaignId}:ads:${since}:${until}`;
   const cached = cache.get(key);
   if (cached) return cached;
@@ -369,6 +384,7 @@ async function fetchAdMetrics(metaCampaignId, accessToken, since, until) {
         fields:     CORE_FIELDS,
         time_range: JSON.stringify({ since, until }),
         level:      'ad',
+        ...attributionWindowParams(attributionWindowDays),
       },
       accessToken
     );
@@ -411,7 +427,7 @@ async function fetchAdMetrics(metaCampaignId, accessToken, since, until) {
 // ─────────────────────────────────────────────
 // DAILY TREND DATA (time_increment=1)
 // ─────────────────────────────────────────────
-async function fetchTrendData(metaCampaignId, accessToken, since, until) {
+async function fetchTrendData(metaCampaignId, accessToken, since, until, attributionWindowDays) {
   const key = cache.keyTrend(metaCampaignId, since, until);
   const cached = cache.get(key);
   if (cached) return cached;
@@ -423,6 +439,7 @@ async function fetchTrendData(metaCampaignId, accessToken, since, until) {
         fields:         CORE_FIELDS,
         time_range:     JSON.stringify({ since, until }),
         time_increment: 1,
+        ...attributionWindowParams(attributionWindowDays),
       },
       accessToken
     );
@@ -445,6 +462,7 @@ module.exports = {
   normalizeTrend,
   normalizeRow,
   pickRoasValue,
+  attributionWindowParams,
   computeDeltas,
   defaultDateRange: defaultRange,
   getPriorPeriod: priorPeriod,

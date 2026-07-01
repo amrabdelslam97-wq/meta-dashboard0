@@ -150,7 +150,8 @@ async function runAdIntelligence(adId, options = {}) {
         campaign?.meta_campaign_id,
         ad.access_token_encrypted,
         since,
-        until
+        until,
+        ad.attribution_window_days
       );
       // Filter to this specific ad by its real Meta ID
       currentMetrics = allAdMetrics.find(m => m.meta_ad_id === ad.meta_ad_id) || null;
@@ -189,7 +190,8 @@ async function runAdIntelligence(adId, options = {}) {
         campaign?.meta_campaign_id,
         ad.access_token_encrypted,
         prior.since,
-        prior.until
+        prior.until,
+        ad.attribution_window_days
       );
       priorMetrics = allPriorAdMetrics.find(m => m.meta_ad_id === ad.meta_ad_id) || null;
     } catch (priorErr) {

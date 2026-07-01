@@ -253,7 +253,19 @@ async function syncAccount(adAccount, options = {}) {
     startedAt: new Date().toISOString(),
     completedAt: null,
     errors: [],
+    // Set whenever metaGetAll() hit its 5000-item safety cap or a
+    // mid-pagination page fetch failed -- either way, what got synced
+    // below is a partial, not complete, set for that level. Previously
+    // this was silently swallowed (only a console.warn/error), giving
+    // callers no way to know a sync was incomplete.
+    warnings: [],
   };
+
+  function noteIfIncomplete(level, items, contextId) {
+    if (items.incomplete) {
+      summary.warnings.push({ level, id: contextId, reason: items.incompleteReason, itemCount: items.length });
+    }
+  }
 
   console.log(`[Sync] Starting sync for account: ${adAccount.meta_account_id}`);
 
@@ -263,6 +275,7 @@ async function syncAccount(adAccount, options = {}) {
   let metaCampaigns;
   try {
     metaCampaigns = await fetchCampaigns(adAccount.meta_account_id, accessToken);
+    noteIfIncomplete('campaigns', metaCampaigns, adAccount.meta_account_id);
   } catch (err) {
     summary.errors.push({ level: 'account', message: err.message });
     console.error(`[Sync] Failed to fetch campaigns for ${adAccount.meta_account_id}:`, err.message);
@@ -279,6 +292,7 @@ async function syncAccount(adAccount, options = {}) {
         let metaAdSets;
         try {
           metaAdSets = await fetchAdSets(metaCampaign.id, accessToken);
+          noteIfIncomplete('adsets', metaAdSets, metaCampaign.id);
         } catch (err) {
           summary.adSets.errors++;
           summary.errors.push({
@@ -299,6 +313,7 @@ async function syncAccount(adAccount, options = {}) {
               let metaAds;
               try {
                 metaAds = await fetchAds(metaAdSet.id, accessToken);
+                noteIfIncomplete('ads', metaAds, metaAdSet.id);
               } catch (err) {
                 summary.ads.errors++;
                 summary.errors.push({

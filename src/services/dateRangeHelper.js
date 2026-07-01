@@ -92,11 +92,20 @@ function priorPeriod(since, until) {
 
 // ─────────────────────────────────────────────
 // Attribution window check
+//
+// Checks the END of the requested range (`until`), not the start. Meta
+// aggregates every day in a range into one blended metric row, so what
+// matters for "is this data still settling" is how recent the most recent
+// day in the range is -- checking `since` instead meant a short recent
+// range (e.g. last_7_days) correctly warned, but a longer range (e.g.
+// last_30_days, whose `since` is far in the past even though its `until`
+// is still yesterday) incorrectly never warned, despite its tail end being
+// exactly as fresh/unsettled as the short range's.
 // ─────────────────────────────────────────────
-function isInAttributionWindow(since, attributionWindowDays = 7) {
-  const sinceDate = new Date(since);
+function isInAttributionWindow(until, attributionWindowDays = 7) {
+  const untilDate = new Date(until);
   const now = new Date();
-  const daysDiff = Math.round((now - sinceDate) / (1000 * 60 * 60 * 24));
+  const daysDiff = Math.round((now - untilDate) / (1000 * 60 * 60 * 24));
   return daysDiff <= attributionWindowDays;
 }
 

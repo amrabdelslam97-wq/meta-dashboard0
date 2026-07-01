@@ -129,7 +129,8 @@ async function runAdSetIntelligence(adSetId, options = {}) {
         campaign?.meta_campaign_id,
         adSet.access_token_encrypted,
         since,
-        until
+        until,
+        adSet.attribution_window_days
       );
       // Filter to this specific ad set by its real Meta ID
       currentMetrics = allAdSetMetrics.find(m => m.meta_adset_id === adSet.meta_adset_id) || null;
@@ -171,7 +172,8 @@ async function runAdSetIntelligence(adSetId, options = {}) {
         campaign?.meta_campaign_id,
         adSet.access_token_encrypted,
         prior.since,
-        prior.until
+        prior.until,
+        adSet.attribution_window_days
       );
       priorMetrics = allPriorAdSetMetrics.find(m => m.meta_adset_id === adSet.meta_adset_id) || null;
     } catch (priorErr) {
