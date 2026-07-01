@@ -10,6 +10,11 @@ function errorHandler(err, req, res, next) {
     console.error(err.stack);
   }
 
+  // CORS rejection (thrown by the cors() origin callback in app.js)
+  if (err.message === 'Not allowed by CORS') {
+    return res.status(403).json({ error: 'Origin not allowed' });
+  }
+
   // Meta API errors
   if (err.isMetaError) {
     return res.status(502).json({

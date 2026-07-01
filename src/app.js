@@ -7,6 +7,9 @@
 require('dotenv').config();
 
 const express = require('express');
+const helmet  = require('helmet');
+const cors    = require('cors');
+const rateLimit = require('express-rate-limit');
 const path    = require('path');
 const { initializeDatabase }     = require('./db/database');
 const { runMigrations }          = require('./db/schema');
@@ -40,6 +43,49 @@ async function start() {
   seedIntelligenceConfig();
 
   const app = express();
+
+  // Security headers. CSP is disabled because public/index.html is a
+  // single-file dashboard relying on inline <script>/<style> and
+  // inline event handlers (onclick=...) throughout -- the default
+  // helmet CSP would block the dashboard from running. All other
+  // helmet protections (X-Frame-Options, X-Content-Type-Options,
+  // HSTS, etc.) stay enabled.
+  app.use(helmet({ contentSecurityPolicy: false }));
+
+  // CORS: this app serves its own dashboard from the same origin as
+  // the API, so cross-origin access is closed by default. Set
+  // ALLOWED_ORIGINS (comma-separated) to allow specific external
+  // origins (e.g. a separately-hosted frontend) to call the API.
+  const allowedOrigins = (process.env.ALLOWED_ORIGINS || '')
+    .split(',')
+    .map(o => o.trim())
+    .filter(Boolean);
+  app.use(cors({
+    origin(origin, callback) {
+      if (!origin || allowedOrigins.includes(origin)) return callback(null, true);
+      return callback(new Error('Not allowed by CORS'));
+    },
+  }));
+
+  // Rate limiting: general API traffic gets a generous ceiling; the
+  // Meta sync endpoint (which fans out into many Graph API calls per
+  // request) gets a much tighter one to prevent accidental or
+  // malicious hammering of the Meta API / rate limits on our own app.
+  const apiLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000,
+    limit: 600,
+    standardHeaders: true,
+    legacyHeaders: false,
+    message: { error: 'Too many requests, please try again later.' },
+  });
+  const syncLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000,
+    limit: 20,
+    standardHeaders: true,
+    legacyHeaders: false,
+    message: { error: 'Too many sync requests, please try again later.' },
+  });
+
   app.use(express.json());
   app.use(express.urlencoded({ extended: false }));
 
@@ -53,7 +99,8 @@ async function start() {
   app.use(express.static(path.join(__dirname, '../public')));
 
   // API routes
-  app.use('/api/v1', apiRouter);
+  app.use('/api/v1/sync', syncLimiter);
+  app.use('/api/v1', apiLimiter, apiRouter);
 
   // SPA fallback — all non-API routes serve index.html
   app.get('/{*path}', (req, res) => {
