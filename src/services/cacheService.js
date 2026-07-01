@@ -145,13 +145,16 @@ function stats() {
   };
 }
 
-// Auto-prune expired entries every 5 minutes
-setInterval(() => {
+// Auto-prune expired entries every 5 minutes. unref() so this timer alone
+// never keeps the Node process (or a short-lived script/test run that
+// imports this module) alive.
+const pruneInterval = setInterval(() => {
   const now = Date.now();
   for (const [key, entry] of store.entries()) {
     if (now > entry.expiresAt) store.delete(key);
   }
 }, 5 * 60 * 1000);
+pruneInterval.unref();
 
 module.exports = {
   get, set, del,

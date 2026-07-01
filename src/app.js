@@ -27,12 +27,15 @@ const { errorHandler }           = require('./middleware/errorHandler');
 const PORT    = parseInt(process.env.PORT || '3000', 10);
 const DB_PATH = process.env.DB_PATH || './data/meta_ads.db';
 
-async function start() {
-  // Fail fast and explain exactly what's needed rather than silently
-  // starting with tokens stored in plaintext.
+/**
+ * Run the full migration set + fail-fast checks against the already
+ * -initialized DB. Split out from start() so tests can seed a temp DB
+ * with the exact same migration path the real server uses, without
+ * also binding a port.
+ */
+async function initializeApp(dbPath = DB_PATH) {
   requireEncryptionKey();
-
-  await initializeDatabase(DB_PATH);
+  await initializeDatabase(dbPath);
   runMigrations();
   runPhase2Migrations();
   runPhase5Migrations();
@@ -41,7 +44,14 @@ async function start() {
   runUniqueConstraintsMigration();
   encryptLegacyTokens();
   seedIntelligenceConfig();
+}
 
+/**
+ * Build the Express app (middleware + routes), without binding a port.
+ * Used by both start() (real server) and the Supertest integration
+ * tests (which drive the app in-process via request(createApp())).
+ */
+function createApp() {
   const app = express();
 
   // Security headers. CSP is disabled because public/index.html is a
@@ -71,14 +81,18 @@ async function start() {
   // Meta sync endpoint (which fans out into many Graph API calls per
   // request) gets a much tighter one to prevent accidental or
   // malicious hammering of the Meta API / rate limits on our own app.
-  const apiLimiter = rateLimit({
+  // Disabled under the test runner -- a single Supertest run legitimately
+  // fires far more than 20 requests at /sync across the whole suite,
+  // and rate limiting itself is verified directly in its own test.
+  const isTest = process.env.NODE_ENV === 'test';
+  const apiLimiter = isTest ? (req, res, next) => next() : rateLimit({
     windowMs: 15 * 60 * 1000,
     limit: 600,
     standardHeaders: true,
     legacyHeaders: false,
     message: { error: 'Too many requests, please try again later.' },
   });
-  const syncLimiter = rateLimit({
+  const syncLimiter = isTest ? (req, res, next) => next() : rateLimit({
     windowMs: 15 * 60 * 1000,
     limit: 20,
     standardHeaders: true,
@@ -110,6 +124,16 @@ async function start() {
 
   app.use(errorHandler);
 
+  return app;
+}
+
+async function start() {
+  // Fail fast and explain exactly what's needed rather than silently
+  // starting with tokens stored in plaintext.
+  await initializeApp(DB_PATH);
+
+  const app = createApp();
+
   app.listen(PORT, () => {
     console.log('');
     console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
@@ -121,4 +145,8 @@ async function start() {
   });
 }
 
-start().catch(err => { console.error('[Fatal]', err); process.exit(1); });
+if (require.main === module) {
+  start().catch(err => { console.error('[Fatal]', err); process.exit(1); });
+}
+
+module.exports = { createApp, initializeApp };

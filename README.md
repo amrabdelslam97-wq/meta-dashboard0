@@ -39,7 +39,8 @@ meta-ads-system/
 │       └── errorHandler.js       # Global error handling
 ├── scripts/
 │   ├── seed.js                   # Insert test data (no Meta API needed)
-│   └── verify.js                 # End-to-end test suite
+│   └── verify.js                 # Manual smoke-test script (requires a running server)
+├── tests/                        # Jest test suite (unit/integration/api/migrations/meta-api)
 ├── data/                         # SQLite database file (auto-created)
 ├── .env.example                  # Environment config template
 └── package.json
@@ -72,10 +73,18 @@ npm start
 npm run dev
 ```
 
-### 5. Verify everything works
+### 5. Run the test suite
 ```bash
-# In a second terminal (server must be running):
-npm test
+npm test              # Jest: unit, integration, API (Supertest), migration,
+                       # and Meta API (nock-mocked) tests -- no running
+                       # server or real Meta credentials required
+npm run test:coverage # same, with a coverage report
+```
+
+To manually smoke-test a real running server instead (requires `npm start`
+in a separate terminal first):
+```bash
+npm run verify
 ```
 
 ---
