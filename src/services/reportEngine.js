@@ -118,6 +118,44 @@ function todayRange()   { const t = new Date().toISOString().slice(0,10); return
 function weekRange()    { const u = new Date(); u.setDate(u.getDate()-1); const s = new Date(u); s.setDate(s.getDate()-6); return { since: s.toISOString().slice(0,10), until: u.toISOString().slice(0,10) }; }
 function monthRange()   { const u = new Date(); u.setDate(u.getDate()-1); const s = new Date(u.getFullYear(), u.getMonth(), 1); return { since: s.toISOString().slice(0,10), until: u.toISOString().slice(0,10) }; }
 
+const VALID_PERIODS = ['daily', 'weekly', 'monthly'];
+const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+
+/**
+ * Resolve a report period into a concrete { since, until } date range.
+ *
+ * Strict validation is deliberate: the caller (reports.js) builds a
+ * filesystem path and an HTTP header value directly from these values.
+ * `period` must be one of the 3 known literals, and a custom `since`/
+ * `until` override must match YYYY-MM-DD exactly — this closes off path
+ * traversal / header-value injection at the source rather than trying to
+ * sanitize a filename after the fact.
+ */
+function resolvePeriod(period, since, until) {
+  // Validated unconditionally, even when since/until override the actual
+  // date computation below — `period` is still used verbatim by the caller
+  // to build a filename/header value, so it must never be allowed to carry
+  // anything other than one of these 3 known-safe literals.
+  if (!VALID_PERIODS.includes(period)) {
+    const err = new Error(`Invalid period. Valid values: ${VALID_PERIODS.join(', ')}`);
+    err.name = 'ValidationError';
+    throw err;
+  }
+
+  if (since !== undefined || until !== undefined) {
+    if (!ISO_DATE_RE.test(since || '') || !ISO_DATE_RE.test(until || '')) {
+      const err = new Error('since/until must both be provided in YYYY-MM-DD format');
+      err.name = 'ValidationError';
+      throw err;
+    }
+    return { since, until };
+  }
+
+  if (period === 'daily')   return todayRange();
+  if (period === 'monthly') return monthRange();
+  return weekRange();
+}
+
 // ─────────────────────────────────────────────
 // CSV Export
 // ─────────────────────────────────────────────
@@ -398,4 +436,6 @@ module.exports = {
   todayRange,
   weekRange,
   monthRange,
+  resolvePeriod,
+  VALID_PERIODS,
 };

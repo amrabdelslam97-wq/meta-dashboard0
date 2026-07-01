@@ -13,16 +13,14 @@ const router  = express.Router();
 const path    = require('path');
 const fs      = require('fs');
 const os      = require('os');
+const { randomUUID } = require('crypto');
 
 const db = require('../../db/database');
-const { resolveDateRange } = require('../../services/dateRangeHelper');
 const {
   buildSummaryData, generateCSV, generateExcel, generatePDFHtml,
-  todayRange, weekRange, monthRange,
+  resolvePeriod,
 } = require('../../services/reportEngine');
 const { asyncHandler } = require('../../middleware/errorHandler');
-
-// resolvePeriod replaced by resolveDateRange from dateRangeHelper (Phase 6C)
 
 function getDefaultAccount() {
   return db.get("SELECT id FROM ad_accounts WHERE status = 'active' LIMIT 1");
@@ -35,8 +33,8 @@ router.get('/summary', asyncHandler(async (req, res) => {
   const account = getDefaultAccount();
   if (!account) return res.status(404).json({ error: 'No active ad account found' });
 
-  const { period = 'weekly' } = req.query;
-  const range = resolveDateRange(req.query);
+  const { period = 'weekly', since, until } = req.query;
+  const range = resolvePeriod(period, since, until);
 
   const summary = buildSummaryData(account.id, range.since, range.until);
   return res.json({ period, ...summary });
@@ -55,6 +53,10 @@ router.get('/export', asyncHandler(async (req, res) => {
     return res.status(400).json({ error: 'Invalid format', valid: validFormats });
   }
 
+  // resolvePeriod validates `period` against VALID_PERIODS and, when a
+  // custom range is requested, validates since/until as strict YYYY-MM-DD.
+  // This is what makes it safe to build a filename/header value from the
+  // result below — no free-form user input ever reaches `filename`.
   const range   = resolvePeriod(period, since, until);
   const summary = buildSummaryData(account.id, range.since, range.until);
   const filename = `meta-ads-report-${period}-${range.since}-${range.until}`;
@@ -77,13 +79,21 @@ router.get('/export', asyncHandler(async (req, res) => {
 
   // ── Excel ──
   if (format === 'xlsx') {
-    const tmpPath = path.join(os.tmpdir(), `${filename}.xlsx`);
+    // Unique per-request temp filename — the previous deterministic name
+    // (period+dates only) meant two concurrent exports for the same
+    // parameters could collide: one request's cleanup unlink could race
+    // another request's still-open read stream for the same path.
+    const tmpPath = path.join(os.tmpdir(), `${filename}-${randomUUID()}.xlsx`);
     await generateExcel(summary, tmpPath);
     res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
     res.setHeader('Content-Disposition', `attachment; filename="${filename}.xlsx"`);
     const stream = fs.createReadStream(tmpPath);
     stream.pipe(res);
-    stream.on('end', () => { try { fs.unlinkSync(tmpPath); } catch {} });
+    const cleanup = () => fs.unlink(tmpPath, (err) => {
+      if (err) console.warn(`[Reports] Failed to remove temp export file ${tmpPath}:`, err.message);
+    });
+    stream.on('end', cleanup);
+    stream.on('error', cleanup);
     return;
   }
 }));
