@@ -75,11 +75,12 @@ function getMockAdMetrics(objective, index = 0) {
     frequency:   Math.round((2.0 + index * 0.3) * 100) / 100,
   };
   const extras = {
-    messaging: { results: 28 + index * 4, cpr: Math.round((7 + index * 0.5) * 100) / 100 },
-    leads:     { leads:   18 + index * 3, cpl: Math.round((11 + index * 0.6) * 100) / 100 },
-    sales:     { purchases: 4 + index,    cpa: Math.round((50 + index * 5) * 100) / 100, roas: Math.round((2.2 - index * 0.1) * 100) / 100 },
-    traffic:   { link_clicks: 160 + index * 20, landing_page_views: 120 + index * 15 },
-    awareness: { reach: 7000 + index * 1500, impressions: 16000 + index * 3000 },
+    engagement:    { results: 28 + index * 4, cpr: Math.round((7 + index * 0.5) * 100) / 100 },
+    leads:         { leads:   18 + index * 3, cpl: Math.round((11 + index * 0.6) * 100) / 100 },
+    sales:         { purchases: 4 + index,    cpa: Math.round((50 + index * 5) * 100) / 100, roas: Math.round((2.2 - index * 0.1) * 100) / 100 },
+    traffic:       { link_clicks: 160 + index * 20, landing_page_views: 120 + index * 15 },
+    awareness:     { reach: 7000 + index * 1500, impressions: 16000 + index * 3000 },
+    app_promotion: { app_installs: 10 + index * 2, cpi: Math.round((7 - index * 0.3) * 100) / 100 },
   };
   return { ...base, ...(extras[objective] || {}) };
 }

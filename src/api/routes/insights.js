@@ -44,12 +44,13 @@ const { decryptToken } = require('../../services/tokenCrypto');
 function getMockMetrics(objective) {
   const base = { spend:1200, impressions:85000, reach:42000, clicks:1020, ctr:1.2, cpm:14.1, cpc:1.18, frequency:2.02 };
   const extras = {
-    messaging: { results:85, cpr:14.1 },
-    leads:     { leads:62, cpl:19.4 },
-    sales:     { purchases:18, cpa:66.7, roas:2.4, purchase_value:2880 },
-    traffic:   { link_clicks:980, landing_page_views:740, cost_per_landing_page_view:1.62 },
-    awareness: { reach:55000, impressions:120000, cpm:10.0 },
-    unknown:   {},
+    engagement:    { results:85, cpr:14.1 },
+    leads:         { leads:62, cpl:19.4 },
+    sales:         { purchases:18, cpa:66.7, roas:2.4, purchase_value:2880 },
+    traffic:       { link_clicks:980, landing_page_views:740, cost_per_landing_page_view:1.62 },
+    awareness:     { reach:55000, impressions:120000, cpm:10.0 },
+    app_promotion: { app_installs:45, cpi:6.4 },
+    unknown:       {},
   };
   return { ...base, ...(extras[objective] || {}) };
 }
@@ -57,12 +58,13 @@ function getMockMetrics(objective) {
 function getMockPriorMetrics(objective) {
   const base = { spend:1000, impressions:70000, reach:35000, clicks:700, ctr:1.0, cpm:14.3, cpc:1.43, frequency:1.75 };
   const extras = {
-    messaging: { results:60, cpr:16.7 },
-    leads:     { leads:40, cpl:25.0 },
-    sales:     { purchases:10, cpa:100, roas:1.5, purchase_value:1500 },
-    traffic:   { link_clicks:650, landing_page_views:490 },
-    awareness: { reach:40000, impressions:90000 },
-    unknown:   {},
+    engagement:    { results:60, cpr:16.7 },
+    leads:         { leads:40, cpl:25.0 },
+    sales:         { purchases:10, cpa:100, roas:1.5, purchase_value:1500 },
+    traffic:       { link_clicks:650, landing_page_views:490 },
+    awareness:     { reach:40000, impressions:90000 },
+    app_promotion: { app_installs:30, cpi:8.1 },
+    unknown:       {},
   };
   return { ...base, ...(extras[objective] || {}) };
 }
