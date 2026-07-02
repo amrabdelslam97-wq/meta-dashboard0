@@ -123,6 +123,7 @@ function upsertAdSet(adAccountId, campaignId, metaAdSet, dbHandle = db) {
         status = ?,
         daily_budget = ?,
         lifetime_budget = ?,
+        optimization_goal = ?,
         meta_updated_time = ?,
         updated_at = ?
       WHERE meta_adset_id = ?`,
@@ -131,6 +132,7 @@ function upsertAdSet(adAccountId, campaignId, metaAdSet, dbHandle = db) {
         normalizeStatus(metaAdSet.status),
         metaAdSet.daily_budget ? parseFloat(metaAdSet.daily_budget) / 100 : null,
         metaAdSet.lifetime_budget ? parseFloat(metaAdSet.lifetime_budget) / 100 : null,
+        metaAdSet.optimization_goal ?? null,
         metaAdSet.updated_time || now,
         now,
         metaAdSet.id,
@@ -142,9 +144,9 @@ function upsertAdSet(adAccountId, campaignId, metaAdSet, dbHandle = db) {
     dbHandle.run(
       `INSERT INTO ad_sets (
         id, campaign_id, ad_account_id, meta_adset_id, name, status,
-        daily_budget, lifetime_budget, meta_created_time, meta_updated_time,
+        daily_budget, lifetime_budget, optimization_goal, meta_created_time, meta_updated_time,
         created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         id,
         campaignId,
@@ -154,6 +156,7 @@ function upsertAdSet(adAccountId, campaignId, metaAdSet, dbHandle = db) {
         normalizeStatus(metaAdSet.status),
         metaAdSet.daily_budget ? parseFloat(metaAdSet.daily_budget) / 100 : null,
         metaAdSet.lifetime_budget ? parseFloat(metaAdSet.lifetime_budget) / 100 : null,
+        metaAdSet.optimization_goal ?? null,
         metaAdSet.created_time || now,
         metaAdSet.updated_time || now,
         now,

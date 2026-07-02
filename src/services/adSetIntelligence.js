@@ -226,7 +226,7 @@ async function runAdSetIntelligence(adSetId, options = {}) {
 // Get ad sets list with latest health scores
 // ─────────────────────────────────────────────
 function getAdSetsList(filters = {}) {
-  const { campaign_id, account_id, status } = filters;
+  const { campaign_id, account_id, status, optimization_goal } = filters;
 
   const conditions = [];
   const params     = [];
@@ -238,6 +238,7 @@ function getAdSetsList(filters = {}) {
   }
   if (account_id) { conditions.push('s.ad_account_id = ?'); params.push(account_id); }
   if (status)     { conditions.push('s.status = ?'); params.push(status); }
+  if (optimization_goal) { conditions.push('s.optimization_goal = ?'); params.push(optimization_goal); }
 
   const where = conditions.length ? 'WHERE ' + conditions.join(' AND ') : '';
 
@@ -246,7 +247,7 @@ function getAdSetsList(filters = {}) {
   const adSets = db.all(
     `SELECT
        s.id, s.meta_adset_id, s.name, s.status,
-       s.daily_budget, s.lifetime_budget,
+       s.daily_budget, s.lifetime_budget, s.optimization_goal,
        s.campaign_id, s.ad_account_id,
        c.meta_campaign_id, c.name as campaign_name, c.objective,
        a.account_name, a.currency,

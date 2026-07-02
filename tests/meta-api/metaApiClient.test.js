@@ -1,7 +1,7 @@
 'use strict';
 
 const nock = require('nock');
-const { metaGet, metaGetAll, fetchAdPreview, fetchCampaigns } = require('../../src/services/metaApiClient');
+const { metaGet, metaGetAll, fetchAdPreview, fetchCampaigns, fetchAdSets } = require('../../src/services/metaApiClient');
 
 const BASE = 'https://graph.facebook.com';
 const VERSION = process.env.META_API_VERSION || 'v21.0';
@@ -166,5 +166,26 @@ describe('metaApiClient.fetchCampaigns', () => {
     const campaigns = await fetchCampaigns('act_123', 'token');
     expect(scope.isDone()).toBe(true);
     expect(campaigns[0].objective).toBe('OUTCOME_LEADS');
+  });
+});
+
+describe('metaApiClient.fetchAdSets', () => {
+  afterEach(() => {
+    nock.cleanAll();
+  });
+
+  // Regression test: optimization_goal must be explicitly requested --
+  // Meta does not include ad-set-identifying/context fields automatically
+  // just because a request is scoped to an ad set (confirmed against a
+  // real Insights response during a related fix -- the same is true here
+  // for the ad set object's own fields, not just Insights rows).
+  test('requests optimization_goal alongside the existing ad set fields', async () => {
+    const scope = nock(BASE).get(`/${VERSION}/camp_1/adsets`)
+      .query(q => q.fields.includes('optimization_goal'))
+      .reply(200, { data: [{ id: 'adset_1', name: 'Video AdSet', status: 'ACTIVE', optimization_goal: 'THRUPLAY' }] });
+
+    const adSets = await fetchAdSets('camp_1', 'token');
+    expect(scope.isDone()).toBe(true);
+    expect(adSets[0].optimization_goal).toBe('THRUPLAY');
   });
 });

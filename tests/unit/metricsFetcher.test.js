@@ -119,6 +119,85 @@ describe('metricsFetcher.normalizeRow', () => {
     expect(normalized.results).toBeUndefined();
     expect(normalized.leads).toBeUndefined();
   });
+
+  // Video watched-actions parsing -- field shapes and real sample values
+  // below are taken directly from a real Insights response for a real
+  // campaign in the connected Meta account (verified live before adding
+  // this parsing), not invented.
+  test('parses video watched-actions fields and derives cost_per_thruplay / video_retention_rate', () => {
+    const row = {
+      spend: '25529.85',
+      video_play_actions:             [{ action_type: 'video_view', value: '16581' }],
+      video_p25_watched_actions:      [{ action_type: 'video_view', value: '2442' }],
+      video_p50_watched_actions:      [{ action_type: 'video_view', value: '1410' }],
+      video_p75_watched_actions:      [{ action_type: 'video_view', value: '729' }],
+      video_p95_watched_actions:      [{ action_type: 'video_view', value: '523' }],
+      video_p100_watched_actions:     [{ action_type: 'video_view', value: '472' }],
+      video_thruplay_watched_actions: [{ action_type: 'video_view', value: '3018' }],
+      video_avg_time_watched_actions: [{ action_type: 'video_view', value: '15' }],
+    };
+    const normalized = normalizeRow(row);
+    expect(normalized.video_plays).toBe(16581);
+    expect(normalized.video_p25_watched).toBe(2442);
+    expect(normalized.video_p100_watched).toBe(472);
+    expect(normalized.thruplays).toBe(3018);
+    expect(normalized.video_avg_watch_time).toBe(15);
+    expect(normalized.cost_per_thruplay).toBeCloseTo(25529.85 / 3018, 5);
+    expect(normalized.video_retention_rate).toBeCloseTo((472 / 16581) * 100, 5);
+  });
+
+  test('video fields absent from the response leave video metrics undefined, not zero', () => {
+    const normalized = normalizeRow({ spend: '100' });
+    expect(normalized.video_plays).toBeUndefined();
+    expect(normalized.thruplays).toBeUndefined();
+    expect(normalized.cost_per_thruplay).toBeUndefined();
+  });
+
+  // Engagement action_type parsing -- post_engagement/page_engagement/like
+  // and their real cost values, confirmed against the same live response.
+  test('parses post_engagement/page_engagement/like into flat metric keys with derived cost_per_engagement', () => {
+    const row = {
+      spend: '25529.85',
+      actions: [
+        { action_type: 'post_engagement', value: '62239' },
+        { action_type: 'page_engagement', value: '63047' },
+        { action_type: 'like', value: '808' },
+      ],
+      cost_per_action_type: [
+        { action_type: 'post_engagement', value: '0.410191' },
+        { action_type: 'page_engagement', value: '0.404934' },
+      ],
+    };
+    const normalized = normalizeRow(row);
+    expect(normalized.post_engagements).toBe(62239);
+    expect(normalized.page_engagements).toBe(63047);
+    expect(normalized.page_likes).toBe(808);
+    expect(normalized.cost_per_engagement).toBeCloseTo(0.410191, 5); // Meta-supplied value used directly, not derived
+  });
+
+  test('derives cost_per_engagement from spend/post_engagements when Meta omits cost_per_action_type', () => {
+    const row = {
+      spend: '100',
+      actions: [{ action_type: 'post_engagement', value: '50' }],
+    };
+    const normalized = normalizeRow(row);
+    expect(normalized.cost_per_engagement).toBe(2); // 100 / 50
+  });
+
+  // App Promotion action_type parsing -- these could NOT be verified
+  // against a real response (the connected account has no App Promotion
+  // campaigns), so this test only proves the mapping/derivation logic is
+  // internally consistent given Meta's documented field shape, not that
+  // the exact action_type string is confirmed correct in production.
+  test('parses app install action_types into app_installs/cpi (unverified against a real account)', () => {
+    const row = {
+      spend: '500',
+      actions: [{ action_type: 'mobile_app_install', value: '25' }],
+    };
+    const normalized = normalizeRow(row);
+    expect(normalized.app_installs).toBe(25);
+    expect(normalized.cpi).toBe(20); // 500 / 25
+  });
 });
 
 describe('metricsFetcher.attributionWindowParams', () => {

@@ -22,11 +22,11 @@ const { isMockRequested, rejectMockInProduction } = require('../../services/mock
 // GET /adsets
 // ─────────────────────────────────────────────
 router.get('/', asyncHandler(async (req, res) => {
-  const { campaign_id, account_id, status, limit: lp = '100', offset: op = '0' } = req.query;
+  const { campaign_id, account_id, status, optimization_goal, limit: lp = '100', offset: op = '0' } = req.query;
   const limit  = Math.min(Math.max(parseInt(lp, 10) || 100, 1), 500);
   const offset = Math.max(parseInt(op, 10) || 0, 0);
 
-  const allAdSets = getAdSetsList({ campaign_id, account_id, status });
+  const allAdSets = getAdSetsList({ campaign_id, account_id, status, optimization_goal });
   const page = allAdSets.slice(offset, offset + limit);
 
   return res.json({

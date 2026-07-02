@@ -29,6 +29,18 @@ const CORE_FIELDS = [
   // production, since this environment has no real Meta credentials to
   // confirm it against.
   'action_values',
+  // Video watched-actions fields, for the Awareness/Engagement "Video
+  // Views" KPI profile (kpiProfileResolver.js). Each returns an array
+  // shaped like actions[]/cost_per_action_type[] (one entry per
+  // action_type, typically just 'video_view'), NOT a bare number --
+  // confirmed against a real Insights response for a real campaign in
+  // the connected account (real video_view data, e.g.
+  // video_p25_watched_actions returning [{action_type:'video_view',
+  // value:'2442'}]) before adding these, per this file's own established
+  // house rule of never trusting an unverified field name.
+  'video_play_actions', 'video_p25_watched_actions', 'video_p50_watched_actions',
+  'video_p75_watched_actions', 'video_p95_watched_actions', 'video_p100_watched_actions',
+  'video_thruplay_watched_actions', 'video_avg_time_watched_actions',
 ].join(',');
 
 // Meta does NOT automatically include an entity's identifying id/name
@@ -66,6 +78,21 @@ function parseActions(actions, costPerAction, actionValues) {
     // Traffic
     'link_click':                             'link_clicks',
     'landing_page_view':                      'landing_page_views',
+    // Engagement -- 'post_engagement'/'page_engagement'/'like' confirmed
+    // present with real values against a real campaign in the connected
+    // account (e.g. post_engagement=62239) before adding.
+    'post_engagement':                        'post_engagements',
+    'page_engagement':                        'page_engagements',
+    'like':                                   'page_likes',
+    // App Promotion -- these are Meta's documented standard action_types
+    // for app installs, but this account has zero App Promotion
+    // campaigns, so they could NOT be verified against a real response
+    // the way the engagement/video entries above were. Left in per
+    // Meta's public Insights API documentation rather than omitted, but
+    // explicitly flagged as unverified until a real app-install campaign
+    // can be checked.
+    'mobile_app_install':                     'app_installs',
+    'omni_app_install':                       'app_installs',
   };
 
   for (const { action_type, value } of actions) {
@@ -88,6 +115,12 @@ function parseActions(actions, costPerAction, actionValues) {
       'purchase':                             'cpa',
       'offsite_conversion.fb_pixel_purchase': 'cpa',
       'landing_page_view':                    'cost_per_landing_page_view',
+      // Confirmed present with a real value (e.g. post_engagement
+      // cost=0.410191) against a real campaign in the connected account.
+      'post_engagement':                      'cost_per_engagement',
+      // Unverified -- see the matching ACTION_MAP comment above.
+      'mobile_app_install':                   'cpi',
+      'omni_app_install':                     'cpi',
     };
     for (const { action_type, value } of costPerAction) {
       const key = CPA_MAP[action_type];
@@ -129,6 +162,32 @@ function pickRoasValue(roasArray) {
   }
 
   return parseFloat(roasArray[0].value) || null;
+}
+
+// ─────────────────────────────────────────────
+// Parse the video watched-actions fields for the Video Views KPI profile.
+// Each field is an array shaped like actions[] (typically a single
+// {action_type:'video_view', value} entry) rather than a bare number --
+// confirmed against a real Insights response before relying on this shape.
+// ─────────────────────────────────────────────
+function parseVideoMetrics(d) {
+  const pick = (field) => {
+    const arr = d[field];
+    if (!Array.isArray(arr) || arr.length === 0) return null;
+    const value = parseFloat(arr[0].value);
+    return Number.isNaN(value) ? null : value;
+  };
+
+  return {
+    video_plays:          pick('video_play_actions'),
+    video_p25_watched:    pick('video_p25_watched_actions'),
+    video_p50_watched:    pick('video_p50_watched_actions'),
+    video_p75_watched:    pick('video_p75_watched_actions'),
+    video_p95_watched:    pick('video_p95_watched_actions'),
+    video_p100_watched:   pick('video_p100_watched_actions'),
+    thruplays:            pick('video_thruplay_watched_actions'),
+    video_avg_watch_time: pick('video_avg_time_watched_actions'),
+  };
 }
 
 // ─────────────────────────────────────────────
@@ -174,6 +233,35 @@ function normalizeRow(d) {
     base.landing_page_view_rate = (base.landing_page_views / base.clicks) * 100;
   }
 
+  // Video watched-actions (Video Views KPI sub-profile). Only merge keys
+  // Meta actually returned data for -- matching the rest of this
+  // function's convention (e.g. results/leads/purchases are left
+  // genuinely absent, not null, when their action_type never appears) so
+  // "no data returned" reads the same way (`undefined`) everywhere a
+  // caller checks for it.
+  const videoMetrics = parseVideoMetrics(d);
+  for (const [key, value] of Object.entries(videoMetrics)) {
+    if (value !== null) base[key] = value;
+  }
+
+  // Derived cost/rate metrics, following the same pattern as cpr/cpl/cpa
+  // above -- only computed when the underlying volume + spend are real.
+  if (base.thruplays > 0 && base.spend > 0) {
+    base.cost_per_thruplay = base.spend / base.thruplays;
+  }
+  if (base.video_plays > 0 && base.video_p100_watched > 0) {
+    base.video_retention_rate = (base.video_p100_watched / base.video_plays) * 100;
+  }
+
+  // Cost per engagement / cost per install, when Meta doesn't supply them
+  // directly via CPA_MAP (mirrors the cpr/cpl/cpa fallback above).
+  if (!base.cost_per_engagement && (base.post_engagements > 0 || base.page_engagements > 0) && base.spend > 0) {
+    base.cost_per_engagement = base.spend / (base.post_engagements || base.page_engagements);
+  }
+  if (!base.cpi && base.app_installs > 0 && base.spend > 0) {
+    base.cpi = base.spend / base.app_installs;
+  }
+
   return base;
 }
 
@@ -203,6 +291,11 @@ const NUMERIC_METRICS = [
   'results','leads','purchases','purchase_value','roas',
   'cpr','cpl','cpa','link_clicks','landing_page_views',
   'cost_per_landing_page_view',
+  'post_engagements','page_engagements','cost_per_engagement',
+  'app_installs','cpi',
+  'video_plays','video_p25_watched','video_p50_watched','video_p75_watched',
+  'video_p95_watched','video_p100_watched','thruplays','video_avg_watch_time',
+  'cost_per_thruplay','video_retention_rate',
 ];
 
 function computeDeltas(current, prior) {

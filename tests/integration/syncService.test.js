@@ -189,4 +189,28 @@ describe('syncService upsert functions (idempotency)', () => {
     expect(adSetRows[0].status).toBe('paused');
     expect(adRows[0].status).toBe('paused');
   });
+
+  // Regression test: optimization_goal (added in schema.phase8.js) must
+  // round-trip through upsertAdSet on both insert and update -- this is
+  // the field the Video Views KPI sub-profile and the Optimization Goal
+  // filter depend on, and it's easy to silently drop if only the INSERT
+  // branch is updated and the UPDATE branch is missed (or vice versa).
+  test('upsertAdSet persists optimization_goal on both insert and update', () => {
+    const campaignId = upsertCampaign(accountId, { id: 'camp_for_optgoal', name: 'Parent', objective: 'MESSAGES', status: 'ACTIVE' });
+
+    upsertAdSet(accountId, campaignId, { id: 'adset_optgoal', name: 'Video AdSet', status: 'ACTIVE', optimization_goal: 'THRUPLAY' });
+    const inserted = testDb.db.get('SELECT optimization_goal FROM ad_sets WHERE meta_adset_id = ?', ['adset_optgoal']);
+    expect(inserted.optimization_goal).toBe('THRUPLAY');
+
+    upsertAdSet(accountId, campaignId, { id: 'adset_optgoal', name: 'Video AdSet', status: 'ACTIVE', optimization_goal: 'REACH' });
+    const updated = testDb.db.get('SELECT optimization_goal FROM ad_sets WHERE meta_adset_id = ?', ['adset_optgoal']);
+    expect(updated.optimization_goal).toBe('REACH');
+  });
+
+  test('upsertAdSet stores NULL optimization_goal when Meta does not return one, without throwing', () => {
+    const campaignId = upsertCampaign(accountId, { id: 'camp_for_no_optgoal', name: 'Parent', objective: 'MESSAGES', status: 'ACTIVE' });
+    expect(() => upsertAdSet(accountId, campaignId, { id: 'adset_no_optgoal', name: 'No OptGoal', status: 'ACTIVE' })).not.toThrow();
+    const row = testDb.db.get('SELECT optimization_goal FROM ad_sets WHERE meta_adset_id = ?', ['adset_no_optgoal']);
+    expect(row.optimization_goal).toBeNull();
+  });
 });

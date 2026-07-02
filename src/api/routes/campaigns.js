@@ -11,6 +11,7 @@ const express = require('express');
 const router = express.Router();
 const db = require('../../db/database');
 const { formatScoreBreakdown } = require('../../services/scoreBreakdownService');
+const { VALID_OBJECTIVES } = require('../../services/kpiProfileResolver');
 const { asyncHandler } = require('../../middleware/errorHandler');
 
 /**
@@ -66,7 +67,7 @@ router.get(
     }
 
     if (objective) {
-      const validObjectives = ['messaging', 'leads', 'sales', 'traffic', 'awareness', 'unknown'];
+      const validObjectives = [...VALID_OBJECTIVES, 'unknown'];
       if (!validObjectives.includes(objective)) {
         return res.status(400).json({
           error: 'Invalid objective filter',

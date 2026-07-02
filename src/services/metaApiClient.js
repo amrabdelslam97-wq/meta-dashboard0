@@ -197,7 +197,11 @@ async function fetchAdSets(metaCampaignId, accessToken) {
   const adSets = await metaGetAll(
     `${metaCampaignId}/adsets`,
     {
-      fields: 'id,name,status,daily_budget,lifetime_budget,created_time,updated_time',
+      // optimization_goal powers the Video Views KPI sub-profile
+      // (kpiProfileResolver.resolveProfile) and the Optimization Goal
+      // filter -- no separate API call needed, this endpoint already
+      // returns it once requested in `fields`.
+      fields: 'id,name,status,daily_budget,lifetime_budget,created_time,updated_time,optimization_goal',
       limit: 100,
     },
     accessToken

@@ -65,10 +65,15 @@ function mapObjective(metaObjective) {
 }
 
 /**
- * Check if an internal objective is valid.
+ * Check if an internal objective is valid. Delegates to
+ * kpiProfileResolver's VALID_OBJECTIVES (the single source of truth for
+ * the objective taxonomy) rather than maintaining its own copy of the
+ * list -- required lazily (not at module load time) to avoid a load-order
+ * dependency between these two low-level services.
  */
 function isValidObjective(objective) {
-  return ['awareness', 'traffic', 'engagement', 'leads', 'app_promotion', 'sales', 'unknown'].includes(objective);
+  const { VALID_OBJECTIVES } = require('./kpiProfileResolver');
+  return [...VALID_OBJECTIVES, 'unknown'].includes(objective);
 }
 
 module.exports = { mapObjective, isValidObjective };
