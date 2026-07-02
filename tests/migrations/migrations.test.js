@@ -12,6 +12,7 @@ const { runPhase2Migrations } = require('../../src/db/schema.phase2');
 const { runPhase5Migrations } = require('../../src/db/schema.phase5');
 const { runPhase6Migrations } = require('../../src/db/schema.phase6');
 const { runPhase7BMigrations } = require('../../src/db/schema.phase7b');
+const { runPhase8Migrations } = require('../../src/db/schema.phase8');
 const { runUniqueConstraintsMigration } = require('../../src/db/schema.uniqueConstraints');
 
 function runFullMigrationSet() {
@@ -20,6 +21,7 @@ function runFullMigrationSet() {
   runPhase5Migrations();
   runPhase6Migrations();
   runPhase7BMigrations();
+  runPhase8Migrations();
   runUniqueConstraintsMigration();
 }
 
@@ -116,6 +118,68 @@ describe('database migrations', () => {
 
     insertGlobalBenchmark();
     expect(insertGlobalBenchmark).toThrow();
+  });
+
+  // ── Phase 8: campaigns.objective enum widen + ad_sets.optimization_goal ──
+
+  test('campaigns accepts every new objective value and rejects the old "messaging" value', () => {
+    runFullMigrationSet();
+    const accountId = uuidv4();
+    database.run(
+      `INSERT INTO ad_accounts (id, meta_account_id, account_name, access_token_encrypted, created_at, updated_at)
+       VALUES (?, 'act_phase8_test', 'Phase8 Test', 'enc:v1:x', datetime('now'), datetime('now'))`,
+      [accountId]
+    );
+
+    const insertCampaign = (objective) => database.run(
+      `INSERT INTO campaigns (id, ad_account_id, meta_campaign_id, name, objective, status, created_at, updated_at)
+       VALUES (?, ?, ?, 'Test Campaign', ?, 'active', datetime('now'), datetime('now'))`,
+      [uuidv4(), accountId, `camp_${objective}`, objective]
+    );
+
+    for (const obj of ['awareness', 'traffic', 'engagement', 'leads', 'app_promotion', 'sales', 'unknown']) {
+      expect(() => insertCampaign(obj)).not.toThrow();
+    }
+    expect(() => insertCampaign('messaging')).toThrow();
+  });
+
+  test('ad_sets has the optimization_goal column after migration, nullable with no CHECK', () => {
+    runFullMigrationSet();
+    const columns = database.all('PRAGMA table_info(ad_sets)');
+    const optGoalCol = columns.find(c => c.name === 'optimization_goal');
+    expect(optGoalCol).toBeDefined();
+    expect(optGoalCol.notnull).toBe(0);
+  });
+
+  test('phase8 remaps pre-existing objective="messaging" campaign rows to "engagement"', () => {
+    // Run migrations UP TO (not including) phase8, so the OLD CHECK
+    // constraint (which still permits 'messaging') is in effect when the
+    // test row is inserted -- this proves the migration's remap logic,
+    // not just that new inserts under the new CHECK behave correctly.
+    runMigrations();
+    runPhase2Migrations();
+    runPhase5Migrations();
+    runPhase6Migrations();
+    runPhase7BMigrations();
+
+    const accountId = uuidv4();
+    database.run(
+      `INSERT INTO ad_accounts (id, meta_account_id, account_name, access_token_encrypted, created_at, updated_at)
+       VALUES (?, 'act_remap_test', 'Remap Test', 'enc:v1:x', datetime('now'), datetime('now'))`,
+      [accountId]
+    );
+    const campaignId = uuidv4();
+    database.run(
+      `INSERT INTO campaigns (id, ad_account_id, meta_campaign_id, name, objective, status, created_at, updated_at)
+       VALUES (?, ?, 'camp_remap', 'Pre-existing Messaging Campaign', 'messaging', 'active', datetime('now'), datetime('now'))`,
+      [campaignId, accountId]
+    );
+
+    runPhase8Migrations();
+    runUniqueConstraintsMigration();
+
+    const row = database.get('SELECT objective FROM campaigns WHERE id = ?', [campaignId]);
+    expect(row.objective).toBe('engagement');
   });
 
   test('benchmark_metrics still allows distinct account-specific rows for the same objective/metric', () => {

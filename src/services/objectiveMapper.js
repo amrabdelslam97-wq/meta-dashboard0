@@ -4,41 +4,51 @@
  * Translates Meta API objective strings to internal objective enum.
  * Protects the system against Meta API naming changes across versions.
  *
- * Internal objectives: messaging | leads | sales | traffic | awareness | unknown
+ * Internal objectives (Meta's real ODAX taxonomy):
+ *   awareness | traffic | engagement | leads | app_promotion | sales | unknown
+ *
+ * 'engagement' replaces the old 'messaging' bucket (Meta's OUTCOME_ENGAGEMENT
+ * campaign objective covers Messages/Video Views/Post Engagement/Conversions,
+ * of which the legacy pre-ODAX MESSAGES objective is one destination type --
+ * see src/services/kpiProfileResolver.js for how a finer-grained distinction
+ * within engagement, e.g. via an ad set's optimization_goal, is resolved).
+ * 'app_promotion' is split out of the old 'unknown' catch-all (Meta's
+ * OUTCOME_APP_PROMOTION/APP_INSTALLS objectives) now that it's fully in
+ * scope. campaigns.objective's DB CHECK constraint was widened to match in
+ * src/db/schema.phase8.js -- this mapping and that migration must always
+ * stay in sync.
  */
 
 const OBJECTIVE_MAP = {
-  // Messaging
-  MESSAGES: 'messaging',
-  OUTCOME_ENGAGEMENT: 'messaging', // newer API versions may use this for messaging context
-
-  // Leads
-  LEAD_GENERATION: 'leads',
-  OUTCOME_LEADS: 'leads',
-
-  // Sales / Conversions
-  CONVERSIONS: 'sales',
-  OUTCOME_SALES: 'sales',
-  PRODUCT_CATALOG_SALES: 'sales',
-
-  // Traffic
-  LINK_CLICKS: 'traffic',
-  OUTCOME_TRAFFIC: 'traffic',
-
   // Awareness
+  OUTCOME_AWARENESS: 'awareness',
   BRAND_AWARENESS: 'awareness',
   REACH: 'awareness',
-  OUTCOME_AWARENESS: 'awareness',
-
-  // Video views — map to awareness for phase 1
   VIDEO_VIEWS: 'awareness',
   OUTCOME_VIDEO_VIEWS: 'awareness',
 
-  // App installs — not in scope but don't crash
-  APP_INSTALLS: 'unknown',
-  OUTCOME_APP_PROMOTION: 'unknown',
+  // Traffic
+  OUTCOME_TRAFFIC: 'traffic',
+  LINK_CLICKS: 'traffic',
 
-  // Store visits — not in scope
+  // Engagement (was folded into 'messaging' before ODAX-aware taxonomy)
+  OUTCOME_ENGAGEMENT: 'engagement',
+  MESSAGES: 'engagement',
+
+  // Leads
+  OUTCOME_LEADS: 'leads',
+  LEAD_GENERATION: 'leads',
+
+  // App Promotion (was incorrectly falling into 'unknown')
+  OUTCOME_APP_PROMOTION: 'app_promotion',
+  APP_INSTALLS: 'app_promotion',
+
+  // Sales / Conversions
+  OUTCOME_SALES: 'sales',
+  CONVERSIONS: 'sales',
+  PRODUCT_CATALOG_SALES: 'sales',
+
+  // Store visits — genuinely out of scope, no dedicated profile
   STORE_VISITS: 'unknown',
 };
 
@@ -58,7 +68,7 @@ function mapObjective(metaObjective) {
  * Check if an internal objective is valid.
  */
 function isValidObjective(objective) {
-  return ['messaging', 'leads', 'sales', 'traffic', 'awareness', 'unknown'].includes(objective);
+  return ['awareness', 'traffic', 'engagement', 'leads', 'app_promotion', 'sales', 'unknown'].includes(objective);
 }
 
 module.exports = { mapObjective, isValidObjective };

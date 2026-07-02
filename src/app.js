@@ -17,6 +17,7 @@ const { runPhase2Migrations }    = require('./db/schema.phase2');
 const { runPhase5Migrations }    = require('./db/schema.phase5');
 const { runPhase6Migrations } = require('./db/schema.phase6');
 const { runPhase7BMigrations } = require('./db/schema.phase7b');
+const { runPhase8Migrations } = require('./db/schema.phase8');
 const { runUniqueConstraintsMigration } = require('./db/schema.uniqueConstraints');
 const { seedIntelligenceConfig } = require('./db/seedIntelligence');
 const { encryptLegacyTokens }    = require('./db/encryptLegacyTokens');
@@ -41,6 +42,7 @@ async function initializeApp(dbPath = DB_PATH) {
   runPhase5Migrations();
   runPhase6Migrations();
   runPhase7BMigrations();
+  runPhase8Migrations();
   runUniqueConstraintsMigration();
   encryptLegacyTokens();
   seedIntelligenceConfig();
