@@ -8,11 +8,51 @@
  */
 
 const db = require('../db/database');
+const { resolveProfile } = require('./kpiProfileResolver');
+const { resolveMetric } = require('./metricResolver');
+
+// ─────────────────────────────────────────────
+// Resolve a campaign row's primary KPI value from its stored
+// score_breakdown snapshot (the only per-metric data this file has access
+// to -- health_score_history doesn't retain full raw metrics, only the
+// scoring-weighted subset). Distinguishes "genuinely not part of this
+// objective" from "this objective's primary KPI just wasn't captured in
+// the health-scoring snapshot" (e.g. engagement's primary KPI is
+// 'results', a volume metric, but engagement's scoringWeights only score
+// cpr/ctr/frequency/reach -- 'results' is real and applicable, it simply
+// isn't one of the weighted metrics stored in score_breakdown) so the
+// report never fabricates a 0 for either case.
+// ─────────────────────────────────────────────
+function resolvePrimaryKPIForRow(row) {
+  const profile = resolveProfile(row.objective);
+  let breakdown = {};
+  try { breakdown = row.score_breakdown ? JSON.parse(row.score_breakdown) : {}; } catch { /* malformed snapshot -- treat as empty */ }
+
+  const flatMetrics = {};
+  for (const [key, entry] of Object.entries(breakdown)) {
+    if (entry && entry.value !== null && entry.value !== undefined) flatMetrics[key] = entry.value;
+  }
+
+  const resolved = resolveMetric(profile, profile.primaryKPI.key, flatMetrics);
+  const display = resolved.available
+    ? resolved.value
+    : (resolved.reason === 'not_applicable_to_objective' ? 'Not available for this objective' : 'No data for period');
+
+  return { label: profile.primaryKPI.label, value: resolved.available ? resolved.value : null, display };
+}
 
 // ─────────────────────────────────────────────
 // Build summary data from DB for a date range
+//
+// `objective`, when provided, scopes every section of the report to that
+// single objective -- health_score_history/recommendation_log/
+// decision_history all carry an `objective` column directly; active_alerts
+// doesn't (see schema.phase2.js), so its query joins campaigns instead.
 // ─────────────────────────────────────────────
-function buildSummaryData(adAccountId, since, until) {
+function buildSummaryData(adAccountId, since, until, objective = null) {
+  const objClause = objective ? 'AND objective = ?' : '';
+  const objParam  = objective ? [objective] : [];
+
   // Health score stats for the period
   const healthStats = db.get(`
     SELECT
@@ -22,42 +62,59 @@ function buildSummaryData(adAccountId, since, until) {
       COUNT(DISTINCT entity_meta_id) as campaigns_scored
     FROM health_score_history
     WHERE ad_account_id = ? AND entity_type = 'campaign'
-      AND calculated_at >= ? AND calculated_at <= ?
-  `, [adAccountId, since, until + 'T23:59:59']);
+      AND calculated_at >= ? AND calculated_at <= ? ${objClause}
+  `, [adAccountId, since, until + 'T23:59:59', ...objParam]);
 
   // Latest score per campaign for period
   const campaignScores = db.all(`
     SELECT
       h.entity_meta_id, h.entity_label, h.health_score, h.health_status,
-      h.objective, h.calculated_at
+      h.objective, h.calculated_at, h.score_breakdown
     FROM health_score_history h
     INNER JOIN (
       SELECT entity_meta_id, MAX(calculated_at) as latest
       FROM health_score_history
       WHERE ad_account_id = ? AND entity_type = 'campaign'
-        AND calculated_at >= ? AND calculated_at <= ?
+        AND calculated_at >= ? AND calculated_at <= ? ${objClause}
       GROUP BY entity_meta_id
     ) m ON h.entity_meta_id = m.entity_meta_id AND h.calculated_at = m.latest
     ORDER BY h.health_score DESC
-  `, [adAccountId, since, until + 'T23:59:59']);
+  `, [adAccountId, since, until + 'T23:59:59', ...objParam]).map(row => ({
+    ...row,
+    primary_kpi: resolvePrimaryKPIForRow(row),
+  }));
 
   // Recommendations for the period
   const recs = db.all(`
     SELECT rule_code, severity, entity_label, recommendation_title,
            action_taken, generated_at
     FROM recommendation_log
-    WHERE ad_account_id = ? AND generated_at >= ? AND generated_at <= ?
+    WHERE ad_account_id = ? AND generated_at >= ? AND generated_at <= ? ${objClause}
     ORDER BY CASE severity WHEN 'critical' THEN 1 WHEN 'warning' THEN 2 ELSE 3 END
-  `, [adAccountId, since, until + 'T23:59:59']);
+  `, [adAccountId, since, until + 'T23:59:59', ...objParam]);
 
-  // Alerts for the period
-  const alerts = db.all(`
-    SELECT alert_code, severity, entity_label, alert_message,
-           first_detected_at, occurrence_count, status
-    FROM active_alerts
-    WHERE ad_account_id = ? AND first_detected_at >= ? AND first_detected_at <= ?
-    ORDER BY CASE severity WHEN 'critical' THEN 1 WHEN 'warning' THEN 2 ELSE 3 END
-  `, [adAccountId, since, until + 'T23:59:59']);
+  // Alerts for the period. active_alerts has no objective column of its
+  // own, so scoping by objective requires joining campaigns on the alert's
+  // entity_meta_id (campaign-level alerts only -- ad-set/ad-level alerts
+  // have no direct campaign row to join here, matching the existing
+  // campaign-only scope of this report).
+  const alerts = objective
+    ? db.all(`
+        SELECT a.alert_code, a.severity, a.entity_label, a.alert_message,
+               a.first_detected_at, a.occurrence_count, a.status
+        FROM active_alerts a
+        JOIN campaigns c ON c.meta_campaign_id = a.entity_meta_id
+        WHERE a.ad_account_id = ? AND a.first_detected_at >= ? AND a.first_detected_at <= ?
+          AND c.objective = ?
+        ORDER BY CASE a.severity WHEN 'critical' THEN 1 WHEN 'warning' THEN 2 ELSE 3 END
+      `, [adAccountId, since, until + 'T23:59:59', objective])
+    : db.all(`
+        SELECT alert_code, severity, entity_label, alert_message,
+               first_detected_at, occurrence_count, status
+        FROM active_alerts
+        WHERE ad_account_id = ? AND first_detected_at >= ? AND first_detected_at <= ?
+        ORDER BY CASE severity WHEN 'critical' THEN 1 WHEN 'warning' THEN 2 ELSE 3 END
+      `, [adAccountId, since, until + 'T23:59:59']);
 
   // Decisions generated in the period
   let decisions = [];
@@ -65,9 +122,9 @@ function buildSummaryData(adAccountId, since, until) {
     decisions = db.all(`
       SELECT decision_type, priority, campaign_name, reason, status, created_at
       FROM decision_history
-      WHERE ad_account_id = ? AND created_at >= ? AND created_at <= ?
+      WHERE ad_account_id = ? AND created_at >= ? AND created_at <= ? ${objClause}
       ORDER BY priority_score DESC
-    `, [adAccountId, since, until + 'T23:59:59']);
+    `, [adAccountId, since, until + 'T23:59:59', ...objParam]);
   } catch {} // table may not exist in older installs
 
   const topCampaigns    = campaignScores.slice(0, 5);
@@ -79,6 +136,7 @@ function buildSummaryData(adAccountId, since, until) {
     account_name:    account?.account_name || 'Unknown Account',
     currency:        account?.currency     || 'USD',
     period:          { since, until },
+    objective:       objective || null,
     health: {
       avg_score:         healthStats?.avg_score ? Math.round(healthStats.avg_score) : null,
       min_score:         healthStats?.min_score || null,
@@ -171,12 +229,12 @@ function generateCSV(summaryData) {
     ['Campaigns Scored', summaryData.health.campaigns_scored],
     [],
     ['TOP CAMPAIGNS'],
-    ['Campaign', 'Objective', 'Health Score', 'Status'],
-    ...summaryData.top_campaigns.map(c => [c.entity_label, c.objective || '', c.health_score, c.health_status]),
+    ['Campaign', 'Objective', 'Health Score', 'Status', 'Primary KPI', 'Primary KPI Value'],
+    ...summaryData.top_campaigns.map(c => [c.entity_label, c.objective || '', c.health_score, c.health_status, c.primary_kpi?.label || '', c.primary_kpi?.display ?? '']),
     [],
     ['WORST CAMPAIGNS'],
-    ['Campaign', 'Objective', 'Health Score', 'Status'],
-    ...summaryData.worst_campaigns.map(c => [c.entity_label, c.objective || '', c.health_score, c.health_status]),
+    ['Campaign', 'Objective', 'Health Score', 'Status', 'Primary KPI', 'Primary KPI Value'],
+    ...summaryData.worst_campaigns.map(c => [c.entity_label, c.objective || '', c.health_score, c.health_status, c.primary_kpi?.label || '', c.primary_kpi?.display ?? '']),
     [],
     ['RECOMMENDATIONS'],
     ['Total', summaryData.recommendations.total],
@@ -271,15 +329,17 @@ async function generateExcel(summaryData, outputPath) {
   // ── Sheet 2: Campaigns ──
   const campSheet = wb.addWorksheet('Campaigns');
   campSheet.columns = [
-    { header: 'Campaign',     key: 'name',    width: 35 },
-    { header: 'Objective',    key: 'obj',     width: 15 },
-    { header: 'Health Score', key: 'score',   width: 15 },
-    { header: 'Status',       key: 'status',  width: 15 },
-    { header: 'Last Scored',  key: 'date',    width: 20 },
+    { header: 'Campaign',          key: 'name',    width: 35 },
+    { header: 'Objective',         key: 'obj',     width: 15 },
+    { header: 'Health Score',      key: 'score',   width: 15 },
+    { header: 'Status',            key: 'status',  width: 15 },
+    { header: 'Primary KPI',       key: 'kpi',     width: 20 },
+    { header: 'Primary KPI Value', key: 'kpival',  width: 20 },
+    { header: 'Last Scored',       key: 'date',    width: 20 },
   ];
   campSheet.getRow(1).font = { bold: true };
   summaryData.top_campaigns.forEach(c => {
-    campSheet.addRow({ name: c.entity_label, obj: c.objective, score: c.health_score, status: c.health_status, date: c.calculated_at?.slice(0,10) });
+    campSheet.addRow({ name: c.entity_label, obj: c.objective, score: c.health_score, status: c.health_status, kpi: c.primary_kpi?.label || '', kpival: c.primary_kpi?.display ?? '', date: c.calculated_at?.slice(0,10) });
   });
 
   // ── Sheet 3: Recommendations ──
@@ -383,25 +443,27 @@ function generatePDFHtml(summaryData) {
 
 <h2>🏆 Top Performing Campaigns</h2>
 <table>
-  <tr><th>Campaign</th><th>Objective</th><th>Health Score</th><th>Status</th></tr>
+  <tr><th>Campaign</th><th>Objective</th><th>Health Score</th><th>Status</th><th>Primary KPI</th></tr>
   ${summaryData.top_campaigns.map(c => `
   <tr>
     <td>${c.entity_label}</td>
     <td>${c.objective || '—'}</td>
     <td class="score" style="color:${scoreColor(c.health_score)}">${c.health_score}/100</td>
     <td><span class="badge badge-${c.health_status === 'excellent' || c.health_status === 'good' ? 'good' : c.health_status === 'warning' ? 'warning' : 'critical'}">${c.health_status}</span></td>
+    <td>${c.primary_kpi?.label || '—'}: ${c.primary_kpi?.display ?? '—'}</td>
   </tr>`).join('')}
 </table>
 
 <h2>⚠ Campaigns Needing Attention</h2>
 <table>
-  <tr><th>Campaign</th><th>Objective</th><th>Health Score</th><th>Status</th></tr>
+  <tr><th>Campaign</th><th>Objective</th><th>Health Score</th><th>Status</th><th>Primary KPI</th></tr>
   ${summaryData.worst_campaigns.map(c => `
   <tr>
     <td>${c.entity_label}</td>
     <td>${c.objective || '—'}</td>
     <td class="score" style="color:${scoreColor(c.health_score)}">${c.health_score}/100</td>
     <td><span class="badge badge-${c.health_status === 'critical' ? 'critical' : 'warning'}">${c.health_status}</span></td>
+    <td>${c.primary_kpi?.label || '—'}: ${c.primary_kpi?.display ?? '—'}</td>
   </tr>`).join('')}
 </table>
 

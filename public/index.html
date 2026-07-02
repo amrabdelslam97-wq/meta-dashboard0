@@ -2050,7 +2050,10 @@ async function dismissDecision(id) {
 // ═══════════════════════════════════════════════════════════════
 async function loadReports() {
   document.getElementById('content').innerHTML = '<div class="loader"><span class="spin">◌</span> Loading report...</div>';
-  const summary = await api('/reports/summary?period=weekly');
+  const period    = window._reportPeriod    || 'weekly';
+  const objective = window._reportObjective || '';
+  const objQ = objective ? '&objective=' + objective : '';
+  const summary = await api('/reports/summary?period=' + period + objQ);
 
   const hs = summary.health || {};
   const recs = summary.recommendations || {};
@@ -2069,9 +2072,13 @@ async function loadReports() {
   <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:20px;flex-wrap:wrap;gap:10px">
     <div class="filter-bar" style="margin:0">
       <select id="report-period" onchange="changeReportPeriod()" class="form-input" style="padding:7px 12px">
-        <option value="daily">Today</option>
-        <option value="weekly" selected>Last 7 Days</option>
-        <option value="monthly">This Month</option>
+        <option value="daily"${period==='daily'?' selected':''}>Today</option>
+        <option value="weekly"${period==='weekly'?' selected':''}>Last 7 Days</option>
+        <option value="monthly"${period==='monthly'?' selected':''}>This Month</option>
+      </select>
+      <select id="report-objective" onchange="changeReportObjective()" class="form-input" style="padding:7px 12px">
+        <option value=""${objective===''?' selected':''}>All Objectives</option>
+        ${['awareness','traffic','engagement','leads','app_promotion','sales'].map(o=>`<option value="${o}"${objective===o?' selected':''}>${o}</option>`).join('')}
       </select>
     </div>
     <div style="display:flex;gap:8px">
@@ -2109,7 +2116,7 @@ async function loadReports() {
       <div style="display:flex;align-items:center;justify-content:space-between;padding:8px 0;border-bottom:1px solid var(--border)">
         <div>
           <div style="font-size:13px;font-weight:500;cursor:pointer;color:var(--accent2)" onclick="viewCampaign('${c.entity_meta_id}')">${c.entity_label}</div>
-          ${objChip(c.objective||'')}
+          <div style="display:flex;align-items:center;gap:6px;margin-top:2px">${objChip(c.objective||'')}${c.primary_kpi ? `<span style="font-size:11px;color:var(--muted)">${c.primary_kpi.label}: ${c.primary_kpi.display}</span>` : ''}</div>
         </div>
         <div style="display:flex;align-items:center;gap:8px">
           ${scoreCircle(c.health_score,true)}
@@ -2123,7 +2130,7 @@ async function loadReports() {
       <div style="display:flex;align-items:center;justify-content:space-between;padding:8px 0;border-bottom:1px solid var(--border)">
         <div>
           <div style="font-size:13px;font-weight:500;cursor:pointer;color:var(--accent2)" onclick="viewCampaign('${c.entity_meta_id}')">${c.entity_label}</div>
-          ${objChip(c.objective||'')}
+          <div style="display:flex;align-items:center;gap:6px;margin-top:2px">${objChip(c.objective||'')}${c.primary_kpi ? `<span style="font-size:11px;color:var(--muted)">${c.primary_kpi.label}: ${c.primary_kpi.display}</span>` : ''}</div>
         </div>
         <div style="display:flex;align-items:center;gap:8px">
           ${scoreCircle(c.health_score,true)}
@@ -2176,14 +2183,19 @@ async function loadReports() {
 async function changeReportPeriod() {
   const period = document.getElementById('report-period')?.value || 'weekly';
   window._reportPeriod = period;
-  const summary = await api('/reports/summary?period=' + period);
-  // Re-render — simplified: just reload
+  loadReports();
+}
+
+async function changeReportObjective() {
+  window._reportObjective = document.getElementById('report-objective')?.value || '';
   loadReports();
 }
 
 function exportReport(format) {
-  const period = window._reportPeriod || 'weekly';
-  const url = `/api/v1/reports/export?format=${format}&period=${period}`;
+  const period    = window._reportPeriod    || 'weekly';
+  const objective = window._reportObjective || '';
+  const objQ = objective ? '&objective=' + objective : '';
+  const url = `/api/v1/reports/export?format=${format}&period=${period}${objQ}`;
   if (format === 'pdf') {
     window.open(url, '_blank');
   } else {
