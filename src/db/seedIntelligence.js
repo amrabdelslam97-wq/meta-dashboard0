@@ -123,6 +123,10 @@ const ALERT_RULES = [
     trigger_value: 1.0,
     comparison_period: null,
     severity: 'critical',
+    // ROAS is only a meaningful signal for revenue-tracking (sales)
+    // campaigns -- unscoped, this fired on every objective, including ones
+    // where 'roas' is never a real metric at all.
+    objective_scope: 'sales',
   },
 ];
 
@@ -141,6 +145,13 @@ function seedIntelligenceConfig() {
   // preserves the old messaging values exactly), so a straight rename is
   // correct. No-ops once already applied (finds zero 'messaging' rows).
   db.run(`UPDATE objective_scoring_configs SET objective = 'engagement' WHERE objective = 'messaging'`);
+
+  // Idempotent repair: ROAS_BELOW_ONE was originally seeded with
+  // objective_scope=NULL (fires on every objective). INSERT OR IGNORE can't
+  // fix an already-seeded row's column, so scope it to 'sales' directly --
+  // ROAS is only ever a real metric for revenue-tracking campaigns. No-ops
+  // once already applied (finds zero remaining NULL-scoped rows).
+  db.run(`UPDATE alert_rules SET objective_scope = 'sales' WHERE alert_code = 'ROAS_BELOW_ONE' AND objective_scope IS NULL`);
 
   // ── Scoring Configs ──
   for (const cfg of SCORING_CONFIGS) {
@@ -185,12 +196,12 @@ function seedIntelligenceConfig() {
       `INSERT OR IGNORE INTO alert_rules
         (id, alert_code, alert_name, description, metric_key,
          trigger_type, trigger_value, comparison_period,
-         severity, is_active, created_at)
-       VALUES (?,?,?,?,?,?,?,?,?,1,?)`,
+         severity, objective_scope, is_active, created_at)
+       VALUES (?,?,?,?,?,?,?,?,?,?,1,?)`,
       [
         uuidv4(), rule.alert_code, rule.alert_name, rule.description,
         rule.metric_key, rule.trigger_type, rule.trigger_value,
-        rule.comparison_period ?? null, rule.severity, now,
+        rule.comparison_period ?? null, rule.severity, rule.objective_scope ?? null, now,
       ]
     );
   }

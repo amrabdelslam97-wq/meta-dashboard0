@@ -12,30 +12,11 @@
 
 const { v4: uuidv4 } = require('uuid');
 const db = require('../db/database');
-
-// ─────────────────────────────────────────────
-// Evaluate a single condition object against metrics
-// condition_logic shape: { metric, operator, value }
-// Operators: lt | gt | lte | gte | eq
-// ─────────────────────────────────────────────
-function evaluateCondition(condition, metrics) {
-  const { metric, operator, value: threshold } = condition;
-
-  const actual = metrics[metric];
-  if (actual === null || actual === undefined) return false;
-
-  const v = parseFloat(actual);
-  if (isNaN(v)) return false;
-
-  switch (operator) {
-    case 'lt':  return v < threshold;
-    case 'gt':  return v > threshold;
-    case 'lte': return v <= threshold;
-    case 'gte': return v >= threshold;
-    case 'eq':  return v === threshold;
-    default:    return false;
-  }
-}
+// evaluateCondition()/loadApplicableRules() now live in
+// recommendationResolver.js (the single source of truth for "which rules
+// apply to this objective and do they fire") -- re-exported below for
+// backward compatibility with existing importers of this module.
+const { evaluateCondition, loadApplicableRules } = require('./recommendationResolver');
 
 // ─────────────────────────────────────────────
 // Confidence: how far past the threshold the actual value is.
@@ -71,19 +52,6 @@ function resolveRecommendation(ruleCode, entityMetaId) {
      SET dismissed_at = ?
      WHERE rule_code = ? AND entity_meta_id = ? AND dismissed_at IS NULL`,
     [now, ruleCode, entityMetaId]
-  );
-}
-
-// ─────────────────────────────────────────────
-// Load all active rules applicable to an objective
-// ─────────────────────────────────────────────
-function loadApplicableRules(objective) {
-  return db.all(
-    `SELECT * FROM recommendation_rules
-     WHERE is_active = 1
-       AND (objective IS NULL OR objective = ?)
-     ORDER BY priority ASC`,
-    [objective]
   );
 }
 
@@ -314,4 +282,6 @@ module.exports = {
   runRecommendationEngine,
   loadActiveRecommendations,
   computeConfidence,
+  evaluateCondition,
+  loadApplicableRules,
 };
