@@ -2,7 +2,7 @@
 
 const { v4: uuidv4 } = require('uuid');
 const { createTestDb } = require('../helpers/testDb');
-const { getPortfolioHealth, getAccountRankings, getPortfolioSummary } = require('../../src/services/portfolioEngine');
+const { getPortfolioHealth, getAccountRankings, getPortfolioSummary, getPortfolioObjectiveSummary } = require('../../src/services/portfolioEngine');
 
 describe('portfolioEngine', () => {
   let testDb;
@@ -95,5 +95,50 @@ describe('portfolioEngine', () => {
     // from the already-collected campaign list (T4-09 cleanup removed
     // the redundant second getPortfolioHealth() call here).
     expect(summary.portfolio_health.score).toBe(70);
+  });
+
+  // Regression test (T8-01): getPortfolioObjectiveSummary's hardcoded
+  // objectives list still held the pre-taxonomy 'messaging' value (renamed
+  // to 'engagement' by schema.phase8.js) and lacked 'app_promotion' --
+  // real health_score_history rows written for an 'engagement' campaign
+  // were silently excluded from this summary because the query filtered on
+  // `objective = 'messaging'`, which no live row could ever match again.
+  describe('getPortfolioObjectiveSummary (T8-01)', () => {
+    let engagementAccount;
+
+    beforeAll(() => {
+      engagementAccount = uuidv4();
+      testDb.db.run(
+        `INSERT INTO ad_accounts (id, meta_account_id, account_name, access_token_encrypted, status, created_at, updated_at)
+         VALUES (?, 'act_portfolio_engagement', 'Portfolio Engagement', 'enc:v1:x', 'active', datetime('now'), datetime('now'))`,
+        [engagementAccount]
+      );
+      testDb.db.run(
+        `INSERT INTO campaigns (id, ad_account_id, meta_campaign_id, name, objective, status, created_at, updated_at)
+         VALUES (?, ?, 'camp_pf_engagement1', 'Engagement 1', 'engagement', 'active', datetime('now'), datetime('now'))`,
+        [uuidv4(), engagementAccount]
+      );
+      testDb.db.run(
+        `INSERT INTO health_score_history
+           (id, ad_account_id, entity_type, entity_meta_id, entity_label, objective,
+            health_score, health_status, score_reference, score_breakdown, calculated_at)
+         VALUES (?, ?, 'campaign', 'camp_pf_engagement1', 'Engagement 1', 'engagement', 75, 'good', 'platform_default', ?, datetime('now'))`,
+        [uuidv4(), engagementAccount, JSON.stringify({ spend: { value: 200 } })]
+      );
+    });
+
+    test('includes a real engagement campaign (not silently dropped under the old "messaging" key)', () => {
+      const summary = getPortfolioObjectiveSummary();
+      expect(summary.engagement).toBeDefined();
+      expect(summary.engagement.campaign_count).toBe(1);
+      expect(summary.engagement.health_score).toBe(75);
+      expect(summary.messaging).toBeUndefined();
+    });
+
+    test('primary_kpi for engagement/sales is sourced correctly (Conversations/ROAS, not a generic fallback)', () => {
+      const summary = getPortfolioObjectiveSummary();
+      expect(summary.engagement.primary_kpi).toEqual({ key: 'results', label: 'Conversations', costKey: 'cpr', costLabel: 'Cost Per Conversation' });
+      expect(summary.sales.primary_kpi).toEqual({ key: 'roas', label: 'ROAS', costKey: 'cpa', costLabel: 'Cost Per Purchase' });
+    });
   });
 });

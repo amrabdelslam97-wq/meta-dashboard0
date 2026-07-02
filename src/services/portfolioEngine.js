@@ -10,8 +10,22 @@
  */
 
 const db = require('../db/database');
-const { getPrimaryKPI } = require('./objectiveKPIMap');
+const { resolveProfile, VALID_OBJECTIVES } = require('./kpiProfileResolver');
 const { scoreToStatus } = require('./healthScoreEngine');
+
+// Adapts kpiProfileResolver's {primaryKPI:{key,label}, primaryCostKPI:{key,label}}
+// shape to the flat {key,label,costKey,costLabel} shape this file's API
+// response has always used, so GET /portfolio/objective-summary's contract
+// is unchanged for existing callers.
+function getPrimaryKPI(objective) {
+  const profile = resolveProfile(objective);
+  return {
+    key:       profile.primaryKPI.key,
+    label:     profile.primaryKPI.label,
+    costKey:   profile.primaryCostKPI.key,
+    costLabel: profile.primaryCostKPI.label,
+  };
+}
 
 // ─────────────────────────────────────────────
 // Helper: parse score_breakdown JSONB safely
@@ -251,7 +265,13 @@ function getPortfolioObjectiveSummary(dateRange) {
   const { clause, params } = df;
   const accounts = db.all("SELECT id FROM ad_accounts WHERE status='active'");
 
-  const objectives  = ['messaging', 'leads', 'sales', 'traffic', 'awareness', 'unknown'];
+  // Regression fix: this list still held the pre-taxonomy 5 values
+  // ('messaging' instead of 'engagement', no 'app_promotion') after
+  // schema.phase8.js renamed the real objective values health_score_history
+  // rows are written with -- every real 'engagement' campaign's row was
+  // silently excluded from this summary (WHERE h.objective = 'messaging'
+  // matched zero rows). Sourced from kpiProfileResolver's canonical list.
+  const objectives  = [...VALID_OBJECTIVES, 'unknown'];
   const summary     = {};
 
   for (const obj of objectives) {
