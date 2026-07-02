@@ -1,9 +1,18 @@
 /**
  * Health Score Engine
  *
- * Calculates a 0–100 health score per campaign.
- * Uses objective-specific weighted metrics from objective_scoring_configs.
- * Reference: benchmark_metrics (if exists) → platform default thresholds.
+ * Calculates a 0–100 health score per campaign/ad set/ad, persists it to
+ * history, and exposes trend lookups.
+ *
+ * The actual scoring math (loading objective_scoring_configs, resolving
+ * thresholds, the weighted-blend formula) now lives in healthResolver.js
+ * -- calculateHealthScore() here is a thin, backward-compatible wrapper
+ * around healthResolver.resolveHealthScore() so intelligenceOrchestrator.js
+ * (its only caller) needs no changes. scoreToStatus()/normalizeMetric()
+ * are re-exported from healthResolver.js (not duplicated) so existing
+ * importers of this module (portfolioEngine.js imports scoreToStatus;
+ * tests import both) keep working unchanged. See healthResolver.js's
+ * header comment for the full rationale.
  *
  * Output:
  *   health_score  : 0–100
@@ -13,171 +22,21 @@
 
 const { v4: uuidv4 } = require('uuid');
 const db = require('../db/database');
-const { resolveThresholds } = require('./benchmarkResolver');
+const { resolveHealthScore, normalizeMetric, scoreToStatus } = require('./healthResolver');
 
-// ─────────────────────────────────────────────────────────────
-// Status thresholds
-// ─────────────────────────────────────────────────────────────
-function scoreToStatus(score) {
-  if (score >= 80) return 'excellent';
-  if (score >= 60) return 'good';
-  if (score >= 40) return 'warning';
-  return 'critical';
-}
-
-// ─────────────────────────────────────────────────────────────
-// Normalize a single metric value to 0–100
-// ─────────────────────────────────────────────────────────────
-function normalizeMetric(value, config) {
-  if (value === null || value === undefined || isNaN(value)) return null;
-
-  const { comparison_direction, excellent_threshold, critical_threshold,
-          optimal_low, optimal_high } = config;
-
-  // Optimal range (e.g. Frequency — not too low, not too high)
-  if (comparison_direction === 'optimal_range') {
-    const low  = optimal_low  ?? 1.5;
-    const high = optimal_high ?? 3.5;
-
-    if (value < low) {
-      // Below optimal: score rises linearly from 0 to 100 as value approaches low
-      return Math.round(Math.min(100, (value / low) * 100));
-    }
-    if (value <= high) {
-      return 100; // inside optimal band
-    }
-    // Above optimal: score falls linearly
-    const overshoot = value - high;
-    const maxOvershoot = high; // decay over a range equal to the optimal high
-    return Math.round(Math.max(0, 100 - (overshoot / maxOvershoot) * 100));
-  }
-
-  // Lower is better (CPR, CPL, CPA, CPM, CPC, Frequency-above-threshold)
-  if (comparison_direction === 'lower_is_better') {
-    if (value <= excellent_threshold) return 100;
-    if (value >= critical_threshold)  return 0;
-    return Math.round(
-      100 * (critical_threshold - value) / (critical_threshold - excellent_threshold)
-    );
-  }
-
-  // Higher is better (CTR, ROAS, Reach, Volume)
-  if (value >= excellent_threshold) return 100;
-  if (value <= critical_threshold)  return 0;
-  return Math.round(
-    100 * (value - critical_threshold) / (excellent_threshold - critical_threshold)
-  );
-}
-
-// ─────────────────────────────────────────────────────────────
-// Load scoring configs for an objective
-// Returns array of config rows ordered by metric_key
-// ─────────────────────────────────────────────────────────────
-function loadScoringConfigs(objective) {
-  return db.all(
-    `SELECT * FROM objective_scoring_configs WHERE objective = ?`,
-    [objective]
-  );
-}
-
-// ─────────────────────────────────────────────────────────────
-// Extract the relevant metric value from a metrics object.
-// metricsFetcher.js's normalizeRow() (real Meta data) and every mock
-// generator in campaign/adSet/ad intelligence already produce the
-// canonical metric_key names used by objective_scoring_configs (cpr,
-// cpl, cpa, roas, purchases, leads, ctr, cpm, cpc, frequency, reach,
-// impressions, landing_page_views) directly, so no aliasing is needed
-// here -- an earlier alias-fallback table referenced raw Meta field
-// names (e.g. "cost_per_result", "purchase_roas") that no code path
-// in this app ever produces, since metricsFetcher already normalizes
-// them before they reach this function.
-// ─────────────────────────────────────────────────────────────
-function extractMetric(metrics, key) {
-  if (metrics[key] !== undefined && metrics[key] !== null) {
-    return parseFloat(metrics[key]);
-  }
-  return null;
-}
-
-// ─────────────────────────────────────────────────────────────
-// MAIN: Calculate health score for one campaign
-// ─────────────────────────────────────────────────────────────
-function calculateHealthScore(campaign, metrics, adAccountId) {
-  const { objective } = campaign;
-
-  // Load per-objective weights
-  const scoringConfigs = loadScoringConfigs(objective);
-
-  if (!scoringConfigs.length) {
-    // Unknown objective — return neutral score
-    return {
-      health_score: 50,
-      health_status: 'warning',
-      score_reference: 'platform_default',
-      breakdown: {},
-      note: `No scoring config found for objective: ${objective}`,
-    };
-  }
-
-  // Validate weights sum to ~1.0
-  const totalWeight = scoringConfigs.reduce((sum, c) => sum + c.weight, 0);
-
-  let weightedTotal = 0;
-  let weightUsed    = 0;
-  const breakdown   = {};
-  let scoreReference = 'platform_default';
-
-  for (const config of scoringConfigs) {
-    const value = extractMetric(metrics, config.metric_key);
-
-    if (value === null) {
-      // Metric not available — skip it, redistribute weight
-      breakdown[config.metric_key] = { value: null, normalized: null, weight: config.weight };
-      continue;
-    }
-
-    // Resolve thresholds
-    const thresholds = resolveThresholds(objective, config.metric_key, adAccountId, config);
-    if (thresholds.source !== 'platform_default') {
-      scoreReference = 'benchmark';
-    }
-
-    const normalized = normalizeMetric(value, thresholds);
-
-    if (normalized !== null) {
-      // Normalize weight relative to available metrics
-      weightedTotal += normalized * config.weight;
-      weightUsed    += config.weight;
-    }
-
-    breakdown[config.metric_key] = {
-      value:      Math.round(value * 100) / 100,
-      normalized,
-      weight:     config.weight,
-      source:     thresholds.source,
-    };
-  }
-
-  // Blend the weighted average of available metrics with a neutral 50,
-  // proportional to how much of the objective's total scoring weight was
-  // actually available. A campaign with only one of four metrics present
-  // (e.g. CTR alone, weight 0.10 of 1.0) should land close to neutral, not
-  // swing to that one metric's extreme — this is what redistributes trust
-  // away from single-metric noise when data is genuinely incomplete.
-  let finalScore = 50;
-  if (weightUsed > 0 && totalWeight > 0) {
-    const coverage = weightUsed / totalWeight;
-    finalScore = Math.round((weightedTotal / totalWeight) + 50 * (1 - coverage));
-  }
-
-  finalScore = Math.max(0, Math.min(100, finalScore));
-
-  return {
-    health_score:    finalScore,
-    health_status:   scoreToStatus(finalScore),
-    score_reference: scoreReference,
-    breakdown,
-  };
+/**
+ * MAIN: Calculate health score for one entity (campaign, ad set, or ad).
+ * @param {object} campaign - entity being scored (or a synthetic
+ *   campaign-shaped object for ad sets/ads, matching the existing convention)
+ * @param {object} metrics - normalized metrics
+ * @param {string} adAccountId
+ * @param {string|null} optimizationGoal - optional, an ad set's
+ *   optimization_goal, threaded through to the KPI Profile Resolver for
+ *   context (e.g. Video Views sub-profile detection) -- does not change
+ *   which objective_scoring_configs rows are used to compute the score.
+ */
+function calculateHealthScore(campaign, metrics, adAccountId, optimizationGoal = null) {
+  return resolveHealthScore(campaign, metrics, adAccountId, optimizationGoal);
 }
 
 // ─────────────────────────────────────────────────────────────

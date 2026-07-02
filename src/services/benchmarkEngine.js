@@ -13,6 +13,7 @@
  */
 
 const { resolveThresholds } = require('./benchmarkResolver');
+const { resolveProfile } = require('./kpiProfileResolver');
 
 // resolveBenchmark(objective, metricKey, adAccountId) === resolveThresholds
 // with no pre-loaded platform config, which already returns null when
@@ -96,27 +97,18 @@ function evaluateMetric(value, benchmark) {
 // ─────────────────────────────────────────────
 // MAIN: Evaluate all relevant metrics for a campaign
 // ─────────────────────────────────────────────
-function evaluateBenchmarks(campaign, metrics, adAccountId) {
+// Which metrics to evaluate per objective now comes from the KPI Profile
+// Resolver (src/services/kpiProfileResolver.js) instead of a hand-maintained
+// copy here -- this list had previously drifted from
+// objective_scoring_configs (seedIntelligence.js), silently dropping each
+// objective's primary volume KPI (leads, purchases, landing_page_views) and
+// substituting a generic 'cpm' that wasn't part of that objective's scoring
+// weights at all. The resolver is now the single source of truth for both.
+function evaluateBenchmarks(campaign, metrics, adAccountId, optimizationGoal = null) {
   const { objective } = campaign;
 
-  // Which metrics to evaluate per objective. Kept in sync with the metric
-  // sets actually seeded in objective_scoring_configs (seedIntelligence.js)
-  // -- this list had drifted from that source of truth, silently dropping
-  // each objective's primary volume KPI (leads, purchases,
-  // landing_page_views) from benchmark evaluation and substituting a
-  // generic 'cpm' that isn't part of that objective's scoring weights at
-  // all. 'unknown' has no seeded scoring config, so it keeps a reasonable
-  // universal fallback.
-  const metricsByObjective = {
-    messaging: ['cpr', 'ctr', 'frequency', 'reach'],
-    leads:     ['cpl', 'leads', 'ctr', 'frequency'],
-    sales:     ['roas', 'cpa', 'purchases', 'ctr'],
-    traffic:   ['cpc', 'ctr', 'landing_page_views', 'frequency'],
-    awareness: ['reach', 'cpm', 'frequency', 'impressions'],
-    unknown:   ['ctr', 'cpm', 'frequency'],
-  };
-
-  const relevantMetrics = metricsByObjective[objective] || metricsByObjective.unknown;
+  const profile = resolveProfile(objective, optimizationGoal);
+  const relevantMetrics = profile.benchmarkMetrics;
 
   const results = {};
 

@@ -79,8 +79,8 @@ describe('healthScoreEngine.calculateHealthScore', () => {
     testDb.cleanup();
   });
 
-  test('all messaging metrics present and excellent -> perfect score', () => {
-    const campaign = { meta_campaign_id: 'camp_test_1', name: 'Test Campaign', objective: 'messaging' };
+  test('all engagement metrics present and excellent -> perfect score', () => {
+    const campaign = { meta_campaign_id: 'camp_test_1', name: 'Test Campaign', objective: 'engagement' };
     const metrics = { cpr: 5, ctr: 3, frequency: 2.5, reach: 5000 };
     const result = calculateHealthScore(campaign, metrics, 'test-account-id');
     expect(result.health_score).toBe(100);
@@ -92,13 +92,13 @@ describe('healthScoreEngine.calculateHealthScore', () => {
   // correct weight-coverage-blended formula and then immediately overwrite
   // it with a plain weightedTotal/weightUsed average that ignored how much
   // of the objective's total weight was actually covered. With only CTR
-  // available (weight 0.30 of the messaging objective's 1.0 total) and CTR
+  // available (weight 0.30 of the engagement objective's 1.0 total) and CTR
   // itself scoring 100, the old buggy code would produce 100 (since
   // 30/0.3 = 100, identical to full coverage). The fixed formula blends
   // toward neutral (50) proportional to the *missing* 0.70 of weight,
   // producing 65 instead -- this is the exact bug this test guards against.
   test('partial metric coverage blends toward neutral instead of extrapolating from one metric (T4-01)', () => {
-    const campaign = { meta_campaign_id: 'camp_test_2', name: 'Partial Data Campaign', objective: 'messaging' };
+    const campaign = { meta_campaign_id: 'camp_test_2', name: 'Partial Data Campaign', objective: 'engagement' };
     const metrics = { ctr: 3 }; // only CTR present; cpr/frequency/reach missing
     const result = calculateHealthScore(campaign, metrics, 'test-account-id');
     expect(result.health_score).toBe(65);
@@ -143,7 +143,7 @@ describe('healthScoreEngine.saveHealthScore + getHealthScoreTrend', () => {
     testDb.cleanup();
   });
 
-  const campaign = { meta_campaign_id: 'camp_trend_test', name: 'Trend Campaign', objective: 'messaging' };
+  const campaign = { meta_campaign_id: 'camp_trend_test', name: 'Trend Campaign', objective: 'engagement' };
 
   test('saveHealthScore writes a new row and getHealthScoreTrend reads it back', () => {
     const result = { health_score: 72, health_status: 'good', score_reference: 'platform_default', breakdown: {} };

@@ -98,6 +98,7 @@ async function runAdSetIntelligence(adSetId, options = {}) {
     meta_campaign_id: adSet.meta_adset_id,   // used as entity_meta_id in DB
     name:             adSet.name,
     objective:        campaign?.objective || 'unknown',
+    optimization_goal: adSet.optimization_goal || null,
   };
 
   // ── Fetch metrics ──

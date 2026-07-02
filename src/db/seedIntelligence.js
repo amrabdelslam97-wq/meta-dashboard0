@@ -22,43 +22,34 @@
 
 const { v4: uuidv4 } = require('uuid');
 const db = require('./database');
+const { PROFILES } = require('../services/kpiProfileResolver');
 
 // ─────────────────────────────────────────────────────────────────────
 // DEFAULT SCORING CONFIGS
 // Weights must sum to 1.0 per objective.
 // Thresholds are platform defaults (fallback when no benchmark exists).
+//
+// Sourced from kpiProfileResolver.PROFILES's scoringWeights instead of a
+// hand-duplicated copy here (this array used to drift from that resolver's
+// content, which is exactly the "kept in sync by hand" problem the resolver
+// layer exists to eliminate). 'unknown' has no scoringWeights (flatMap
+// yields nothing for it), matching its existing "no seeded config" fallback
+// behavior in healthResolver.js unchanged.
 // ─────────────────────────────────────────────────────────────────────
-const SCORING_CONFIGS = [
-  // ── MESSAGING ──
-  { objective: 'messaging', metric_key: 'cpr',       weight: 0.40, direction: 'lower_is_better',  excellent: 5,    good: 15,   warning: 30,  critical: 60  },
-  { objective: 'messaging', metric_key: 'ctr',       weight: 0.30, direction: 'higher_is_better', excellent: 3,    good: 2,    warning: 1,   critical: 0.5 },
-  { objective: 'messaging', metric_key: 'frequency', weight: 0.20, direction: 'optimal_range',    excellent: null, good: null, warning: null, critical: null, opt_low: 1.5, opt_high: 3.5 },
-  { objective: 'messaging', metric_key: 'reach',     weight: 0.10, direction: 'higher_is_better', excellent: 5000, good: 1000, warning: 300,  critical: 50  },
-
-  // ── LEADS ──
-  { objective: 'leads', metric_key: 'cpl',       weight: 0.40, direction: 'lower_is_better',  excellent: 5,    good: 20,   warning: 50,  critical: 100 },
-  { objective: 'leads', metric_key: 'leads',     weight: 0.30, direction: 'higher_is_better', excellent: 50,   good: 20,   warning: 5,   critical: 1   },
-  { objective: 'leads', metric_key: 'ctr',       weight: 0.20, direction: 'higher_is_better', excellent: 3,    good: 2,    warning: 1,   critical: 0.5 },
-  { objective: 'leads', metric_key: 'frequency', weight: 0.10, direction: 'optimal_range',    excellent: null, good: null, warning: null, critical: null, opt_low: 1.5, opt_high: 3.5 },
-
-  // ── SALES ──
-  { objective: 'sales', metric_key: 'roas',      weight: 0.35, direction: 'higher_is_better', excellent: 4,    good: 2,    warning: 1,   critical: 0.5 },
-  { objective: 'sales', metric_key: 'cpa',       weight: 0.35, direction: 'lower_is_better',  excellent: 20,   good: 60,   warning: 120, critical: 250 },
-  { objective: 'sales', metric_key: 'purchases', weight: 0.20, direction: 'higher_is_better', excellent: 20,   good: 5,    warning: 1,   critical: 0   },
-  { objective: 'sales', metric_key: 'ctr',       weight: 0.10, direction: 'higher_is_better', excellent: 3,    good: 2,    warning: 1,   critical: 0.5 },
-
-  // ── TRAFFIC ──
-  { objective: 'traffic', metric_key: 'cpc',              weight: 0.30, direction: 'lower_is_better',  excellent: 0.5,  good: 1.5,  warning: 3,   critical: 6   },
-  { objective: 'traffic', metric_key: 'ctr',              weight: 0.30, direction: 'higher_is_better', excellent: 3,    good: 2,    warning: 1,   critical: 0.5 },
-  { objective: 'traffic', metric_key: 'landing_page_views', weight: 0.25, direction: 'higher_is_better', excellent: 1000, good: 300, warning: 50,  critical: 5   },
-  { objective: 'traffic', metric_key: 'frequency',        weight: 0.15, direction: 'optimal_range',    excellent: null, good: null, warning: null, critical: null, opt_low: 1.5, opt_high: 3.5 },
-
-  // ── AWARENESS ──
-  { objective: 'awareness', metric_key: 'reach',     weight: 0.40, direction: 'higher_is_better', excellent: 50000, good: 10000, warning: 2000, critical: 300 },
-  { objective: 'awareness', metric_key: 'cpm',       weight: 0.30, direction: 'lower_is_better',  excellent: 3,     good: 8,     warning: 20,   critical: 50  },
-  { objective: 'awareness', metric_key: 'frequency', weight: 0.20, direction: 'optimal_range',    excellent: null,  good: null,  warning: null,  critical: null, opt_low: 1.5, opt_high: 4.0 },
-  { objective: 'awareness', metric_key: 'impressions', weight: 0.10, direction: 'higher_is_better', excellent: 100000, good: 20000, warning: 3000, critical: 500 },
-];
+const SCORING_CONFIGS = Object.entries(PROFILES).flatMap(([objective, profile]) =>
+  (profile.scoringWeights || []).map(w => ({
+    objective,
+    metric_key: w.metric_key,
+    weight:     w.weight,
+    direction:  w.direction,
+    excellent:  w.excellent ?? null,
+    good:       w.good ?? null,
+    warning:    w.warning ?? null,
+    critical:   w.critical ?? null,
+    opt_low:    w.opt_low ?? null,
+    opt_high:   w.opt_high ?? null,
+  }))
+);
 
 // ─────────────────────────────────────────────────────────────────────
 // RECOMMENDATION RULES (Phase 2 minimal: 3 rules)
@@ -138,6 +129,18 @@ const ALERT_RULES = [
 function seedIntelligenceConfig() {
   console.log('[Seed] Seeding intelligence configuration...');
   const now = new Date().toISOString();
+
+  // Idempotent repair: real production data (and any DB seeded before the
+  // ODAX taxonomy fix) has objective_scoring_configs rows keyed by the old
+  // 'messaging' objective. schema.phase8.js already remapped campaigns.
+  // objective='messaging' -> 'engagement', but INSERT OR IGNORE below can't
+  // rename an already-seeded row -- without this, healthResolver's
+  // `WHERE objective = ?` lookup for real engagement campaigns would find
+  // nothing and silently fall back to a neutral score. The weights/
+  // thresholds are unchanged (kpiProfileResolver.js's engagement profile
+  // preserves the old messaging values exactly), so a straight rename is
+  // correct. No-ops once already applied (finds zero 'messaging' rows).
+  db.run(`UPDATE objective_scoring_configs SET objective = 'engagement' WHERE objective = 'messaging'`);
 
   // ── Scoring Configs ──
   for (const cfg of SCORING_CONFIGS) {

@@ -53,7 +53,7 @@ function loadAdWithParent(id) {
   );
 
   const adSet = db.get(
-    `SELECT id, meta_adset_id, name FROM ad_sets WHERE id = ?`,
+    `SELECT id, meta_adset_id, name, optimization_goal FROM ad_sets WHERE id = ?`,
     [ad.ad_set_id]
   );
 
@@ -102,6 +102,7 @@ async function runAdIntelligence(adId, options = {}) {
     meta_campaign_id: ad.meta_ad_id,          // used as entity_meta_id in DB
     name:             ad.name,
     objective:        campaign?.objective || 'unknown',
+    optimization_goal: adSet?.optimization_goal || null,
   };
 
   // ── Fetch metrics ──

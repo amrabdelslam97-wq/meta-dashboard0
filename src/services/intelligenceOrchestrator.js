@@ -39,11 +39,15 @@ const { runAlertEngine, loadActiveAlerts }                   = require('./alertE
  */
 function runScoringPipeline(entity, currentMetrics, priorMetrics, adAccountId, entityType = 'campaign') {
   const entityMetaId = entity.meta_campaign_id;
+  // Only ad sets carry a real optimization_goal (see adSetIntelligence.js's
+  // synthetic entity); campaigns/ads leave this undefined and every
+  // resolver call below falls back to the base objective profile unchanged.
+  const optimizationGoal = entity.optimization_goal || null;
 
-  const healthResult = calculateHealthScore(entity, currentMetrics, adAccountId);
+  const healthResult = calculateHealthScore(entity, currentMetrics, adAccountId, optimizationGoal);
   saveHealthScore(entity, adAccountId, healthResult, entityType);
 
-  const benchmarkResult = evaluateBenchmarks(entity, currentMetrics, adAccountId);
+  const benchmarkResult = evaluateBenchmarks(entity, currentMetrics, adAccountId, optimizationGoal);
 
   const newRecommendations = runRecommendationEngine(
     entity, currentMetrics, adAccountId, healthResult.health_score, entityType

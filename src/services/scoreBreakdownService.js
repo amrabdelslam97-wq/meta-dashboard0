@@ -10,35 +10,12 @@
  */
 
 const db = require('../db/database');
-
-// ─────────────────────────────────────────────
-// Human-readable metric labels per metric key
-// ─────────────────────────────────────────────
-const METRIC_LABELS = {
-  // Messaging
-  cpr:                     'Cost Per Conversation',
-  results:                 'Conversations',
-  // Leads
-  cpl:                     'Cost Per Lead',
-  leads:                   'Leads',
-  // Sales
-  roas:                    'Return on Ad Spend (ROAS)',
-  cpa:                     'Cost Per Purchase',
-  purchases:               'Purchases',
-  purchase_value:          'Purchase Value',
-  // Traffic
-  landing_page_views:      'Landing Page Views',
-  cost_per_landing_page_view: 'Cost Per Landing Page View',
-  link_clicks:             'Link Clicks',
-  // Universal
-  ctr:                     'Click-Through Rate',
-  cpm:                     'Cost Per 1,000 Impressions (CPM)',
-  cpc:                     'Cost Per Click',
-  frequency:               'Frequency',
-  reach:                   'Reach',
-  impressions:             'Impressions',
-  spend:                   'Spend',
-};
+// Human-readable metric labels now live in metricResolver.js (the KPI
+// Profile Resolver's companion module) -- this file previously had its own
+// independent copy that had already drifted (missing video/engagement/
+// app-install labels the resolver layer added). Re-exported under the same
+// name for backward compatibility with any existing importer.
+const { METRIC_LABELS } = require('./metricResolver');
 
 // ─────────────────────────────────────────────
 // Format metric value with appropriate unit

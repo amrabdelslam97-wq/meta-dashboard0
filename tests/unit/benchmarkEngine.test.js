@@ -80,7 +80,7 @@ describe('benchmarkEngine.evaluateBenchmarks (metric-set-per-objective, T4-06)',
   // KPI and substituting an unrelated 'cpm'. Assert the exact metric sets
   // now evaluated per objective match the seeded scoring configs.
   test.each([
-    ['messaging', ['cpr', 'ctr', 'frequency', 'reach']],
+    ['engagement', ['cpr', 'ctr', 'frequency', 'reach']],
     ['leads',     ['cpl', 'leads', 'ctr', 'frequency']],
     ['sales',     ['roas', 'cpa', 'purchases', 'ctr']],
     ['traffic',   ['cpc', 'ctr', 'landing_page_views', 'frequency']],
@@ -98,9 +98,9 @@ describe('benchmarkEngine.evaluateBenchmarks (metric-set-per-objective, T4-06)',
   });
 
   test('summary tallies statuses correctly against platform-default thresholds', () => {
-    // messaging: cpr excellent<=5, ctr excellent>=3, frequency optimal 1.5-3.5, reach excellent>=5000
+    // engagement: cpr excellent<=5, ctr excellent>=3, frequency optimal 1.5-3.5, reach excellent>=5000
     const result = evaluateBenchmarks(
-      { objective: 'messaging' },
+      { objective: 'engagement' },
       { cpr: 5, ctr: 3, frequency: 2.5, reach: 5000 },
       'test-account'
     );
@@ -112,5 +112,20 @@ describe('benchmarkEngine.evaluateBenchmarks (metric-set-per-objective, T4-06)',
   test('missing metric values resolve to no_data rather than throwing', () => {
     const result = evaluateBenchmarks({ objective: 'sales' }, {}, 'test-account');
     expect(result.summary.no_data).toBe(4);
+  });
+
+  test('a matching ad-set optimization_goal switches an awareness campaign to the Video Views benchmark set', () => {
+    const result = evaluateBenchmarks(
+      { objective: 'awareness' },
+      { cost_per_thruplay: 1, video_retention_rate: 50, ctr: 1, frequency: 2 },
+      'test-account',
+      'THRUPLAY'
+    );
+    expect(Object.keys(result.metrics).sort()).toEqual(['cost_per_thruplay', 'ctr', 'frequency', 'video_retention_rate']);
+  });
+
+  test('a non-Video-Views optimization_goal leaves the base awareness benchmark set unchanged', () => {
+    const result = evaluateBenchmarks({ objective: 'awareness' }, {}, 'test-account', 'REACH');
+    expect(Object.keys(result.metrics).sort()).toEqual(['cpm', 'frequency', 'impressions', 'reach']);
   });
 });
