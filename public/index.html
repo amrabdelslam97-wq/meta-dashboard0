@@ -96,11 +96,12 @@ tbody tr:hover{background:rgba(99,102,241,.04)}
 .chip.active{background:rgba(34,197,94,.12);color:var(--green)}
 .chip.paused{background:rgba(234,179,8,.1);color:var(--yellow)}
 .chip.archived{background:var(--bg3);color:var(--muted)}
-.chip.messaging{background:rgba(99,102,241,.15);color:var(--accent2)}
+.chip.engagement{background:rgba(99,102,241,.15);color:var(--accent2)}
 .chip.leads{background:rgba(59,130,246,.15);color:var(--blue)}
 .chip.sales{background:rgba(34,197,94,.12);color:var(--green)}
 .chip.traffic{background:rgba(249,115,22,.12);color:var(--orange)}
 .chip.awareness{background:rgba(168,85,247,.12);color:#c084fc}
+.chip.app_promotion{background:rgba(236,72,153,.12);color:#f472b6}
 .chip.unknown{background:var(--bg3);color:var(--muted)}
 
 /* ── Section header ── */
@@ -609,14 +610,24 @@ window.ic = {
   ads:             [],   // ads for selected ad set
 };
 
-// ── KPI helpers (inline — no server round-trip needed) ──
+// ── KPI helpers (inline — mirrors src/services/kpiProfileResolver.js's
+// primaryKPI/primaryCostKPI per objective; kept in sync manually since this
+// is a static frontend file with no build step to import the backend
+// module directly, but the objective keys/labels here must match the
+// resolver's PROFILES exactly. 'engagement' replaces the old 'messaging'
+// key (Meta's OUTCOME_ENGAGEMENT taxonomy -- see schema.phase8.js) and
+// 'app_promotion' is new -- both objectives are real values campaigns.
+// objective can now hold; leaving them out silently fell back to the
+// generic Spend/CPM card, which is what real 'engagement' campaigns were
+// doing until this fix. ──
 const _KPI = {
-  messaging: { key:'results',            label:'Conversations',      costKey:'cpr',  costLabel:'Cost/Conv' },
-  leads:     { key:'leads',              label:'Leads',              costKey:'cpl',  costLabel:'Cost/Lead' },
-  sales:     { key:'roas',               label:'ROAS',               costKey:'cpa',  costLabel:'CPA' },
-  traffic:   { key:'landing_page_views', label:'Landing Page Views', costKey:'cost_per_landing_page_view', costLabel:'Cost/LPV' },
-  awareness: { key:'reach',              label:'Reach',              costKey:'cpm',  costLabel:'CPM' },
-  unknown:   { key:'spend',              label:'Spend',              costKey:'cpm',  costLabel:'CPM' },
+  engagement:    { key:'results',            label:'Conversations',      costKey:'cpr',  costLabel:'Cost/Conv' },
+  leads:         { key:'leads',              label:'Leads',              costKey:'cpl',  costLabel:'Cost/Lead' },
+  sales:         { key:'roas',               label:'ROAS',               costKey:'cpa',  costLabel:'CPA' },
+  traffic:       { key:'landing_page_views', label:'Landing Page Views', costKey:'cost_per_landing_page_view', costLabel:'Cost/LPV' },
+  awareness:     { key:'reach',              label:'Reach',              costKey:'cpm',  costLabel:'CPM' },
+  app_promotion: { key:'app_installs',       label:'App Installs',       costKey:'cpi',  costLabel:'Cost/Install' },
+  unknown:       { key:'spend',              label:'Spend',              costKey:'cpm',  costLabel:'CPM' },
 };
 function icKPI(obj) { return _KPI[obj] || _KPI.unknown; }
 function icScoreStyle(s) {
@@ -636,10 +647,12 @@ function icFmtVal(key, val, currency='') {
   if (isNaN(v)) return '<span style="color:var(--muted);font-style:italic">No data</span>';
   if (key==='roas') return v.toFixed(2)+'x';
   if (key==='ctr')  return v.toFixed(2)+'%';
-  if (['cpr','cpl','cpa','cpm','cpc','cost_per_landing_page_view'].includes(key))
+  if (['cpr','cpl','cpa','cpm','cpc','cost_per_landing_page_view','cpi','cost_per_thruplay','cost_per_engagement'].includes(key))
     return v.toFixed(2) + (currency?' '+currency:'');
-  if (['results','leads','purchases','landing_page_views','reach','impressions'].includes(key))
+  if (['results','leads','purchases','landing_page_views','reach','impressions','app_installs','thruplays','video_plays','post_engagements','page_engagements'].includes(key))
     return v.toLocaleString('en-US');
+  if (key==='video_retention_rate')
+    return v.toFixed(1)+'%';
   if (key==='spend' || key==='purchase_value')
     return v.toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2}) + (currency?' '+currency:'');
   return v.toFixed(2);
@@ -990,7 +1003,25 @@ async function icLoadAdSetsView(el) {
     } catch {}
   }));
 
+  window.ic._adSetInsightMap = insightMap;
+  window.ic._adSetKpi = kpi;
+
+  const goals = [...new Set(data.map(s => s.optimization_goal).filter(Boolean))];
+
   el.innerHTML = `
+    ${goals.length > 1 ? `
+    <div class="filter-bar" style="margin-bottom:8px">
+      <select onchange="icFilterAdSetsByGoal(this.value)" id="ic-adset-goal-filter">
+        <option value="">All Optimization Goals</option>
+        ${goals.map(g => `<option value="${g}">${g}</option>`).join('')}
+      </select>
+    </div>` : ''}
+    <div id="ic-adset-rows">${icRenderAdSetRows(data, kpi, insightMap)}</div>
+  `;
+}
+
+function icRenderAdSetRows(data, kpi, insightMap) {
+  return `
     <div class="ic-col-label ic-adset-label">
       <span>Ad Set</span><span>Delivery</span><span>Health</span><span>Audience</span>
       <span>Results (${kpi.label})</span><span>Cost (${kpi.costLabel})</span><span>CTR</span><span>Freq</span><span>Spend</span><span></span>
@@ -1007,7 +1038,7 @@ async function icLoadAdSetsView(el) {
       return `<div class="ic-adset-row">
         <div>
           <div class="ic-cell-name">${s.name}</div>
-          <div style="margin-top:2px;display:flex;gap:4px">${objChip(s.objective)}</div>
+          <div style="margin-top:2px;display:flex;gap:4px;align-items:center">${objChip(s.objective)}${s.optimization_goal ? `<span class="chip" style="font-size:9px;text-transform:none" title="Optimization Goal">${s.optimization_goal}</span>` : ''}</div>
         </div>
         <div><span class="chip ${s.status}" style="font-size:10px">${s.status}</span></div>
         <div style="display:flex;align-items:center;gap:5px">${icScoreEl(hs)}</div>
@@ -1024,6 +1055,13 @@ async function icLoadAdSetsView(el) {
       </div>`;
     }).join('')}
   `;
+}
+
+function icFilterAdSetsByGoal(goal) {
+  const all = window.ic.adsets || [];
+  const filtered = goal ? all.filter(s => s.optimization_goal === goal) : all;
+  document.getElementById('ic-adset-rows').innerHTML =
+    icRenderAdSetRows(filtered, window.ic._adSetKpi, window.ic._adSetInsightMap || {});
 }
 
 // ── DRILL TO ADS ──
@@ -1191,135 +1229,6 @@ async function viewCampaign(metaCampaignId) {
   return; // IC handles the rest
 }
 
-async function _viewCampaignLegacy(metaCampaignId) {
-  currentPage = 'campaign-detail';
-  document.getElementById('page-title').textContent = 'Campaign Details';
-  document.getElementById('content').innerHTML = '<div class="loader"><span class="spin">◌</span> Loading insights...</div>';
-
-  // Get internal ID
-  const camps = await api(`/campaigns?limit=200`);
-  const camp = camps.data?.find(c => c.meta_campaign_id === metaCampaignId);
-  if (!camp) { document.getElementById('content').innerHTML = '<div class="empty">Campaign not found</div>'; return; }
-
-  const useMock = !camp.meta_campaign_id?.startsWith('act_') ? true : false;
-  const insights = await api(insightsUrl(`/campaigns/${camp.id}/insights`));
-  updateFreshnessBar(insights);
-
-  const m = insights.metrics || {};
-  const h = insights;
-
-  document.getElementById('content').innerHTML = `
-  <div style="margin-bottom:16px">
-    <button class="btn btn-ghost btn-sm" onclick="navigate('campaigns')">← Back to Campaigns</button>
-  </div>
-  <div class="flex items-center gap12" style="margin-bottom:20px;flex-wrap:wrap">
-    <div>
-      <h3 style="font-size:18px;font-weight:700">${camp.name}</h3>
-      <div style="display:flex;align-items:center;gap:8px;margin-top:6px">
-        ${objChip(camp.objective)}
-        <span class="chip ${camp.status}">${camp.status}</span>
-      </div>
-    </div>
-    <div style="margin-left:auto;text-align:center">
-      ${scoreCircle(h.health_score)}
-      <div class="badge ${scoreClass(h.health_score)}" style="margin-top:6px">${scoreLabel(h.health_score)}</div>
-      <button class="btn btn-ghost btn-sm" style="margin-top:6px;font-size:11px" onclick="toggleBreakdown('${camp.meta_campaign_id}','campaign')">Why?</button>
-    </div>
-  </div>
-
-  <div class="tabs" id="detail-tabs">
-    <div class="tab active" onclick="showTab('overview',this)">Overview</div>
-    <div class="tab" onclick="showTab('recommendations',this)">Recommendations (${(h.recommendations||[]).length})</div>
-    <div class="tab" onclick="showTab('alerts',this)">Alerts (${(h.alerts||[]).length})</div>
-    <div class="tab" onclick="showTab('breakdowns',this);loadBreakdownCharts('${camp.meta_campaign_id}')">Breakdowns</div>
-    <div class="tab" onclick="showTab('history',this);loadTrendChartReal('${camp.id}','${insights.date_range?.since||''}','${insights.date_range?.until||''}')">Trend & History</div>
-  </div>
-
-  <div id="tab-overview">
-    <div class="details-grid">
-      ${metricCard('Spend', m.spend, 'EGP', deltaHtml(h.deltas,'spend',false))}
-      ${metricCard('Impressions', m.impressions ? Number(m.impressions).toLocaleString() : null, '', deltaHtml(h.deltas,'impressions',false))}
-      ${metricCard('Reach', m.reach ? Number(m.reach).toLocaleString() : null, '', deltaHtml(h.deltas,'reach',false))}
-      ${metricCard('CTR', m.ctr, '%', deltaHtml(h.deltas,'ctr',false))}
-      ${metricCard('CPM', m.cpm, '', deltaHtml(h.deltas,'cpm',true))}
-      ${metricCard('Frequency', m.frequency, '', deltaHtml(h.deltas,'frequency',true))}
-      ${metricCard('CPC', m.cpc, '', deltaHtml(h.deltas,'cpc',true))}
-      ${m.cpr !== undefined ? metricCard('CPR', m.cpr, '', deltaHtml(h.deltas,'cpr',true)) : ''}
-      ${m.cpl !== undefined ? metricCard('CPL', m.cpl, '', deltaHtml(h.deltas,'cpl',true)) : ''}
-      ${m.roas !== undefined ? metricCard('ROAS', m.roas, 'x', deltaHtml(h.deltas,'roas',false)) : ''}
-      ${m.purchases !== undefined ? metricCard('Purchases', m.purchases, '', deltaHtml(h.deltas,'purchases',false)) : ''}
-      ${m.leads !== undefined ? metricCard('Leads', m.leads, '', deltaHtml(h.deltas,'leads',false)) : ''}
-      ${m.purchase_value !== undefined ? metricCard('Purchase Value', m.purchase_value, 'EGP', deltaHtml(h.deltas,'purchase_value',false)) : ''}
-      ${m.landing_page_views !== undefined ? metricCard('LPV', m.landing_page_views, '', deltaHtml(h.deltas,'landing_page_views',false)) : ''}
-    </div>
-
-    ${h.goal_achievement?.has_targets ? `
-    <div class="card mt16">
-      <div class="section-title" style="margin-bottom:12px">🎯 Goal Achievement — <span class="badge ${h.goal_achievement.composite_status?.toLowerCase().replace(' ','-')||'none'}">${h.goal_achievement.composite_status||'—'}</span></div>
-      ${Object.entries(h.goal_achievement.metric_results||{}).map(([k,v])=>`
-        <div style="display:flex;align-items:center;justify-content:space-between;padding:6px 0;border-bottom:1px solid var(--border)">
-          <span style="text-transform:uppercase;font-size:11px;color:var(--muted)">${k}</span>
-          <div style="display:flex;align-items:center;gap:10px">
-            <span>${v.actual ?? '—'}</span>
-            <span class="text-muted">/ target: ${v.target}</span>
-            <span class="badge ${v.status?.toLowerCase().replace(' ','-')||'none'}">${v.status}</span>
-          </div>
-        </div>
-      `).join('')}
-    </div>
-    ` : '<div class="card mt16 text-muted" style="font-size:13px">No targets set for this account. Set targets in Settings.</div>'}
-
-    <div class="card mt16">
-      <div class="section-title" style="margin-bottom:12px">📊 Benchmark Comparison</div>
-      ${Object.entries(h.benchmark?.metrics||{}).map(([k,v])=>{
-        const sc = v.status==='above'?'excellent':v.status==='optimal'?'good':v.status==='below'?'warning':v.status==='critical'?'critical':'none';
-        const arrow = v.deviation !== null ? (v.deviation > 0 ? `▲ ${Math.abs(v.deviation)}%` : `▼ ${Math.abs(v.deviation)}%`) : '';
-        return `<div style="display:flex;align-items:center;justify-content:space-between;padding:6px 0;border-bottom:1px solid var(--border)">
-          <span style="text-transform:uppercase;font-size:11px;color:var(--muted)">${k}</span>
-          <div style="display:flex;align-items:center;gap:10px">
-            <span>${v.value ?? '—'}</span>
-            <span class="text-muted">vs ${v.target ?? '—'}</span>
-            <span class="badge ${sc}">${v.status||'—'}</span>
-            <span class="text-muted" style="font-size:11px">${arrow}</span>
-          </div>
-        </div>`;
-      }).join('')}
-    </div>
-  </div>
-
-  <div id="tab-recommendations" style="display:none">
-    ${renderRecCards(h.recommendations || [], metaCampaignId)}
-  </div>
-
-  <div id="tab-alerts" style="display:none">
-    ${renderAlertCards(h.alerts || [])}
-  </div>
-
-  <div id="score-breakdown-panel" style="margin-bottom:12px"></div>
-
-  <div id="tab-breakdowns" style="display:none">
-    <div class="loader"><span class="spin">◌</span> Click the Breakdowns tab to load...</div>
-  </div>
-
-  <div id="tab-history" style="display:none">
-    <div id="history-chart-wrap">
-      <div class="loader"><span class="spin">◌</span> Click the Trend tab to load...</div>
-    </div>
-  </div>
-  `;
-
-  // History + breakdowns are loaded on tab click (Phase 4)
-}
-
-function metricCard(label, value, unit, delta) {
-  const v = value !== null && value !== undefined ? fmtNum(value) + (unit ? ' ' + unit : '') : '—';
-  const dHtml = delta ? `<span style="margin-left:6px">${delta}</span>` : '';
-  return `<div class="detail-item">
-    <div class="detail-label">${label}</div>
-    <div class="detail-value small">${v}${dHtml}</div>
-  </div>`;
-}
-
 function showTab(name, el) {
   document.querySelectorAll('[id^="tab-"]').forEach(t => t.style.display = 'none');
   document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
@@ -1431,6 +1340,10 @@ async function loadRecommendations() {
       <option value="">All Campaigns</option>
       ${(camps.data||[]).map(c=>`<option value="${c.meta_campaign_id}">${c.name}</option>`).join('')}
     </select>
+    <select onchange="filterRecs()" id="rf-objective">
+      <option value="">All Objectives</option>
+      <option>awareness</option><option>traffic</option><option>engagement</option><option>leads</option><option>app_promotion</option><option>sales</option>
+    </select>
   </div>
   <div id="rec-list">
     ${renderFullRecList(recs.data || [], campMap)}
@@ -1473,12 +1386,14 @@ function filterRecs() {
   const sev  = document.getElementById('rf-severity').value;
   const stat = document.getElementById('rf-status').value;
   const camp = document.getElementById('rf-campaign').value;
+  const obj  = document.getElementById('rf-objective').value;
   let filtered = window._allRecs || [];
   if (sev)  filtered = filtered.filter(r => r.severity === sev);
   if (stat === 'completed') filtered = filtered.filter(r => r.action_taken);
   else if (stat === 'dismissed') filtered = filtered.filter(r => r.dismissed_at);
   else filtered = filtered.filter(r => !r.dismissed_at);
   if (camp) filtered = filtered.filter(r => r.entity_meta_id === camp);
+  if (obj)  filtered = filtered.filter(r => r.objective === obj);
   document.getElementById('rec-list').innerHTML = renderFullRecList(filtered, window._campMap || {});
 }
 
@@ -1526,6 +1441,10 @@ async function loadAlerts() {
       <option value="resolved">Resolved</option>
       <option value="dismissed">Dismissed</option>
     </select>
+    <select onchange="filterAlerts()" id="af-objective">
+      <option value="">All Objectives</option>
+      <option>awareness</option><option>traffic</option><option>engagement</option><option>leads</option><option>app_promotion</option><option>sales</option>
+    </select>
   </div>
   <div class="table-wrap" id="alerts-table">
     ${renderAlertsTable(alerts.data || [])}
@@ -1538,7 +1457,7 @@ function renderAlertsTable(data) {
   if (!data.length) return '<div class="empty" style="padding:40px">No alerts found.</div>';
   return `<table>
     <thead><tr>
-      <th>Severity</th><th>Campaign</th><th>Alert</th><th>Message</th>
+      <th>Severity</th><th>Campaign</th><th>Objective</th><th>Alert</th><th>Message</th>
       <th>Occurrences</th><th>First Detected</th><th>Last Detected</th><th>Actions</th>
     </tr></thead>
     <tbody>
@@ -1546,6 +1465,7 @@ function renderAlertsTable(data) {
     <tr class="alert-row ${a.severity}">
       <td><span class="badge ${a.severity}">${a.severity}</span></td>
       <td class="td-name">${a.campaign_name||a.entity_label||'—'}</td>
+      <td>${a.objective ? objChip(a.objective) : '—'}</td>
       <td><code style="font-size:11px;background:var(--bg3);padding:2px 6px;border-radius:4px">${a.alert_code}</code></td>
       <td class="td-muted" style="max-width:250px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${a.alert_message||'—'}</td>
       <td>${a.occurrence_count||1}×</td>
@@ -1563,12 +1483,14 @@ function renderAlertsTable(data) {
 function filterAlerts() {
   const sev  = document.getElementById('af-severity').value;
   const stat = document.getElementById('af-status').value;
+  const obj  = document.getElementById('af-objective').value;
   let filtered = window._allAlerts || [];
   if (sev) filtered = filtered.filter(a => a.severity === sev);
   if (stat === 'snoozed') filtered = filtered.filter(a => a.snoozed_until && new Date(a.snoozed_until) > new Date());
   else if (stat === 'resolved') filtered = filtered.filter(a => a.status === 'resolved');
   else if (stat === 'dismissed') filtered = filtered.filter(a => a.status === 'dismissed');
   else filtered = filtered.filter(a => a.status === 'active' && (!a.snoozed_until || new Date(a.snoozed_until) < new Date()));
+  if (obj) filtered = filtered.filter(a => a.objective === obj);
   document.getElementById('alerts-table').innerHTML = renderAlertsTable(filtered);
 }
 
@@ -1725,7 +1647,7 @@ function openAddTarget(accounts) {
   <div class="form-group">
     <label class="form-label">Objective</label>
     <select class="form-input" id="tgt-obj">
-      <option>messaging</option><option>leads</option><option>sales</option><option>traffic</option><option>awareness</option>
+      <option>engagement</option><option>leads</option><option>sales</option><option>traffic</option><option>awareness</option><option>app_promotion</option>
     </select>
   </div>
   <div class="form-row">
@@ -1770,7 +1692,7 @@ function openAddBenchmark() {
   <div class="form-row">
     <div class="form-group"><label class="form-label">Objective</label>
       <select class="form-input" id="bm-obj">
-        <option>messaging</option><option>leads</option><option>sales</option><option>traffic</option><option>awareness</option>
+        <option>engagement</option><option>leads</option><option>sales</option><option>traffic</option><option>awareness</option><option>app_promotion</option>
       </select>
     </div>
     <div class="form-group"><label class="form-label">Metric Key</label>
@@ -1988,7 +1910,11 @@ async function loadDecisions() {
     <div class="priority-pill high"     onclick="filterDecisions('high')"    >🟠 High (${dec.by_priority?.high||0})</div>
     <div class="priority-pill medium"   onclick="filterDecisions('medium')"  >🟡 Medium (${dec.by_priority?.medium||0})</div>
     <div class="priority-pill low"      onclick="filterDecisions('low')"     >⚪ Low (${dec.by_priority?.low||0})</div>
-    <span class="text-muted" style="font-size:12px;margin-left:auto">Generated: ${new Date(dec.generated_at).toLocaleTimeString()}</span>
+    <select onchange="filterDecisionsByObjective(this.value)" id="df-objective" style="margin-left:auto">
+      <option value="">All Objectives</option>
+      <option>awareness</option><option>traffic</option><option>engagement</option><option>leads</option><option>app_promotion</option><option>sales</option>
+    </select>
+    <span class="text-muted" style="font-size:12px">Generated: ${new Date(dec.generated_at).toLocaleTimeString()}</span>
   </div>
 
   <div style="display:grid;grid-template-columns:1fr 360px;gap:20px">
@@ -2082,6 +2008,12 @@ function renderDecisionCards(decisions) {
 function filterDecisions(priority) {
   const all = window._allDecisions || [];
   const filtered = priority ? all.filter(d => d.priority === priority) : all;
+  document.getElementById('decisions-list').innerHTML = renderDecisionCards(filtered);
+}
+
+function filterDecisionsByObjective(objective) {
+  const all = window._allDecisions || [];
+  const filtered = objective ? all.filter(d => d.objective === objective) : all;
   document.getElementById('decisions-list').innerHTML = renderDecisionCards(filtered);
 }
 
