@@ -15,6 +15,20 @@
 
 const db = require('../db/database');
 const { detectTrend, loadLatestScoresMap, loadScoreHistoryMap, loadAlertCountsMap } = require('./topWinnersEngine');
+const { resolveProfile, DEFAULT_OPPORTUNITY_THRESHOLDS } = require('./kpiProfileResolver');
+
+// ─────────────────────────────────────────────
+// Resolve the gating thresholds for one objective. These four opportunity
+// types' thresholds used to be universal literals with no objective
+// awareness at all -- now sourced from the KPI Profile Resolver (a
+// profile's own `opportunityThresholds` overrides the shared default, none
+// currently define one, so behavior is unchanged until a profile is
+// deliberately tuned).
+// ─────────────────────────────────────────────
+function resolveOpportunityThresholds(objective) {
+  const profile = resolveProfile(objective);
+  return { ...DEFAULT_OPPORTUNITY_THRESHOLDS, ...(profile.opportunityThresholds || {}) };
+}
 
 // ─────────────────────────────────────────────
 // Opportunity type definitions
@@ -64,6 +78,7 @@ function detectOpportunitiesForCampaign(camp, latestScore, scoreHistory, alertCo
   const trend = detectTrend(scoreHistory);
   const criticalAlerts = alertCounts?.critical || 0;
   const warningAlerts  = alertCounts?.warning  || 0;
+  const thresholds = resolveOpportunityThresholds(camp.objective);
 
   const histCount = scoreHistory.length;
   const confidence = computeConfidence(hs, histCount, criticalAlerts + warningAlerts);
@@ -71,8 +86,8 @@ function detectOpportunitiesForCampaign(camp, latestScore, scoreHistory, alertCo
   // ── 1. Ready To Scale ─────────────────────
   // Criteria: health >= 70, frequency < 3.5, no critical alerts, not declining
   if (
-    hs >= 70 &&
-    (freq === null || parseFloat(freq) < 3.5) &&
+    hs >= thresholds.readyToScaleHealthMin &&
+    (freq === null || parseFloat(freq) < thresholds.readyToScaleFrequencyMax) &&
     criticalAlerts === 0 &&
     trend !== 'declining'
   ) {
@@ -96,8 +111,8 @@ function detectOpportunitiesForCampaign(camp, latestScore, scoreHistory, alertCo
   // ── 2. Audience Expansion ─────────────────
   // Criteria: health >= 65, frequency >= 3.5, performance still decent
   if (
-    hs >= 65 &&
-    freq !== null && parseFloat(freq) >= 3.5 && parseFloat(freq) < 6.0 &&
+    hs >= thresholds.audienceExpansionHealthMin &&
+    freq !== null && parseFloat(freq) >= thresholds.audienceExpansionFrequencyMin && parseFloat(freq) < thresholds.audienceExpansionFrequencyMax &&
     criticalAlerts === 0
   ) {
     opportunities.push({
@@ -128,7 +143,7 @@ function detectOpportunitiesForCampaign(camp, latestScore, scoreHistory, alertCo
     r.entity_meta_id === camp.meta_campaign_id && r.rule_code === 'LOW_ROAS'
   );
 
-  if (hasFatigueRec && !hasROASCritical && hs >= 40) {
+  if (hasFatigueRec && !hasROASCritical && hs >= thresholds.creativeTestingHealthMin) {
     opportunities.push({
       type:         OPPORTUNITY_TYPES.CREATIVE_TESTING,
       priority:     'medium',
@@ -146,7 +161,7 @@ function detectOpportunitiesForCampaign(camp, latestScore, scoreHistory, alertCo
 
   // ── 4. Budget Reallocation ────────────────
   // Criteria: top-scoring campaign (winner) — flag that budget could shift here from losers
-  if (hs >= 75 && trend !== 'declining' && criticalAlerts === 0) {
+  if (hs >= thresholds.budgetReallocationHealthMin && trend !== 'declining' && criticalAlerts === 0) {
     opportunities.push({
       type:         OPPORTUNITY_TYPES.BUDGET_REALLOCATION,
       priority:     'low',
@@ -223,4 +238,4 @@ function detectAllOpportunities(limit = 10) {
   return allOpportunities.slice(0, limit);
 }
 
-module.exports = { detectAllOpportunities, OPPORTUNITY_TYPES };
+module.exports = { detectAllOpportunities, OPPORTUNITY_TYPES, resolveOpportunityThresholds };

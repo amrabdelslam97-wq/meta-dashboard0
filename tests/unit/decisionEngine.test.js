@@ -147,4 +147,34 @@ describe('decisionEngine.generateTodaysDecisions', () => {
     expect(decision).toBeDefined();
     expect(decision.decision_type).toBe('PAUSE_CAMPAIGN');
   });
+
+  // T6-01: decisionEngine now resolves REC_TO_DECISION/ALERT_TO_DECISION
+  // through the KPI Profile Resolver (an objective-specific override would
+  // win, none exist yet) instead of a flat lookup -- this proves the
+  // resolver-driven mapping still resolves correctly end to end for a
+  // non-'sales' objective, and that the objectiveWeight=1.0 default leaves
+  // priority scoring unaffected (same score a flat 1.0 multiplier would
+  // produce).
+  test('mapping resolution and objectiveWeight=1.0 default work correctly for a non-sales objective', () => {
+    testDb.db.run(
+      `INSERT INTO campaigns (id, ad_account_id, meta_campaign_id, name, objective, status, created_at, updated_at)
+       VALUES (?, ?, 'camp_engagement_alert', 'Engagement Alert Campaign', 'engagement', 'active', datetime('now'), datetime('now'))`,
+      [uuidv4(), accountId]
+    );
+    testDb.db.run(
+      `INSERT INTO active_alerts
+         (id, ad_account_id, alert_code, entity_type, entity_meta_id, entity_label, severity, alert_message)
+       VALUES (?, ?, 'CTR_DROP', 'campaign', 'camp_engagement_alert', 'Engagement Alert Campaign', 'warning', 'CTR dropped')`,
+      [uuidv4(), accountId]
+    );
+
+    const result = generateTodaysDecisions(accountId);
+    const decision = result.decisions.find(d => d.meta_campaign_id === 'camp_engagement_alert');
+    expect(decision).toBeDefined();
+    expect(decision.decision_type).toBe('REFRESH_CREATIVE');
+    // healthScore defaults to 50 (no history) -> healthUrgency=17.5, alert warning=18,
+    // trend 'stable' (no history) = 5, goal neutral = 4, spend 0 = 0 -> 44.5 -> round 45,
+    // objectiveWeight 1.0 leaves it unchanged.
+    expect(decision.priority_score).toBe(45);
+  });
 });

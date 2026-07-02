@@ -28,6 +28,7 @@ const db                 = require('../db/database');
 const { detectTrend }  = require('./topWinnersEngine');
 const { detectAllOpportunities } = require('./opportunityEngine');
 const { computePriorityScore } = require('./prioritizationEngine');
+const { resolveProfile } = require('./kpiProfileResolver');
 
 // ─────────────────────────────────────────────
 // Map recommendation rule codes to decision types.
@@ -75,6 +76,19 @@ const OPPORTUNITY_TO_DECISION = {
   'Budget Reallocation':     { type: 'REALLOCATE_BUDGET',  base_priority: 'low'    },
 };
 
+// ─────────────────────────────────────────────
+// Resolve a rule/alert/opportunity code to its decision mapping, checking
+// the KPI Profile Resolver for an objective-specific override before
+// falling back to the flat default map. No profile currently defines a
+// decisionOverrides entry -- this is the hook, not invented per-objective
+// business content (see kpiProfileResolver.js's opportunityThresholds
+// comment for the same rationale) -- so behavior is unchanged today.
+// ─────────────────────────────────────────────
+function resolveDecisionMapping(objective, code, defaultMap) {
+  const profile = resolveProfile(objective);
+  return (profile.decisionOverrides && profile.decisionOverrides[code]) || defaultMap[code];
+}
+
 // Human-readable action labels
 const DECISION_LABELS = {
   SCALE_CAMPAIGN:     '🚀 Scale Campaign',
@@ -101,7 +115,7 @@ function decisionsFromRecommendations(adAccountId) {
 
   const decisions = [];
   for (const rec of recs) {
-    const mapping = REC_TO_DECISION[rec.rule_code];
+    const mapping = resolveDecisionMapping(rec.objective, rec.rule_code, REC_TO_DECISION);
     if (!mapping) continue;
 
     const latestScore = db.get(`
@@ -110,10 +124,11 @@ function decisionsFromRecommendations(adAccountId) {
     `, [rec.entity_meta_id]);
 
     const priorityResult = computePriorityScore({
-      healthScore:    latestScore?.health_score || 50,
-      alertSeverity:  rec.severity,
-      alertCount:     1,
-      trendDirection: getTrendForEntity(rec.entity_meta_id),
+      healthScore:     latestScore?.health_score || 50,
+      alertSeverity:   rec.severity,
+      alertCount:      1,
+      trendDirection:  getTrendForEntity(rec.entity_meta_id),
+      objectiveWeight: resolveProfile(rec.objective).priorityWeight ?? 1.0,
     });
 
     decisions.push({
@@ -129,7 +144,7 @@ function decisionsFromRecommendations(adAccountId) {
       priority_score:  priorityResult.priority_score,
       reason:          rec.recommendation_title,
       detail:          rec.recommendation_body,
-      suggested_action: actionText(mapping.type, rec.campaign_name || rec.entity_label),
+      suggested_action: actionText(mapping.type, rec.campaign_name || rec.entity_label, rec.objective),
       supporting_metrics: rec.metric_snapshot ? JSON.parse(rec.metric_snapshot) : {},
       health_score:    latestScore?.health_score || null,
       confidence:      rec.severity === 'critical' ? 'high' : 'medium',
@@ -153,7 +168,7 @@ function decisionsFromAlerts(adAccountId) {
 
   const decisions = [];
   for (const alert of alerts) {
-    const mapping = ALERT_TO_DECISION[alert.alert_code];
+    const mapping = resolveDecisionMapping(alert.objective, alert.alert_code, ALERT_TO_DECISION);
     if (!mapping) continue;
 
     const latestScore = db.get(`
@@ -162,10 +177,11 @@ function decisionsFromAlerts(adAccountId) {
     `, [alert.entity_meta_id]);
 
     const priorityResult = computePriorityScore({
-      healthScore:    latestScore?.health_score || 50,
-      alertSeverity:  alert.severity,
-      alertCount:     alert.occurrence_count || 1,
-      trendDirection: getTrendForEntity(alert.entity_meta_id),
+      healthScore:     latestScore?.health_score || 50,
+      alertSeverity:   alert.severity,
+      alertCount:      alert.occurrence_count || 1,
+      trendDirection:  getTrendForEntity(alert.entity_meta_id),
+      objectiveWeight: resolveProfile(alert.objective).priorityWeight ?? 1.0,
     });
 
     decisions.push({
@@ -181,7 +197,7 @@ function decisionsFromAlerts(adAccountId) {
       priority_score:  priorityResult.priority_score,
       reason:          alert.alert_message || alert.alert_code,
       detail:          `Alert detected ${alert.occurrence_count || 1} time(s). First detected: ${alert.first_detected_at?.slice(0,10)}`,
-      suggested_action: actionText(mapping.type, alert.campaign_name || alert.entity_label),
+      suggested_action: actionText(mapping.type, alert.campaign_name || alert.entity_label, alert.objective),
       supporting_metrics: {
         detected_value:  alert.detected_value,
         threshold_value: alert.threshold_value,
@@ -200,12 +216,14 @@ function decisionsFromAlerts(adAccountId) {
 function decisionsFromOpportunities() {
   const opportunities = detectAllOpportunities(20);
   return opportunities.map(opp => {
-    const mapping = OPPORTUNITY_TO_DECISION[opp.type] || { type: 'REVIEW_PERFORMANCE', base_priority: 'low' };
+    const mapping = resolveDecisionMapping(opp.objective, opp.type, OPPORTUNITY_TO_DECISION)
+      || { type: 'REVIEW_PERFORMANCE', base_priority: 'low' };
     const priorityResult = computePriorityScore({
-      healthScore:    opp.health_score || 50,
-      alertSeverity:  null,
-      alertCount:     0,
-      trendDirection: opp.supporting_metrics?.trend_direction || 'stable',
+      healthScore:     opp.health_score || 50,
+      alertSeverity:   null,
+      alertCount:      0,
+      trendDirection:  opp.supporting_metrics?.trend_direction || 'stable',
+      objectiveWeight: resolveProfile(opp.objective).priorityWeight ?? 1.0,
     });
 
     return {
@@ -233,18 +251,25 @@ function decisionsFromOpportunities() {
 // ─────────────────────────────────────────────
 // Action text templates
 // ─────────────────────────────────────────────
-function actionText(type, name) {
-  const templates = {
-    SCALE_CAMPAIGN:     `Increase budget for "${name}" by 20–50%.`,
-    PAUSE_CAMPAIGN:     `Pause "${name}" and review performance before re-enabling.`,
-    REFRESH_CREATIVE:   `Launch 2–3 new creative variations in "${name}".`,
-    EXPAND_AUDIENCE:    `Duplicate ad sets in "${name}" with expanded or lookalike audiences.`,
-    FIX_TRACKING:       `Audit the conversion events and pixel setup for "${name}".`,
-    BUDGET_WARNING:     `Check remaining budget for "${name}" — may exhaust before day end.`,
-    REVIEW_PERFORMANCE: `Review recent performance changes in "${name}" and identify root cause.`,
-    REALLOCATE_BUDGET:  `Consider moving budget from underperformers into "${name}".`,
-  };
-  return templates[type] || `Review campaign "${name}".`;
+const DEFAULT_ACTION_TEXT_TEMPLATES = {
+  SCALE_CAMPAIGN:     (name) => `Increase budget for "${name}" by 20–50%.`,
+  PAUSE_CAMPAIGN:     (name) => `Pause "${name}" and review performance before re-enabling.`,
+  REFRESH_CREATIVE:   (name) => `Launch 2–3 new creative variations in "${name}".`,
+  EXPAND_AUDIENCE:    (name) => `Duplicate ad sets in "${name}" with expanded or lookalike audiences.`,
+  FIX_TRACKING:       (name) => `Audit the conversion events and pixel setup for "${name}".`,
+  BUDGET_WARNING:     (name) => `Check remaining budget for "${name}" — may exhaust before day end.`,
+  REVIEW_PERFORMANCE: (name) => `Review recent performance changes in "${name}" and identify root cause.`,
+  REALLOCATE_BUDGET:  (name) => `Consider moving budget from underperformers into "${name}".`,
+};
+
+// `objective` is optional -- when provided, a profile's own
+// actionTextOverrides[type] (if any) wins over the default template. No
+// profile currently defines one (same "hook, not invented content"
+// rationale as resolveDecisionMapping above).
+function actionText(type, name, objective = null) {
+  const override = objective ? resolveProfile(objective).actionTextOverrides?.[type] : null;
+  const template = override || DEFAULT_ACTION_TEXT_TEMPLATES[type];
+  return template ? template(name) : `Review campaign "${name}".`;
 }
 
 // ─────────────────────────────────────────────

@@ -27,6 +27,26 @@
 
 const VALID_OBJECTIVES = ['awareness', 'traffic', 'engagement', 'leads', 'app_promotion', 'sales'];
 
+// Shared fallback thresholds for opportunityEngine.js's four opportunity
+// types (Ready To Scale / Audience Expansion / Creative Testing / Budget
+// Reallocation) -- these were previously hardcoded literals inside
+// opportunityEngine.js itself with no objective awareness at all. A profile
+// may override any of these via its own `opportunityThresholds` (merged on
+// top of this default); none do yet -- there's no real per-objective data
+// in this account to justify divergent thresholds (see Decisions Made in
+// the plan: ship the override mechanism, not invented content), so every
+// objective currently gets the exact literals opportunityEngine.js already
+// used, unchanged.
+const DEFAULT_OPPORTUNITY_THRESHOLDS = {
+  readyToScaleHealthMin:          70,
+  readyToScaleFrequencyMax:       3.5,
+  audienceExpansionHealthMin:     65,
+  audienceExpansionFrequencyMin:  3.5,
+  audienceExpansionFrequencyMax:  6.0,
+  creativeTestingHealthMin:       40,
+  budgetReallocationHealthMin:    75,
+};
+
 // ─────────────────────────────────────────────
 // Per-objective profiles
 // ─────────────────────────────────────────────
@@ -34,6 +54,7 @@ const PROFILES = {
   awareness: {
     primaryKPI:     { key: 'reach', label: 'Reach' },
     primaryCostKPI: { key: 'cpm',   label: 'CPM' },
+    priorityWeight: 1.0,
     displayMetrics: ['reach', 'impressions', 'cpm', 'frequency', 'ctr', 'spend'],
     trendMetrics:   ['reach', 'cpm', 'frequency'],
     scoringMetrics: ['reach', 'cpm', 'frequency', 'impressions'],
@@ -80,6 +101,7 @@ const PROFILES = {
   traffic: {
     primaryKPI:     { key: 'landing_page_views', label: 'Landing Page Views' },
     primaryCostKPI: { key: 'cost_per_landing_page_view', label: 'Cost Per LPV' },
+    priorityWeight: 1.0,
     displayMetrics: ['landing_page_views', 'cost_per_landing_page_view', 'link_clicks', 'ctr', 'cpc', 'cpm', 'frequency', 'spend'],
     trendMetrics:   ['landing_page_views', 'cost_per_landing_page_view', 'ctr'],
     scoringMetrics: ['cpc', 'ctr', 'landing_page_views', 'frequency'],
@@ -111,6 +133,7 @@ const PROFILES = {
   engagement: {
     primaryKPI:     { key: 'results', label: 'Conversations' },
     primaryCostKPI: { key: 'cpr',     label: 'Cost Per Conversation' },
+    priorityWeight: 1.0,
     displayMetrics: ['results', 'cpr', 'ctr', 'cpm', 'frequency', 'reach', 'spend', 'impressions', 'clicks'],
     trendMetrics:   ['results', 'cpr', 'ctr'],
     scoringMetrics: ['cpr', 'ctr', 'frequency', 'reach'],
@@ -137,6 +160,7 @@ const PROFILES = {
   leads: {
     primaryKPI:     { key: 'leads', label: 'Leads' },
     primaryCostKPI: { key: 'cpl',   label: 'Cost Per Lead' },
+    priorityWeight: 1.0,
     displayMetrics: ['leads', 'cpl', 'ctr', 'cpm', 'frequency', 'reach', 'spend', 'impressions', 'clicks'],
     trendMetrics:   ['leads', 'cpl', 'ctr'],
     scoringMetrics: ['cpl', 'leads', 'ctr', 'frequency'],
@@ -168,6 +192,7 @@ const PROFILES = {
   app_promotion: {
     primaryKPI:     { key: 'app_installs', label: 'App Installs' },
     primaryCostKPI: { key: 'cpi',          label: 'Cost Per Install' },
+    priorityWeight: 1.0,
     displayMetrics: ['app_installs', 'cpi', 'ctr', 'cpm', 'frequency', 'reach', 'spend', 'impressions', 'clicks'],
     trendMetrics:   ['app_installs', 'cpi', 'ctr'],
     scoringMetrics: ['cpi', 'app_installs', 'ctr', 'frequency'],
@@ -195,6 +220,7 @@ const PROFILES = {
   sales: {
     primaryKPI:     { key: 'roas', label: 'ROAS' },
     primaryCostKPI: { key: 'cpa',  label: 'Cost Per Purchase' },
+    priorityWeight: 1.0,
     displayMetrics: ['roas', 'purchases', 'purchase_value', 'cpa', 'ctr', 'cpm', 'frequency', 'spend'],
     trendMetrics:   ['roas', 'cpa', 'purchases'],
     scoringMetrics: ['roas', 'cpa', 'purchases', 'ctr'],
@@ -220,6 +246,7 @@ const PROFILES = {
   unknown: {
     primaryKPI:     { key: 'spend', label: 'Spend' },
     primaryCostKPI: { key: 'cpm',   label: 'CPM' },
+    priorityWeight: 1.0,
     displayMetrics: ['spend', 'ctr', 'cpm', 'frequency', 'reach', 'impressions'],
     trendMetrics:   ['spend', 'ctr', 'cpm'],
     scoringMetrics: ['ctr', 'cpm', 'frequency'],
@@ -265,4 +292,4 @@ function resolveProfile(objective, optimizationGoal = null) {
   return base;
 }
 
-module.exports = { VALID_OBJECTIVES, PROFILES, resolveProfile };
+module.exports = { VALID_OBJECTIVES, PROFILES, resolveProfile, DEFAULT_OPPORTUNITY_THRESHOLDS };
