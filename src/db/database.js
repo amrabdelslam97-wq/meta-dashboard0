@@ -57,7 +57,7 @@ function persist() {
  * Execute a write statement (INSERT, UPDATE, DELETE, CREATE).
  * Automatically persists to disk after execution.
  */
-function run(sql, params = []) {
+function run(sql, params = undefined) {
   if (!db) throw new Error('Database not initialized');
   db.run(sql, params);
   persist();
