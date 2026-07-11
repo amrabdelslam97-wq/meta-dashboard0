@@ -44,6 +44,7 @@ const { requireEncryptionKey }   = require('./services/tokenCrypto');
 const apiRouter                  = require('./api/router');
 const { errorHandler }           = require('./middleware/errorHandler');
 const { parseAllowedOrigins, requestOrigin, isOriginAllowed } = require('./middleware/corsOriginPolicy');
+const { displayBanner }          = require('./startup-banner');
 
 /**
  * Parse TRUST_PROXY into whatever Express's "trust proxy" setting expects
@@ -216,13 +217,12 @@ async function start() {
   startAutoSyncScheduler();
 
   app.listen(PORT, () => {
-    console.log('');
-    console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
-    console.log('  Meta Ads Intelligence System');
-    console.log('  Phase 6C — Full Integration');
-    console.log(`  Open:  http://localhost:${PORT}`);
-    console.log(`  API:   http://localhost:${PORT}/api/v1`);
-    console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+    displayBanner({
+      port: PORT,
+      environment: process.env.NODE_ENV || 'development',
+      dbPath: DB_PATH,
+      startTime: new Date(),
+    });
   });
 }
 
