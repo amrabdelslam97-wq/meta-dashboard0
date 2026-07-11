@@ -13,6 +13,7 @@ const { resolveDateRange } = require('../../services/dateRangeHelper');
 const { asyncHandler } = require('../../middleware/errorHandler');
 
 const audienceIntelligenceEngine = require('../../services/audienceIntelligenceEngine');
+const audienceScoringEngine = require('../../services/audienceScoringEngine');
 const placementIntelligenceEngine = require('../../services/placementIntelligenceEngine');
 const deviceIntelligenceEngine = require('../../services/deviceIntelligenceEngine');
 const publisherPlatformIntelligenceEngine = require('../../services/publisherPlatformIntelligenceEngine');
@@ -66,6 +67,54 @@ router.get('/audience-recommendations/:campaignId', asyncHandler(async (req, res
 
   const dateRange = resolveDateRange(req.query);
   const data = audienceIntelligenceEngine.generateAudienceRecommendations(metaCampaignId, dateRange);
+
+  return res.json({ data });
+}));
+
+// ── Audience Scoring (Phase 23) ────────────────────────────────────
+
+router.get('/audience-score/:campaignId/:dimension', asyncHandler(async (req, res) => {
+  const metaCampaignId = loadCampaignMetaId(req.params.campaignId);
+  if (!metaCampaignId) return res.status(404).json({ error: 'Campaign not found' });
+
+  const dimension = req.params.dimension || 'age_gender';
+  const dateRange = resolveDateRange(req.query);
+  const data = audienceScoringEngine.scoreAudienceDimension(metaCampaignId, dimension, dateRange);
+
+  return res.json({ data });
+}));
+
+router.get('/audience-score-ranking/:campaignId', asyncHandler(async (req, res) => {
+  const metaCampaignId = loadCampaignMetaId(req.params.campaignId);
+  if (!metaCampaignId) return res.status(404).json({ error: 'Campaign not found' });
+
+  const dateRange = resolveDateRange(req.query);
+  const data = audienceScoringEngine.getRankingAcrossAllDimensions(metaCampaignId, dateRange);
+
+  return res.json({ data });
+}));
+
+// ── Audience Diagnostics (Phase 23) ────────────────────────────────
+
+router.get('/audience-diagnostics/:campaignId/:dimension', asyncHandler(async (req, res) => {
+  const metaCampaignId = loadCampaignMetaId(req.params.campaignId);
+  if (!metaCampaignId) return res.status(404).json({ error: 'Campaign not found' });
+
+  const dimension = req.params.dimension || 'age_gender';
+  const dateRange = resolveDateRange(req.query);
+  const data = audienceIntelligenceEngine.generateAudienceDiagnostics(metaCampaignId, dimension, dateRange);
+
+  return res.json({ data });
+}));
+
+// ── Advanced Opportunity Engine (Phase 23) ────────────────────────────
+
+router.get('/audience-advanced-opportunities/:campaignId', asyncHandler(async (req, res) => {
+  const metaCampaignId = loadCampaignMetaId(req.params.campaignId);
+  if (!metaCampaignId) return res.status(404).json({ error: 'Campaign not found' });
+
+  const dateRange = resolveDateRange(req.query);
+  const data = audienceIntelligenceEngine.detectAdvancedOpportunities(metaCampaignId, dateRange);
 
   return res.json({ data });
 }));

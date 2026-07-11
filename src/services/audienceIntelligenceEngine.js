@@ -303,9 +303,174 @@ function generateAudienceRecommendations(metaCampaignId, dateRange = defaultRang
   };
 }
 
+/**
+ * Generate comprehensive audience diagnostics.
+ * Explains patterns, anomalies, and insights in natural language.
+ */
+function generateAudienceDiagnostics(metaCampaignId, dimension = 'age_gender', dateRange = defaultRange()) {
+  const breakdown = getAudienceBreakdown(metaCampaignId, dimension, dateRange);
+  const scoring = require('./audienceScoringEngine');
+
+  const diagnostics = {
+    strengths: [],
+    weaknesses: [],
+    anomalies: [],
+    recommendations: [],
+  };
+
+  if (breakdown.segments.length === 0) {
+    return diagnostics;
+  }
+
+  const totalSpend = breakdown.segments.reduce((s, seg) => s + seg.spend, 0);
+  const avgCPA = breakdown.segments.reduce((s, seg) => s + (seg.cost_per_result || 0), 0) / breakdown.segments.filter(s => s.cost_per_result).length;
+
+  // Detect strengths
+  for (const seg of breakdown.segments.slice(0, 3)) {
+    if (seg.cost_per_result && seg.cost_per_result < avgCPA * 0.7) {
+      diagnostics.strengths.push(
+        `${seg.segment} converts 30%+ more efficiently (CPA: $${seg.cost_per_result} vs avg $${Math.round(avgCPA)})`
+      );
+    }
+    if (seg.ctr > 1.5) {
+      diagnostics.strengths.push(`${seg.segment} shows strong engagement (CTR: ${seg.ctr}%)`);
+    }
+  }
+
+  // Detect weaknesses
+  for (const seg of breakdown.segments.filter(s => s.contribution_pct > 10)) {
+    if (seg.cost_per_result && seg.cost_per_result > avgCPA * 1.5) {
+      diagnostics.weaknesses.push(
+        `${seg.segment} converts 50%+ less efficiently (CPA: $${seg.cost_per_result}) despite ${seg.contribution_pct}% of budget`
+      );
+    }
+    if (seg.ctr && seg.ctr < 0.5) {
+      diagnostics.weaknesses.push(`${seg.segment} has low engagement (CTR: ${seg.ctr}%) despite high spend`);
+    }
+  }
+
+  // Detect anomalies
+  const bestROAS = Math.max(...breakdown.segments.filter(s => s.roas).map(s => s.roas || 0));
+  const worstROAS = Math.min(...breakdown.segments.filter(s => s.roas).map(s => s.roas || 0));
+  if (bestROAS && worstROAS && bestROAS > worstROAS * 3) {
+    const best = breakdown.segments.find(s => s.roas === bestROAS);
+    const worst = breakdown.segments.find(s => s.roas === worstROAS);
+    diagnostics.anomalies.push(
+      `${best?.segment} delivers ${Math.round(bestROAS / (worstROAS || 1))}x better ROAS than ${worst?.segment} — significant efficiency gap`
+    );
+  }
+
+  // High frequency warning
+  const highFrequencySegs = breakdown.segments.filter(s => s.frequency > 3);
+  if (highFrequencySegs.length > 0) {
+    diagnostics.anomalies.push(
+      `${highFrequencySegs.map(s => s.segment).join(', ')} showing frequency >3x — audience saturation risk`
+    );
+  }
+
+  return diagnostics;
+}
+
+/**
+ * Advanced Audience Opportunity Engine.
+ * Detects hidden winners, budget shift opportunities, and expansion/narrowing recommendations.
+ */
+function detectAdvancedOpportunities(metaCampaignId, dateRange = defaultRange()) {
+  const breakdown = getAudienceBreakdown(metaCampaignId, 'age_gender', dateRange);
+  const opportunities = {
+    hidden_winners: [],
+    budget_shifts: [],
+    expansion_candidates: [],
+    narrowing_candidates: [],
+    warnings: [],
+  };
+
+  if (breakdown.segments.length === 0) {
+    return opportunities;
+  }
+
+  const totalSpend = breakdown.segments.reduce((s, seg) => s + seg.spend, 0);
+  const avgCPA = breakdown.segments.reduce((s, seg) => s + (seg.cost_per_result || 0), 0) / breakdown.segments.filter(s => s.cost_per_result).length;
+
+  // Hidden Winners: High efficiency + low spend
+  const hiddenWinners = breakdown.segments.filter(seg =>
+    seg.efficiency_score > 130 &&
+    seg.contribution_pct < 15 &&
+    seg.results > 10
+  );
+  if (hiddenWinners.length > 0) {
+    opportunities.hidden_winners.push({
+      segments: hiddenWinners.map(s => ({ name: s.segment, efficiency: s.efficiency_score, spend_pct: s.contribution_pct })),
+      opportunity: 'These segments convert 30%+ better than average but receive minimal budget allocation.',
+      action: 'Increase budget allocation to these segments by 50-100%.',
+      potential_impact: `Could improve overall ROAS by ${Math.round((hiddenWinners.reduce((s, seg) => s + seg.spend, 0) / totalSpend) * 30)}%`,
+    });
+  }
+
+  // Budget Shifts: Redirect spend from underperformers to overperformers
+  const underperformers = breakdown.segments.filter(seg => seg.efficiency_score < 70 && seg.contribution_pct > 15);
+  const outperformers = breakdown.segments.filter(seg => seg.efficiency_score > 130);
+  if (underperformers.length > 0 && outperformers.length > 0) {
+    const shiftAmount = underperformers.reduce((s, seg) => s + seg.spend, 0);
+    opportunities.budget_shifts.push({
+      from: underperformers.map(s => s.segment),
+      to: outperformers.map(s => s.segment),
+      shift_amount: Math.round(shiftAmount),
+      rationale: `Underperformers (${underperformers.map(s => s.segment).join(', ')}) averaging ${Math.round(avgCPA * 1.5)}/result vs outperformers averaging ${Math.round(avgCPA * 0.6)}/result`,
+      potential_impact: 'Improve overall CPA by 10-20%',
+    });
+  }
+
+  // Expansion Candidates: Good performers at volume scale
+  const expansionCandidates = breakdown.segments.filter(seg =>
+    seg.efficiency_score > 100 &&
+    seg.contribution_pct > 20 &&
+    seg.frequency < 2
+  );
+  if (expansionCandidates.length > 0) {
+    opportunities.expansion_candidates = expansionCandidates.map(seg => ({
+      segment: seg.segment,
+      reason: 'High efficiency + substantial volume + low saturation = ready for scaling',
+      budget_increase_recommendation: '+50%',
+      expected_reach_increase: 'Potential 40-60% volume increase',
+    }));
+  }
+
+  // Narrowing Candidates: High frequency + declining efficiency
+  const narrowingCandidates = breakdown.segments.filter(seg =>
+    seg.frequency > 2.5 &&
+    seg.ctr < 0.8 &&
+    seg.contribution_pct > 15
+  );
+  if (narrowingCandidates.length > 0) {
+    opportunities.narrowing_candidates = narrowingCandidates.map(seg => ({
+      segment: seg.segment,
+      reason: 'High frequency + low CTR = audience saturation, consider narrowing targeting or creative refresh',
+      action: 'Reduce frequency cap or pause temporarily for creative refresh',
+    }));
+  }
+
+  // Warnings
+  if (breakdown.segments.length > 1) {
+    const topSegment = breakdown.segments[0];
+    const topSpend = topSegment.contribution_pct;
+    if (topSpend > 40) {
+      opportunities.warnings.push({
+        type: 'concentration_risk',
+        message: `${topSegment.segment} represents ${topSpend}% of spend. High reliance on single segment increases risk.`,
+        action: 'Diversify spend across additional segments or reduce concentration.',
+      });
+    }
+  }
+
+  return opportunities;
+}
+
 module.exports = {
   getAudienceBreakdown,
   getAudienceTypePerformance,
   detectAudienceOpportunities,
+  detectAdvancedOpportunities,
+  generateAudienceDiagnostics,
   generateAudienceRecommendations,
 };
