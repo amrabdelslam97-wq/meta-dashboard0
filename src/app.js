@@ -35,6 +35,7 @@ const { runPhase23Migrations } = require('./db/schema.phase23');
 const { runPhase24Migrations } = require('./db/schema.phase24');
 const { runPhase28Migrations } = require('./db/schema.phase28');
 const { runPhase29Migrations } = require('./db/schema.phase29');
+const { runPhase30Migrations } = require('./db/schema.phase30');
 const { seedIntelligenceConfig } = require('./db/seedIntelligence');
 const { startAutoSyncScheduler } = require('./services/autoSyncScheduler');
 const { recoverInterruptedSyncs } = require('./services/syncService');
@@ -95,6 +96,7 @@ async function initializeApp(dbPath = DB_PATH) {
   runPhase24Migrations();
   runPhase28Migrations();
   runPhase29Migrations();
+  runPhase30Migrations();
   encryptLegacyTokens();
   seedIntelligenceConfig();
 
