@@ -13,6 +13,7 @@
  */
 
 const db = require('../db/database');
+const { isDelivering } = require('./metaLifecycle');
 
 /**
  * Score a campaign for "winner" ranking.
@@ -178,16 +179,25 @@ function extractFrequency(scoreBreakdownJson) {
 
 /**
  * Main function: returns top N winner campaigns.
+ * @param {number} limit
+ * @param {string|null} accountId - when given, scope to this ad_accounts.id only
  */
-function getTopWinners(limit = 5) {
+function getTopWinners(limit = 5, accountId = null) {
   const campaigns = db.all(`
-    SELECT c.id, c.meta_campaign_id, c.name, c.objective, c.status,
+    SELECT c.id, c.meta_campaign_id, c.name, c.objective, c.status, c.effective_status,
            c.ad_account_id,
            a.account_name, a.currency
     FROM campaigns c
     JOIN ad_accounts a ON c.ad_account_id = a.id
     WHERE c.status IN ('active','paused')
-  `);
+    ${accountId ? 'AND c.ad_account_id = ?' : ''}
+  `, accountId ? [accountId] : [])
+    // Lifecycle fix: a "winner" is by definition a scale/reallocate-budget
+    // candidate -- a campaign that isn't actually delivering right now
+    // (paused, a parent paused, disapproved, etc.) can never legitimately
+    // be one, no matter how strong its historical score was. Falls back to
+    // `status` only when effective_status hasn't been synced yet.
+    .filter(c => isDelivering(c.effective_status || c.status?.toUpperCase()));
 
   const latestScores = loadLatestScoresMap('campaign');
   const scoreHistories = loadScoreHistoryMap('campaign', 10);

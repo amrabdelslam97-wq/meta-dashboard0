@@ -14,9 +14,10 @@
 
 const { v4: uuidv4 } = require('uuid');
 const db = require('../db/database');
-const { fetchCampaigns, fetchAdSets, fetchAds } = require('./metaApiClient');
+const { fetchCampaigns, fetchAdSets, fetchAds, fetchCustomAudiences } = require('./metaApiClient');
 const { mapObjective } = require('./objectiveMapper');
 const { decryptToken } = require('./tokenCrypto');
+const { classifyAudienceType } = require('./audienceAttributionEngine');
 
 /**
  * Normalize a Meta status string to our internal enum.
@@ -62,6 +63,7 @@ function upsertCampaign(adAccountId, metaCampaign, dbHandle = db) {
         objective = ?,
         objective_effective_from = CASE WHEN ? = 1 THEN ? ELSE objective_effective_from END,
         status = ?,
+        effective_status = ?,
         meta_updated_time = ?,
         updated_at = ?
       WHERE meta_campaign_id = ?`,
@@ -71,6 +73,7 @@ function upsertCampaign(adAccountId, metaCampaign, dbHandle = db) {
         objectiveChanged ? 1 : 0,
         objectiveChanged ? now : null,
         normalizeStatus(metaCampaign.status),
+        metaCampaign.effective_status || null,
         metaCampaign.updated_time || now,
         now,
         metaCampaign.id,
@@ -83,9 +86,9 @@ function upsertCampaign(adAccountId, metaCampaign, dbHandle = db) {
     dbHandle.run(
       `INSERT INTO campaigns (
         id, ad_account_id, meta_campaign_id, name, objective,
-        objective_effective_from, status, meta_created_time, meta_updated_time,
+        objective_effective_from, status, effective_status, meta_created_time, meta_updated_time,
         created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         id,
         adAccountId,
@@ -94,6 +97,7 @@ function upsertCampaign(adAccountId, metaCampaign, dbHandle = db) {
         internalObjective,
         now,
         normalizeStatus(metaCampaign.status),
+        metaCampaign.effective_status || null,
         metaCampaign.created_time || now,
         metaCampaign.updated_time || now,
         now,
@@ -108,8 +112,33 @@ function upsertCampaign(adAccountId, metaCampaign, dbHandle = db) {
 /**
  * Upsert a single ad set into the database.
  */
-function upsertAdSet(adAccountId, campaignId, metaAdSet, dbHandle = db) {
+function upsertAdSet(adAccountId, campaignId, metaAdSet, dbHandle = db, customAudienceSubtypeById = {}) {
   const now = new Date().toISOString();
+
+  // targeting{locales} from metaApiClient.fetchAdSets() -- Language
+  // Analytics' configuration view (Executive Marketing Analytics Layer).
+  // Not every ad set targets specific locales (broad targeting omits it
+  // entirely), so this is genuinely nullable, not a fabricated default.
+  const targetingLocales = metaAdSet.targeting?.locales
+    ? JSON.stringify(metaAdSet.targeting.locales)
+    : null;
+
+  // Attribution & Customer Journey Intelligence (Step 9): the trimmed real
+  // targeting sub-objects (never the full raw blob -- age/gender/interest
+  // IDs beyond what audience-type classification needs aren't stored) plus
+  // the derived classification itself, computed once at sync time so every
+  // read (audienceAttributionEngine.js and beyond) is a pure DB read, never
+  // re-parsing raw Meta targeting JSON.
+  const targetingJson = metaAdSet.targeting
+    ? JSON.stringify({
+        custom_audiences: metaAdSet.targeting.custom_audiences || null,
+        lookalike_spec: metaAdSet.targeting.lookalike_spec || null,
+        flexible_spec_count: Array.isArray(metaAdSet.targeting.flexible_spec) ? metaAdSet.targeting.flexible_spec.length : 0,
+        geo_location_types: metaAdSet.targeting.geo_locations?.location_types || null,
+        advantage_audience: metaAdSet.targeting.targeting_automation?.advantage_audience ?? null,
+      })
+    : null;
+  const audienceType = classifyAudienceType(metaAdSet.targeting, customAudienceSubtypeById);
 
   const existing = dbHandle.get(
     'SELECT id FROM ad_sets WHERE meta_adset_id = ?',
@@ -121,18 +150,26 @@ function upsertAdSet(adAccountId, campaignId, metaAdSet, dbHandle = db) {
       `UPDATE ad_sets SET
         name = ?,
         status = ?,
+        effective_status = ?,
         daily_budget = ?,
         lifetime_budget = ?,
         optimization_goal = ?,
+        targeting_locales = ?,
+        targeting_json = ?,
+        audience_type = ?,
         meta_updated_time = ?,
         updated_at = ?
       WHERE meta_adset_id = ?`,
       [
         metaAdSet.name,
         normalizeStatus(metaAdSet.status),
+        metaAdSet.effective_status || null,
         metaAdSet.daily_budget ? parseFloat(metaAdSet.daily_budget) / 100 : null,
         metaAdSet.lifetime_budget ? parseFloat(metaAdSet.lifetime_budget) / 100 : null,
         metaAdSet.optimization_goal ?? null,
+        targetingLocales,
+        targetingJson,
+        audienceType,
         metaAdSet.updated_time || now,
         now,
         metaAdSet.id,
@@ -143,10 +180,10 @@ function upsertAdSet(adAccountId, campaignId, metaAdSet, dbHandle = db) {
     const id = uuidv4();
     dbHandle.run(
       `INSERT INTO ad_sets (
-        id, campaign_id, ad_account_id, meta_adset_id, name, status,
-        daily_budget, lifetime_budget, optimization_goal, meta_created_time, meta_updated_time,
-        created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        id, campaign_id, ad_account_id, meta_adset_id, name, status, effective_status,
+        daily_budget, lifetime_budget, optimization_goal, targeting_locales, targeting_json, audience_type,
+        meta_created_time, meta_updated_time, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         id,
         campaignId,
@@ -154,9 +191,13 @@ function upsertAdSet(adAccountId, campaignId, metaAdSet, dbHandle = db) {
         metaAdSet.id,
         metaAdSet.name,
         normalizeStatus(metaAdSet.status),
+        metaAdSet.effective_status || null,
         metaAdSet.daily_budget ? parseFloat(metaAdSet.daily_budget) / 100 : null,
         metaAdSet.lifetime_budget ? parseFloat(metaAdSet.lifetime_budget) / 100 : null,
         metaAdSet.optimization_goal ?? null,
+        targetingLocales,
+        targetingJson,
+        audienceType,
         metaAdSet.created_time || now,
         metaAdSet.updated_time || now,
         now,
@@ -180,6 +221,10 @@ function upsertAd(adAccountId, campaignId, adSetId, metaAd, dbHandle = db) {
   const creativeId    = metaAd.creative?.id ?? null;
   const thumbnailUrl  = metaAd.creative?.thumbnail_url ?? null;
   const imageUrl      = metaAd.creative?.image_url ?? null;
+  // destination_type from metaApiClient.fetchAds() -- Messaging Destination
+  // Analytics (Executive Marketing Analytics Layer). Only present on
+  // message-objective ads; genuinely null otherwise, not a fabricated default.
+  const destinationType = metaAd.destination_type ?? null;
 
   const existing = dbHandle.get(
     'SELECT id FROM ads WHERE meta_ad_id = ?',
@@ -191,19 +236,23 @@ function upsertAd(adAccountId, campaignId, adSetId, metaAd, dbHandle = db) {
       `UPDATE ads SET
         name = ?,
         status = ?,
+        effective_status = ?,
         meta_updated_time = ?,
         creative_id = ?,
         thumbnail_url = ?,
         image_url = ?,
+        destination_type = ?,
         updated_at = ?
       WHERE meta_ad_id = ?`,
       [
         metaAd.name,
         normalizeStatus(metaAd.status),
+        metaAd.effective_status || null,
         metaAd.updated_time || now,
         creativeId,
         thumbnailUrl,
         imageUrl,
+        destinationType,
         now,
         metaAd.id,
       ]
@@ -213,10 +262,10 @@ function upsertAd(adAccountId, campaignId, adSetId, metaAd, dbHandle = db) {
     const id = uuidv4();
     dbHandle.run(
       `INSERT INTO ads (
-        id, ad_set_id, campaign_id, ad_account_id, meta_ad_id, name, status,
+        id, ad_set_id, campaign_id, ad_account_id, meta_ad_id, name, status, effective_status,
         meta_created_time, meta_updated_time, creative_id, thumbnail_url,
-        image_url, created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        image_url, destination_type, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         id,
         adSetId,
@@ -225,11 +274,13 @@ function upsertAd(adAccountId, campaignId, adSetId, metaAd, dbHandle = db) {
         metaAd.id,
         metaAd.name,
         normalizeStatus(metaAd.status),
+        metaAd.effective_status || null,
         metaAd.created_time || now,
         metaAd.updated_time || now,
         creativeId,
         thumbnailUrl,
         imageUrl,
+        destinationType,
         now,
         now,
       ]
@@ -295,6 +346,14 @@ async function syncAccount(adAccount, options = {}) {
 
   const accessToken = decryptToken(adAccount.access_token_encrypted);
 
+  const startedAt = new Date().toISOString();
+  db.run(
+    `UPDATE ad_accounts
+     SET last_sync_started_at = ?, last_sync_status = 'running', sync_progress_phase = ?, last_sync_error = NULL
+     WHERE id = ?`,
+    [startedAt, 'fetching_campaigns', adAccount.id]
+  );
+
   // ══════════════════════════════════════════════════════════════
   // PHASE 1 — FETCH everything from Meta into an in-memory tree.
   // No DB writes happen in this phase.
@@ -306,10 +365,32 @@ async function syncAccount(adAccount, options = {}) {
   } catch (err) {
     summary.errors.push({ level: 'account', message: err.message });
     console.error(`[Sync] Failed to fetch campaigns for ${adAccount.meta_account_id}:`, err.message);
+    markSyncFailed(adAccount.id, summary);
     return summary;
   }
 
+  // Attribution & Customer Journey Intelligence (Step 9): every referenced
+  // custom audience's real subtype (CUSTOM/WEBSITE/ENGAGEMENT/APP/LOOKALIKE)
+  // is fetched ONCE per account here, never per ad set -- classifyAudienceType()
+  // needs it to distinguish lookalike/remarketing from a generic custom
+  // audience, which an ad set's own targeting.custom_audiences never reveals
+  // (it only ever returns the referenced audience's id). A failure here is
+  // non-fatal -- classification falls back to whatever's derivable from the
+  // ad set's own targeting alone (custom_audience/interest/broad/advantage_plus
+  // still work; lookalike/remarketing specifically become custom_audience).
+  let customAudienceSubtypeById = {};
+  try {
+    if (syncAdSets) {
+      const customAudiences = await fetchCustomAudiences(adAccount.meta_account_id, accessToken);
+      customAudienceSubtypeById = Object.fromEntries(customAudiences.map(a => [a.id, a.subtype || null]));
+    }
+  } catch (err) {
+    console.warn(`[Sync] Could not fetch custom audiences for ${adAccount.meta_account_id} (audience-type classification will be less precise):`, err.message);
+  }
+
   const campaignTree = [];
+
+  db.run(`UPDATE ad_accounts SET sync_progress_phase = ? WHERE id = ?`, ['fetching_adsets_and_ads', adAccount.id]);
 
   for (const metaCampaign of metaCampaigns) {
     const node = { metaCampaign, adSets: [], fetchError: null };
@@ -342,6 +423,8 @@ async function syncAccount(adAccount, options = {}) {
     campaignTree.push(node);
   }
 
+  db.run(`UPDATE ad_accounts SET sync_progress_phase = ? WHERE id = ?`, ['writing', adAccount.id]);
+
   // ══════════════════════════════════════════════════════════════
   // PHASE 2 — WRITE the whole tree in one transaction (one persist()).
   // ══════════════════════════════════════════════════════════════
@@ -368,7 +451,7 @@ async function syncAccount(adAccount, options = {}) {
       for (const adSetNode of node.adSets) {
         let adSetId;
         try {
-          adSetId = upsertAdSet(adAccount.id, campaignId, adSetNode.metaAdSet, tx);
+          adSetId = upsertAdSet(adAccount.id, campaignId, adSetNode.metaAdSet, tx, customAudienceSubtypeById);
           summary.adSets.synced++;
         } catch (err) {
           summary.adSets.errors++;
@@ -408,9 +491,101 @@ async function syncAccount(adAccount, options = {}) {
 
   if (summary.errors.length > 0) {
     console.warn(`[Sync] ${summary.errors.length} errors during sync`);
+    markSyncFailed(adAccount.id, summary);
+  } else {
+    db.run(
+      `UPDATE ad_accounts
+       SET last_sync_completed_at = ?, last_successful_sync_at = ?,
+           last_sync_status = 'success', sync_progress_phase = NULL, last_sync_error = NULL
+       WHERE id = ?`,
+      [summary.completedAt, summary.completedAt, adAccount.id]
+    );
   }
 
   return summary;
+}
+
+/**
+ * Record a failed/partially-failed sync on ad_accounts -- shared by the
+ * early-return-on-fetch-failure path and the end-of-sync error-count check,
+ * so both write the same tracking columns instead of one being silently
+ * skipped.
+ */
+function markSyncFailed(adAccountId, summary) {
+  const now = new Date().toISOString();
+  const errorMessage = summary.errors.map(e => `[${e.level}] ${e.message}`).join('; ') || 'Unknown sync error';
+  db.run(
+    `UPDATE ad_accounts
+     SET last_sync_completed_at = ?, last_failed_sync_at = ?,
+         last_sync_status = 'failed', sync_progress_phase = NULL, last_sync_error = ?
+     WHERE id = ?`,
+    [now, now, errorMessage, adAccountId]
+  );
+}
+
+// Default timeout (minutes) before a sync stuck in last_sync_status='running'
+// is considered abandoned by an ungraceful shutdown/crash, not genuinely
+// still in progress. Configurable via SYNC_RECOVERY_TIMEOUT_MINUTES so an
+// operator can tune it without a code change.
+const DEFAULT_SYNC_RECOVERY_TIMEOUT_MINUTES = 30;
+
+/**
+ * Automatic Recovery For Interrupted Sync (run once on every server startup,
+ * before the scheduler starts -- see src/app.js).
+ *
+ * sql.js/database.js has no durable in-flight job state (CLAUDE.md): if the
+ * process dies between syncAccount() setting last_sync_status='running' and
+ * it reaching markSyncFailed()/its own success UPDATE, that row is stuck
+ * 'running' forever -- nothing else in this codebase ever reconciles it.
+ * This finds every such row whose last_sync_started_at is older than
+ * `timeoutMinutes` and marks it 'failed' with an explanatory note, exactly
+ * like a real failed sync (same columns markSyncFailed() writes), so:
+ *   - the Dashboard stops showing a perpetual "syncing" state for it
+ *   - the account is never permanently blocked -- once last_sync_status is
+ *     no longer 'running', it's just a normal failed sync, and the Smart
+ *     Scheduler's existing due-check (last_sync_completed_at/interval, see
+ *     autoSyncScheduler.js) picks it up again on its own next-due cycle like
+ *     any other account -- no separate "eligible for retry" flag needed.
+ *
+ * @param {number} timeoutMinutes
+ * @returns {{recovered: number, accounts: string[]}}
+ */
+function recoverInterruptedSyncs(timeoutMinutes = parseInt(process.env.SYNC_RECOVERY_TIMEOUT_MINUTES, 10) || DEFAULT_SYNC_RECOVERY_TIMEOUT_MINUTES) {
+  const cutoff = new Date(Date.now() - timeoutMinutes * 60000).toISOString();
+  const stuck = db.all(
+    `SELECT id, meta_account_id, last_sync_started_at FROM ad_accounts
+     WHERE last_sync_status = 'running'
+       AND last_sync_started_at IS NOT NULL
+       AND last_sync_started_at < ?`,
+    [cutoff]
+  );
+
+  if (stuck.length === 0) return { recovered: 0, accounts: [] };
+
+  const now = new Date().toISOString();
+  const note = 'Recovered after interrupted server shutdown.';
+
+  for (const account of stuck) {
+    db.run(
+      `UPDATE ad_accounts SET
+         last_sync_status = 'failed',
+         last_sync_completed_at = ?,
+         last_failed_sync_at = ?,
+         sync_progress_phase = NULL,
+         last_sync_error = CASE
+           WHEN last_sync_error IS NULL OR last_sync_error = '' THEN ?
+           ELSE last_sync_error || ' | ' || ?
+         END
+       WHERE id = ?`,
+      [now, now, note, note, account.id]
+    );
+    console.warn(
+      `[Sync] Recovered interrupted sync for account ${account.meta_account_id} ` +
+      `(stuck 'running' since ${account.last_sync_started_at}, timeout ${timeoutMinutes}m).`
+    );
+  }
+
+  return { recovered: stuck.length, accounts: stuck.map(a => a.id) };
 }
 
 /**
@@ -440,6 +615,7 @@ async function syncAllAccounts(options = {}) {
 module.exports = {
   syncAccount,
   syncAllAccounts,
+  recoverInterruptedSyncs,
   upsertCampaign,
   upsertAdSet,
   upsertAd,

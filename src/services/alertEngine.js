@@ -12,6 +12,7 @@
 
 const { v4: uuidv4 } = require('uuid');
 const db = require('../db/database');
+const { compare, pctChange } = require('./conditionComparator');
 
 // ─────────────────────────────────────────────
 // Load all active alert rules
@@ -36,7 +37,7 @@ function evaluateAlertRule(rule, currentMetrics, priorMetrics) {
     if (current === null) return { triggered: false };
 
     // trigger_value is the threshold — alert when current is BELOW it
-    const triggered = current < trigger_value;
+    const triggered = compare(current, 'lt', trigger_value);
     return {
       triggered,
       detectedValue:  Math.round(current * 100) / 100,
@@ -58,14 +59,14 @@ function evaluateAlertRule(rule, currentMetrics, priorMetrics) {
 
     if (prior === null || prior === 0) return { triggered: false };
 
-    const changePct = ((current - prior) / prior) * 100;
+    const changePct = pctChange(current, prior, { denominator: 'raw' });
 
     // trigger_value can be positive (spike) or negative (drop)
     // Positive trigger_value: alert when change > threshold (e.g. CPM spike +30%)
     // Negative trigger_value: alert when change < threshold (e.g. CTR drop -30%)
     const triggered = trigger_value >= 0
-      ? changePct > trigger_value
-      : changePct < trigger_value;
+      ? compare(changePct, 'gt', trigger_value)
+      : compare(changePct, 'lt', trigger_value);
 
     return {
       triggered,
@@ -227,7 +228,9 @@ function loadActiveAlerts(metaCampaignId, entityType = 'campaign') {
        a.first_detected_at,
        a.last_detected_at,
        a.occurrence_count,
-       a.status
+       a.status,
+       a.governance_state,
+       r.metric_key
      FROM active_alerts a
      LEFT JOIN alert_rules r ON a.alert_rule_id = r.id
      WHERE a.entity_meta_id = ?

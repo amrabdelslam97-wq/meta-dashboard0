@@ -97,6 +97,7 @@ router.get(
         c.name,
         c.objective,
         c.status,
+        c.effective_status,
         c.objective_effective_from,
         c.meta_created_time,
         c.meta_updated_time,

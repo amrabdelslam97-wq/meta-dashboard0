@@ -79,6 +79,7 @@ nav{padding:12px 8px;flex:1;overflow-y:auto}
 .badge.critical{background:var(--red-bg);color:var(--red)}
 .badge.info{background:var(--blue-bg);color:var(--blue)}
 .badge.none{background:var(--bg3);color:var(--muted)}
+.badge.not_delivering{background:var(--bg3);color:var(--muted);font-style:italic}
 
 /* ── Table ── */
 .table-wrap{overflow-x:auto;border-radius:10px;border:1px solid var(--border)}
@@ -333,6 +334,10 @@ textarea.form-input{resize:vertical;min-height:80px}
       <svg fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-3 7h3m-3 4h3m-6-4h.01M9 16h.01"/></svg>
       Decision Center
     </button>
+    <button class="nav-item" onclick="navigate('creative')" id="nav-creative">
+      <svg fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14M14 8h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"/></svg>
+      Creative Intelligence
+    </button>
     <button class="nav-item" onclick="navigate('reports')">
       <svg fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 17v-2m3 2v-4m3 4v-6m2 10H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>
       Reports
@@ -407,25 +412,38 @@ async function apiDelete(path) {
 function navigate(page, params={}) {
   currentPage = page;
   document.querySelectorAll('.nav-item').forEach(el => el.classList.remove('active'));
-  const navMap = { dashboard:'dashboard', campaigns:'campaigns', recommendations:'recommendations', alerts:'alerts', settings:'settings' };
+  const navMap = { dashboard:'dashboard', campaigns:'campaigns', recommendations:'recommendations', alerts:'alerts', settings:'settings', creative:'creative' };
   const btn = document.querySelector(`.nav-item[onclick*="${navMap[page] || page}"]`);
   if (btn) btn.classList.add('active');
-  const titles = { portfolio:'Portfolio', dashboard:'Control Center', campaigns:'Campaigns', recommendations:'Recommendations', alerts:'Alert Center', decisions:'Decision Center', reports:'Reports', settings:'Settings' };
+  const titles = { portfolio:'Portfolio', dashboard:'Control Center', campaigns:'Campaigns', recommendations:'Recommendations', alerts:'Alert Center', decisions:'Decision Center', reports:'Reports', settings:'Settings', creative:'Creative Intelligence' };
   document.getElementById('page-title').textContent = titles[page] || page;
   const content = document.getElementById('content');
   content.innerHTML = '<div class="loader"><span class="spin">◌</span> Loading...</div>';
-  const pages = { portfolio: loadPortfolio, dashboard: loadDashboard, campaigns: loadCampaigns, recommendations: loadRecommendations, alerts: loadAlerts, decisions: loadDecisions, reports: loadReports, settings: loadSettings };
+  const pages = { portfolio: loadPortfolio, dashboard: loadDashboard, campaigns: loadCampaigns, recommendations: loadRecommendations, alerts: loadAlerts, decisions: loadDecisions, reports: loadReports, settings: loadSettings, creative: loadCreativeLibrary };
   if (pages[page]) pages[page](params);
 }
 
 function refreshData() {
-  // Clear IC cached insights so next render re-fetches with new date range
+  // Clear IC cached insights so next render re-fetches with new account/date
+  // range. Objective Intelligence, Executive Summary, Rule Engine decisions
+  // and Governance are all embedded fields inside the insights/diagnosis
+  // response itself (not separately cached), so nulling these two covers
+  // all of them -- no separate cache to invalidate for those.
   if (window.ic) {
-    window.ic.insights = null;
-    window.ic.adsets   = [];
-    window.ic.ads      = [];
+    window.ic.insights  = null;
+    window.ic.adsets    = [];
+    window.ic.ads       = [];
+    window.ic.diagnosis = null;
   }
-  // Clear server-side cache then reload page
+  // Header alert/recommendation badges are visible on every page, not just
+  // the current one -- refresh them immediately so they reflect the newly
+  // selected account without waiting for a nav into the Dashboard page.
+  updateBadges();
+  // Clear server-side cache then reload page. Recommendations, Alerts,
+  // Decisions, Portfolio, Reports and Campaigns have no client-side cache at
+  // all -- they always fetch fresh -- so re-navigating to the current page
+  // (which now also passes window._accountId on every one of those calls)
+  // is sufficient to reload them for the newly selected account.
   fetch(API + '/sync/cache/flush', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({}) })
     .catch(() => {})
     .finally(() => navigate(currentPage));
@@ -446,6 +464,14 @@ function scoreLabel(s) {
   if (s >= 40) return 'Warning';
   return 'Critical';
 }
+// Formats a health_status value for display -- 'not_delivering' (this
+// entity isn't actually delivering per Meta, so it was never scored) reads
+// as "Not Delivering" instead of the raw snake_case DB value.
+function fmtHealthStatus(s) {
+  if (!s) return 'Not analyzed';
+  if (s === 'not_delivering') return 'Not Delivering';
+  return s;
+}
 function severityClass(s) {
   return { critical:'critical', warning:'warning', info:'info' }[s] || 'none';
 }
@@ -460,6 +486,259 @@ function fmtNum(n, dec=2) {
 function objChip(o) {
   return `<span class="chip ${o||'unknown'}">${o||'unknown'}</span>`;
 }
+
+// ── Framework Attribution panel (Phase 10 — MAIFS/MMS governance trace) ──
+// Renders the `_governance` object attached by mmsOrchestrator.js to the
+// GET .../insights and GET .../insights/diagnosis responses. Purely
+// presentational -- shows which Meta Frameworks governed this result and
+// which documented rule produced each fired recommendation/alert, without
+// recomputing anything.
+function icGovernancePanel(gov) {
+  if (!gov) return '';
+  const frameworkChips = (gov.frameworks || []).map(f =>
+    `<span class="chip" style="background:var(--bg3);color:var(--accent2)" title="${f.status||''}">${f.code}${f.name ? ' · ' + f.name : ''}</span>`
+  ).join('');
+
+  const provenanceLines = [
+    ...(gov.recommendation_provenance || []).filter(p => p.provenance).map(p =>
+      `<div style="font-size:11px;color:var(--muted);padding:3px 0">💡 ${p.rule_code} ← <strong style="color:var(--text)">${p.provenance.framework}</strong>: ${p.provenance.docRule}</div>`),
+    ...(gov.alert_provenance || []).filter(p => p.provenance).map(p =>
+      `<div style="font-size:11px;color:var(--muted);padding:3px 0">🔔 ${p.alert_code} ← <strong style="color:var(--text)">${p.provenance.framework}</strong>: ${p.provenance.docRule}</div>`),
+  ].join('');
+
+  const selfCheckOk = gov.self_check?.overall === 'passed';
+
+  return `
+    <div class="card" style="margin-top:12px">
+      <div class="section-title" style="margin-bottom:10px">🏛 Framework Attribution <span style="font-size:10px;color:var(--muted);font-weight:400">MAIFS/MMS governance trace</span></div>
+      <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px">${frameworkChips}</div>
+      ${gov.root_cause_category ? `<div style="font-size:12px;color:var(--muted);margin-bottom:6px">Root Cause Category (MF8.5): <strong style="color:var(--text);text-transform:capitalize">${gov.root_cause_category.replace('_',' ')}</strong></div>` : ''}
+      ${provenanceLines}
+      <div style="margin-top:8px">
+        <span class="badge ${selfCheckOk ? 'excellent' : 'critical'}" style="font-size:10px">${selfCheckOk ? '✓ Governance Self-Check Passed' : '⚠ Governance Self-Check Failed'}</span>
+      </div>
+    </div>`;
+}
+
+// ── Framework Rule Engine panel (Phase 11) ──
+// Renders `framework_recommendations` (raw fired Rule Engine findings) and
+// `rule_engine_decisions` (the same findings shaped as Decisions, for the
+// suggested_action text) attached by ruleEngine.js/decisionEngine.js to the
+// GET .../insights and GET .../insights/diagnosis responses. Every card
+// shows the full attribution the user should be able to trace a
+// recommendation back through: Framework, Rule ID, Rule Name, Severity,
+// Evidence, Reason, Recommendation, Priority, Confidence.
+function icGovernanceStateBadge(state) {
+  // MAIFS Enforcement (Phase 4) -- passed/warning/failed reflects whether
+  // this specific recommendation was downgraded by governance, not just a
+  // generic status. 'failed' means enforceGovernance() already downgraded
+  // the paired decision to observation_only -- the badge documents why.
+  const cls = { passed: 'excellent', warning: 'warning', failed: 'critical' }[state] || 'none';
+  const label = { passed: '✓ Governance: Passed', warning: '⚠ Governance: Warning', failed: '⛔ Governance: Failed (downgraded)' }[state] || 'Governance: —';
+  return `<span class="badge ${cls}" style="font-size:10px">${label}</span>`;
+}
+
+// ── MMS Cross-Account Trace (Phase X.4 — MMS Runtime Kernel) ──
+// Renders the `_governance` field attached by mmsOrchestrator.buildPortfolioTrace()
+// to cross-account/portfolio-grain responses (Decision Center, Portfolio).
+// Deliberately distinct from icGovernanceStateBadge() (per-decision
+// passed/warning/failed, Phase X.3) -- this is a page-level trace showing
+// WHICH Frameworks this cross-account view is attributed to (MF10 always
+// present), with governance explicitly reported as "Not Applicable" rather
+// than a fake pass/fail, since no live metrics exist to validate against at
+// this grain. Never to be confused with the per-decision badge.
+function icPortfolioTraceBadge(gov) {
+  if (!gov) return '';
+  const fwList = (gov.frameworks || []).map(f => f.code).join(' · ');
+  return `
+    <span class="chip" style="background:var(--bg3)" title="${gov.governance_reason || ''}">
+      🧭 MMS Trace: ${fwList}
+    </span>
+    <span class="badge none" style="font-size:10px" title="${gov.governance_reason || ''}">Governance: Not Applicable (cross-account)</span>
+  `;
+}
+
+// ── Executive Summary (Product Completion Mode, Milestone 1) ──
+// Renders `executive_summary` (a plain-language string assembled server-side
+// by executiveSummaryEngine.js from objective/health/diagnosis/decisions
+// already computed by the existing pipeline -- no new engine, no LLM). The
+// first thing shown when a campaign loads, per the milestone's "visible
+// value" requirement.
+function icExecutiveSummaryCard(summary) {
+  if (!summary) return '';
+  return `
+    <div class="card" style="margin-bottom:16px;border-left:3px solid var(--accent2);background:var(--bg3)">
+      <div style="display:flex;align-items:flex-start;gap:10px">
+        <div style="font-size:20px;line-height:1">🧭</div>
+        <div>
+          <div class="stat-label" style="margin-bottom:4px">Executive Summary</div>
+          <div style="font-size:13px;color:var(--text);line-height:1.5">${summary}</div>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+// ── Objective Intelligence (Product Completion Mode, Milestone 2) ──
+// Renders `objective_intelligence` (server-assembled by
+// objectiveIntelligenceEngine.js from already-computed benchmark/diagnosis/
+// rule/governance data -- no new calculation happens client-side). The
+// primary analysis section: detected objective, per-KPI formula/threshold/
+// verdict table, root cause, and MAIFS status, reusing icFmtVal() for
+// display formatting and icGovernanceStateBadge() for governance badges.
+function icObjectiveIntelligenceStatusBadge(status) {
+  const cls = { success: 'excellent', warning: 'warning', failure: 'critical', unknown: 'none' }[status] || 'none';
+  const label = { success: '✓ Success', warning: '⚠ Warning', failure: '⛔ Failure', unknown: '— Unknown' }[status] || status;
+  return `<span class="badge ${cls}" style="font-size:10px">${label}</span>`;
+}
+
+// Milestone 3 — severity/confidence badges reuse the same badge-class
+// convention as icDiagBadgeClass() (Executive Diagnosis Card, Phase X.5)
+// rather than a new color scheme.
+function icKpiSeverityBadgeClass(severity) {
+  return { critical: 'critical', high: 'warning', medium: 'good', low: 'none', none: 'none' }[severity] || 'none';
+}
+
+function icObjectiveIntelligenceKpiCard(kpi, currency) {
+  return `
+  <div class="card" style="margin-bottom:10px;border-left:3px solid ${kpi.status==='failure'?'var(--red)':kpi.status==='warning'?'var(--orange)':'var(--accent2)'}">
+    <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px">
+      <div style="font-size:13px;font-weight:600">${kpi.metric_name}</div>
+      <div style="display:flex;gap:6px;flex-wrap:wrap">
+        ${icObjectiveIntelligenceStatusBadge(kpi.status)}
+        ${kpi.severity && kpi.severity !== 'none' ? `<span class="badge ${icKpiSeverityBadgeClass(kpi.severity)}" style="font-size:10px">${kpi.severity} severity</span>` : ''}
+        ${kpi.confidence ? `<span class="badge ${icDiagBadgeClass('confidence', kpi.confidence)}" style="font-size:10px">${kpi.confidence} confidence</span>` : ''}
+      </div>
+    </div>
+    <div style="display:flex;gap:16px;flex-wrap:wrap;margin-top:8px;font-size:12px">
+      <div><span style="color:var(--muted)">Current:</span> <strong>${icFmtVal(kpi.metric_key, kpi.current_value, currency)}</strong></div>
+      <div><span style="color:var(--muted)">Benchmark:</span> <strong>${icFmtVal(kpi.metric_key, kpi.benchmark, currency)}</strong></div>
+      <div><span style="color:var(--muted)">Success ≥/≤:</span> <strong>${icFmtVal(kpi.metric_key, kpi.success_threshold, currency)}</strong></div>
+      <div><span style="color:var(--muted)">Warning:</span> <strong>${icFmtVal(kpi.metric_key, kpi.warning_threshold, currency)}</strong></div>
+      <div><span style="color:var(--muted)">Failure:</span> <strong>${icFmtVal(kpi.metric_key, kpi.failure_threshold, currency)}</strong></div>
+    </div>
+    <div style="margin-top:6px;font-size:11px;color:var(--muted)">📐 <strong>Formula:</strong> ${kpi.formula_used}</div>
+    ${kpi.root_cause ? `<div style="margin-top:8px;font-size:12px;color:var(--text)">🔍 <strong>Root Cause:</strong> ${kpi.root_cause}</div>` : (kpi.reason ? `<div style="margin-top:6px;font-size:12px;color:var(--text)">${kpi.reason}</div>` : '')}
+    ${kpi.business_impact ? `<div style="margin-top:6px;font-size:12px;color:var(--text)">💥 <strong>Business Impact:</strong> ${kpi.business_impact}</div>` : ''}
+    ${kpi.executive_recommendation ? `<div style="margin-top:8px;font-size:12px;padding:8px;background:var(--bg3);border-radius:6px">💡 <strong>Recommendation:</strong> ${kpi.executive_recommendation}</div>` : ''}
+    ${kpi.related_rules && kpi.related_rules.length ? `
+    <div style="margin-top:8px;font-size:11px;color:var(--muted);display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+      <span>Rules:</span>
+      ${kpi.related_rules.map(r => `<span class="chip" style="background:var(--bg3)">${r.rule_id}${r.framework?' · '+r.framework:''}</span>`).join('')}
+      ${kpi.maifs_governance_status !== 'not_applicable' ? icGovernanceStateBadge(kpi.maifs_governance_status) : ''}
+    </div>` : ''}
+  </div>`;
+}
+
+function icObjectiveIntelligenceSection(oi, currency) {
+  if (!oi) return '';
+  const healthCls = { excellent: 'excellent', good: 'good', warning: 'warning', critical: 'critical' }[oi.objective_health] || 'none';
+  return `
+  <div class="section-header" style="margin-top:16px;margin-bottom:10px">
+    <span class="section-title">🎯 Objective Intelligence</span>
+  </div>
+  <div class="card" style="margin-bottom:12px">
+    <div style="display:flex;gap:16px;flex-wrap:wrap;align-items:center">
+      <div><span style="color:var(--muted);font-size:12px">Detected Objective:</span> <span class="chip" style="background:var(--bg3);text-transform:capitalize">${oi.detected_objective || '—'}</span></div>
+      <div><span style="color:var(--muted);font-size:12px">Objective Health:</span> <span class="badge ${healthCls}">${oi.objective_health || 'unscored'}</span></div>
+      ${oi.root_cause && oi.root_cause.category ? `<div><span style="color:var(--muted);font-size:12px">Root Cause:</span> <span class="chip" style="background:var(--bg3);text-transform:capitalize">${oi.root_cause.category.replace('_',' ')}</span></div>` : ''}
+    </div>
+  </div>
+  ${oi.kpis.map(kpi => icObjectiveIntelligenceKpiCard(kpi, currency)).join('')}
+  `;
+}
+
+function icRuleEnginePanel(fired, decisions) {
+  if (!fired || !fired.length) return '';
+  const decisionByRuleId = {};
+  (decisions || []).forEach(d => { decisionByRuleId[d.rule_id] = d; });
+
+  const priorityBadgeClass = { critical:'critical', high:'warning', medium:'good', low:'none', observation_only:'none' };
+  const confidenceBadgeClass = { high:'excellent', medium:'good', low:'none' };
+  const governanceFailedCount = fired.filter(f => f.governance_state === 'failed').length;
+
+  return `
+    <div class="section-header" style="margin-top:16px">
+      <span class="section-title">⚙ Framework Rule Engine (${fired.length} rule${fired.length===1?'':'s'} fired)</span>
+      ${governanceFailedCount ? `<span class="badge critical" style="font-size:10px">${governanceFailedCount} downgraded by Governance</span>` : ''}
+    </div>
+    ${fired.map(f => {
+      const d = decisionByRuleId[f.rule_id];
+      return `
+      <div class="card" style="margin-bottom:10px;border-left:3px solid ${f.governance_state==='failed' ? 'var(--red)' : 'var(--accent2)'}">
+        <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px">
+          <div>
+            <span class="chip" style="background:var(--bg3);color:var(--accent2)">${f.framework}</span>
+            <span style="font-size:12px;color:var(--muted);margin-left:6px">${f.rule_id}</span>
+            <div style="font-size:13px;font-weight:600;margin-top:4px">${f.rule_name}</div>
+          </div>
+          <div style="display:flex;gap:6px;flex-wrap:wrap">
+            <span class="badge ${f.severity}" style="font-size:10px">${f.severity}</span>
+            ${d ? `<span class="badge ${priorityBadgeClass[d.priority]||'none'}" style="font-size:10px">${(d.priority||'').replace('_',' ')}</span>` : ''}
+            ${d ? `<span class="badge ${confidenceBadgeClass[d.confidence]||'none'}" style="font-size:10px">${d.confidence} confidence</span>` : ''}
+            ${icGovernanceStateBadge(f.governance_state)}
+          </div>
+        </div>
+        <div style="font-size:12px;color:var(--text);margin-top:8px">${f.reason || ''}</div>
+        ${f.evidence && f.evidence.length ? `
+        <div style="margin-top:6px;font-size:11px;color:var(--muted);display:flex;gap:12px;flex-wrap:wrap">
+          ${f.evidence.map(e => `<span>📊 ${e.metric} ${e.operator} <strong style="color:var(--text)">${e.threshold}</strong> (actual: <strong style="color:var(--text)">${e.actual}</strong>)</span>`).join('')}
+        </div>` : ''}
+        ${d ? `<div style="margin-top:8px;font-size:12px;padding:8px;background:var(--bg3);border-radius:6px">💡 <strong>Recommendation:</strong> ${d.suggested_action}</div>` : ''}
+        ${f.governance_state === 'failed' ? `<div style="margin-top:6px;font-size:11px;color:var(--red)">⛔ ${d?.governance_downgrade_reason || 'Downgraded to observation_only by MAIFS governance.'}</div>` : ''}
+        <div style="margin-top:6px;font-size:10px;color:var(--muted)">Source: ${f.provenance?.docRule || f.rule_id} · Scope: ${f.scope ? Object.entries(f.scope).filter(([,v])=>v).map(([k])=>k).join(', ') : 'campaign'}</div>
+      </div>`;
+    }).join('')}
+  `;
+}
+// ── Business Logic Inventory (Phase X.2 — Rule Engine Authority) ──
+// Renders GET /rule-engine/inventory: every business rule/threshold in the
+// system regardless of which engine executes it, tagged by `owner`. This is
+// a registry view, not an execution trace -- `editableAtRuntime` tells you
+// whether a row can be changed via the DB (alert/recommendation rules) or
+// requires a code change (native Framework rules, diagnosis/opportunity
+// constants).
+const OWNER_LABELS = {
+  ruleEngine: 'Rule Engine (native)',
+  attributed: 'Rule Engine (attributed)',
+  alertEngine: 'Alert Engine',
+  recommendationEngine: 'Recommendation Engine',
+  diagnosisEngine: 'Diagnosis Engine',
+  opportunityEngine: 'Opportunity Engine',
+};
+
+function icBusinessLogicInventoryTab(inventory) {
+  const owners = Object.keys(inventory.byOwner);
+  return `
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;flex-wrap:wrap;gap:8px">
+      <div class="section-title">Business Logic Registry (${inventory.total} rules)</div>
+      <div style="display:flex;gap:6px;flex-wrap:wrap">
+        ${owners.map(o => `<span class="chip" style="background:var(--bg3)">${OWNER_LABELS[o]||o}: <strong>${inventory.byOwner[o]}</strong></span>`).join('')}
+      </div>
+    </div>
+    <div class="text-muted" style="font-size:12px;margin-bottom:12px">
+      One registry of every threshold/formula in the system, regardless of which engine evaluates it.
+      This is a read-only inventory, not an execution path — Rule Engine itself still only executes the
+      "Rule Engine (native)" rows; every other row is attributed to (and still runs inside) its own engine.
+    </div>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Owner</th><th>ID</th><th>Name</th><th>Metric / Threshold</th><th>Severity</th><th>Runtime Editable</th></tr></thead>
+        <tbody>
+          ${inventory.entries.map(e => `<tr>
+            <td><span class="chip" style="background:var(--bg3)">${OWNER_LABELS[e.owner]||e.owner}</span></td>
+            <td class="td-muted" style="font-size:11px">${e.id}</td>
+            <td>${e.name||'—'}</td>
+            <td class="td-muted" style="font-size:11px">${e.metric ? `${e.metric} ${e.operator||''} ${e.threshold??''}` : (e.threshold!==undefined ? e.threshold : '—')}</td>
+            <td>${e.severity ? `<span class="badge ${e.severity}" style="font-size:10px">${e.severity}</span>` : '—'}</td>
+            <td>${e.editableAtRuntime ? '<span class="badge good" style="font-size:10px">✓ DB-driven</span>' : '<span class="badge none" style="font-size:10px">Code-defined</span>'}</td>
+          </tr>`).join('')}
+        </tbody>
+      </table>
+    </div>
+  `;
+}
+
 function scoreCircle(score, small=false) {
   const cls = scoreClass(score);
   const val = score !== null && score !== undefined ? score : '—';
@@ -532,6 +811,10 @@ async function loadDashboard() {
     </div>
   </div>
 
+  <div class="card" id="sync-status-card" style="margin-bottom:20px">
+    <div class="loader"><span class="spin">◌</span> Loading sync status...</div>
+  </div>
+
   <div class="grid" style="grid-template-columns:1fr 1fr;gap:16px;margin-bottom:20px">
     <div class="card">
       <div class="stat-label">Recommendations</div>
@@ -572,7 +855,7 @@ async function loadDashboard() {
         <tr>
           <td class="td-name" style="cursor:pointer;color:var(--accent2)" onclick="viewCampaign('${c.meta_campaign_id}')">${c.name}</td>
           <td>${objChip(c.objective)}</td>
-          <td><span class="chip ${c.status}">${c.status}</span></td>
+          <td>${lifecycleChip(c)}</td>
           <td>
             <div style="display:flex;align-items:center;gap:8px">
               ${scoreCircle(c.health_score, true)}
@@ -587,6 +870,139 @@ async function loadDashboard() {
     </table>
   </div>
   `;
+
+  refreshSyncStatusCard();
+  if (syncStatusPollHandle) clearInterval(syncStatusPollHandle);
+  syncStatusPollHandle = setInterval(() => {
+    if (currentPage === 'dashboard') refreshSyncStatusCard();
+    else clearInterval(syncStatusPollHandle);
+  }, 15000);
+}
+
+// ═══════════════════════════════════════════════════════════════
+// EXECUTIVE SYNC STATUS — Smart Auto Sync System
+// ═══════════════════════════════════════════════════════════════
+let syncStatusPollHandle = null;
+
+function fmtWhen(iso) {
+  if (!iso) return '—';
+  return new Date(iso).toLocaleString('en-GB', { day:'2-digit', month:'short', hour:'2-digit', minute:'2-digit' });
+}
+function fmtDuration(ms) {
+  if (ms === null || ms === undefined) return '—';
+  if (ms < 1000) return ms + 'ms';
+  return (ms / 1000).toFixed(1) + 's';
+}
+
+async function refreshSyncStatusCard() {
+  const el = document.getElementById('sync-status-card');
+  if (!el) return;
+  let data;
+  try {
+    const r = await api('/sync/scheduler-status');
+    data = r.data;
+  } catch (e) { return; }
+  if (!data) return;
+
+  const running = data.scheduler_status === 'running';
+  const rateLimited = data.meta_api.rate_limit_status === 'limited';
+
+  el.innerHTML = `
+    <div class="section-header">
+      <div><span class="section-title">Executive Sync Status</span></div>
+      <div style="display:flex;align-items:center;gap:8px">
+        <span class="badge ${running ? 'excellent' : 'warning'}">${running ? '● Running' : '⏸ Paused'}</span>
+        <button class="btn btn-ghost btn-sm" onclick="toggleScheduler(${running})">${running ? 'Pause' : 'Resume'}</button>
+      </div>
+    </div>
+    <div class="grid grid-4" style="gap:12px;margin-top:8px">
+      <div>
+        <div class="stat-label">Accounts</div>
+        <div style="font-size:13px;margin-top:4px">
+          <div>Connected: <strong>${data.accounts.connected}</strong></div>
+          <div>Waiting: <strong>${data.accounts.waiting}</strong></div>
+          <div>Syncing: <strong class="text-green">${data.accounts.syncing}</strong></div>
+          <div>Completed: <strong>${data.accounts.completed}</strong></div>
+        </div>
+      </div>
+      <div>
+        <div class="stat-label">Current Cycle</div>
+        <div style="font-size:13px;margin-top:4px">
+          <div>Current Account: <strong>${data.current_account ? data.current_account.name : '—'}</strong></div>
+          <div>Current Step: <strong>${data.current_entity_type || '—'}</strong></div>
+          <div>Queue Position: <strong>${data.queue_position}/${data.queue_size}</strong></div>
+          <div>Progress: <strong>${data.progress_pct}%</strong></div>
+        </div>
+      </div>
+      <div>
+        <div class="stat-label">Freshness</div>
+        <div style="font-size:13px;margin-top:4px">
+          <div>Next Scheduled: <strong>${fmtWhen(data.next_scheduled_at)}</strong></div>
+          <div>Last Success: <strong class="text-green">${fmtWhen(data.last_successful_sync_at)}</strong></div>
+          <div>Last Failed: <strong class="${data.last_failed_sync_at ? 'text-red' : ''}">${fmtWhen(data.last_failed_sync_at)}</strong></div>
+          <div>Avg Duration: <strong>${fmtDuration(data.average_sync_duration_ms)}</strong></div>
+        </div>
+      </div>
+      <div>
+        <div class="stat-label">Meta API</div>
+        <div style="font-size:13px;margin-top:4px">
+          <div>Rate Limit: <strong class="${rateLimited ? 'text-orange' : 'text-green'}">${rateLimited ? 'Limited' : 'OK'}</strong></div>
+          <div>Retry Counter: <strong>${data.meta_api.retry_counter}</strong></div>
+          <div>Campaigns/AdSets/Ads: <strong>${data.totals.campaigns}/${data.totals.ad_sets}/${data.totals.ads}</strong></div>
+        </div>
+      </div>
+    </div>
+    ${data.last_error ? `<div class="text-red" style="font-size:11px;margin-top:10px">Last error (${fmtWhen(data.last_error_at)}): ${data.last_error}</div>` : ''}
+    <div class="table-wrap" style="margin-top:14px">
+      <table>
+        <thead><tr>
+          <th>Account</th><th>Auto Sync</th><th>Scheduler</th><th>Queue</th><th>Tier</th>
+          <th>Last Success</th><th>Last Failed</th><th>Cooldown</th><th>Next Sync</th><th>Freshness</th>
+        </tr></thead>
+        <tbody>
+          ${(data.per_account || []).map(a => renderPerAccountStatusRow(a)).join('')}
+          ${!(data.per_account || []).length ? '<tr><td colspan="10" class="empty">No connected accounts yet.</td></tr>' : ''}
+        </tbody>
+      </table>
+    </div>
+  `;
+}
+
+function schedulerStateBadge(state) {
+  const map = {
+    disabled:     { cls: 'none',      label: '⏸ Auto Sync Disabled' },
+    disconnected: { cls: 'critical',  label: 'Disconnected' },
+    syncing:      { cls: 'excellent', label: '● Syncing' },
+    cooldown:     { cls: 'warning',   label: '⏳ Cooldown' },
+    queued:       { cls: 'info',      label: 'Queued' },
+    idle:         { cls: 'good',      label: '✓ Auto Sync Enabled' },
+  };
+  const m = map[state] || { cls: 'none', label: state || '—' };
+  return `<span class="badge ${m.cls}" style="font-size:10px">${m.label}</span>`;
+}
+
+function renderPerAccountStatusRow(a) {
+  const fresh = a.freshness || [];
+  const staleCount = fresh.filter(f => f.is_stale).length;
+  const freshnessTitle = fresh.map(f => `${f.entity_type}: ${f.is_stale ? 'stale' : 'fresh'} (every ${f.interval_minutes}m)`).join('\n');
+  return `
+    <tr>
+      <td class="td-name">${a.account_name}</td>
+      <td>${a.auto_sync_enabled ? '<span class="badge good" style="font-size:10px">✓ ON</span>' : '<span class="badge none" style="font-size:10px">⏸ OFF</span>'}</td>
+      <td>${schedulerStateBadge(a.scheduler_state)}</td>
+      <td class="td-muted">${a.queue_position ? `${a.queue_position}/${a.queue_size}` : '—'}</td>
+      <td class="td-muted">${a.current_sync_tier || '—'}</td>
+      <td class="td-muted" style="font-size:11px">${fmtWhen(a.last_successful_sync_at)}</td>
+      <td class="${a.last_failed_sync_at ? 'text-red' : 'td-muted'}" style="font-size:11px">${fmtWhen(a.last_failed_sync_at)}</td>
+      <td class="td-muted" style="font-size:11px">${a.cooldown_resumes_at ? fmtWhen(a.cooldown_resumes_at) : '—'}</td>
+      <td class="td-muted" style="font-size:11px">${typeof a.next_scheduled_sync_at === 'string' && a.next_scheduled_sync_at.startsWith('due') ? a.next_scheduled_sync_at : fmtWhen(a.next_scheduled_sync_at)}</td>
+      <td title="${freshnessTitle}"><span class="badge ${staleCount === 0 ? 'excellent' : staleCount === fresh.length ? 'critical' : 'warning'}" style="font-size:10px">${fresh.length - staleCount}/${fresh.length} fresh</span></td>
+    </tr>`;
+}
+
+async function toggleScheduler(currentlyRunning) {
+  await apiPost(`/sync/scheduler/${currentlyRunning ? 'pause' : 'resume'}`, {});
+  refreshSyncStatusCard();
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -604,10 +1020,11 @@ window.ic = {
   scoreMap:        {},   // health scores by meta_campaign_id
   selectedCampaign: null, // full campaign object
   selectedAdSet:   null, // { meta_adset_id, name }
-  level:           'campaign', // 'campaign' | 'adsets' | 'ads'
+  level:           'campaign', // 'campaign' | 'adsets' | 'ads' | 'diagnosis'
   insights:        null, // last loaded insights
   adsets:          [],   // ad sets for selected campaign
   ads:             [],   // ads for selected ad set
+  diagnosis:       null, // last loaded diagnosis (Phase 9)
 };
 
 // ── KPI helpers (inline — mirrors src/services/kpiProfileResolver.js's
@@ -630,6 +1047,39 @@ const _KPI = {
   unknown:       { key:'spend',              label:'Spend',              costKey:'cpm',  costLabel:'CPM' },
 };
 function icKPI(obj) { return _KPI[obj] || _KPI.unknown; }
+
+// ── Meta lifecycle (mirrors src/services/metaLifecycle.js's LIFECYCLE map --
+// kept in sync manually, same static-file-no-build-step reasoning as _KPI
+// above). Never infers delivery state from spend/impressions -- only from
+// the real effective_status Meta returned via sync. ──
+const _LIFECYCLE = {
+  ACTIVE:               { label:'Active',               isDelivering:true  },
+  PAUSED:               { label:'Paused',                isDelivering:false },
+  CAMPAIGN_PAUSED:      { label:'Campaign Paused',        isDelivering:false },
+  ADSET_PAUSED:         { label:'Ad Set Paused',          isDelivering:false },
+  ARCHIVED:             { label:'Archived',               isDelivering:false },
+  DELETED:              { label:'Deleted',                isDelivering:false },
+  IN_PROCESS:           { label:'In Process',             isDelivering:false },
+  WITH_ISSUES:          { label:'With Issues',            isDelivering:false },
+  DISAPPROVED:          { label:'Disapproved',            isDelivering:false },
+  PENDING_REVIEW:       { label:'Pending Review',         isDelivering:false },
+  PREAPPROVED:          { label:'Preapproved',            isDelivering:false },
+  PENDING_BILLING_INFO: { label:'Pending Billing Info',   isDelivering:false },
+  ACCOUNT_DISABLED:     { label:'Account Disabled',       isDelivering:false },
+};
+function lifecycleInfo(entity) {
+  const code = (entity?.effective_status || entity?.status || '').toUpperCase().trim();
+  return { code, ...( _LIFECYCLE[code] || { label: entity?.status || 'Unknown', isDelivering: code === 'ACTIVE' } ) };
+}
+// Renders the REAL Meta delivery state -- prefers effective_status over the
+// coarser status the rest of the UI historically showed, so a campaign
+// whose ad set is really CAMPAIGN_PAUSED never displays as plain "active".
+function lifecycleChip(entity) {
+  const info = lifecycleInfo(entity);
+  const cls = info.isDelivering ? 'active' : (info.code === 'PAUSED' ? 'paused' : '');
+  const style = cls ? '' : 'style="background:var(--bg3);color:var(--muted)"';
+  return `<span class="chip ${cls}" ${style}>${info.label}</span>`;
+}
 function icScoreStyle(s) {
   if (s===null||s===undefined) return 'color:var(--muted);border-color:var(--border)';
   if (s>=80) return 'color:var(--green);border-color:var(--green)';
@@ -695,7 +1145,7 @@ function buildHealthTrendHtml(trendArr, currentScore) {
 async function loadCampaigns() {
   document.getElementById('content').innerHTML = '<div class="loader"><span class="spin">◌</span> Loading campaigns...</div>';
   const [campsR, histR] = await Promise.all([
-    api('/campaigns?limit=200'),
+    apiDate('/campaigns?limit=200'),
     apiDate('/health-history'),
   ]);
   window.ic.campaigns = campsR.data || [];
@@ -733,7 +1183,7 @@ function renderIC() {
       ${c ? `
       <div class="ic-header-meta">
         <span class="ic-header-pill">${objChip(c.objective)}</span>
-        <span class="ic-header-pill chip ${c.status}" style="background:transparent;padding:0">${c.status}</span>
+        <span class="ic-header-pill" style="background:transparent;padding:0">${lifecycleChip(c)}</span>
       </div>
       ${icScoreEl(h?.health_score ?? null)}
       <span class="badge ${h?.health_status||'none'}" style="font-size:11px">${h?.health_status||'Not analyzed'}</span>
@@ -755,6 +1205,9 @@ function renderIC() {
       </div>
       <div class="ic-tab${window.ic.level==='ads'?' active':''}" onclick="icSetLevel('ads')">
         🎯 Ads ${window.ic.selectedAdSet ? '<span class="ic-tab-count">'+window.ic.selectedAdSet.name.slice(0,12)+'…</span>' : ''}
+      </div>
+      <div class="ic-tab${window.ic.level==='diagnosis'?' active':''}" onclick="icSetLevel('diagnosis')">
+        🩺 Diagnosis
       </div>
     </div>
 
@@ -788,6 +1241,7 @@ async function icSelectCampaign(metaId) {
   window.ic.insights         = null;  // force re-fetch
   window.ic.adsets           = [];    // clear adsets cache
   window.ic.ads              = [];    // clear ads cache
+  window.ic.diagnosis        = null;  // clear diagnosis cache
   renderIC();
 }
 
@@ -801,6 +1255,7 @@ function icSetLevel(level) {
   if (level === 'adsets') window.ic.adsets = [];
   if (level === 'ads')    window.ic.ads    = [];
   if (level === 'campaign') window.ic.insights = null;
+  if (level === 'diagnosis') window.ic.diagnosis = null;
   window.ic.level = level;
   renderIC();
 }
@@ -851,7 +1306,7 @@ function icRefreshHeaderOnly() {
   const badgeEl = topbar.querySelector('.badge');
   if (badgeEl) {
     badgeEl.className = `badge ${h?.health_status||'none'}`;
-    badgeEl.textContent = h?.health_status || 'Not analyzed';
+    badgeEl.textContent = fmtHealthStatus(h?.health_status);
   }
 }
 
@@ -860,9 +1315,198 @@ async function icLoadLevel() {
   const el = document.getElementById('ic-level-content');
   if (!el) return;
 
-  if (window.ic.level === 'campaign') { await icLoadCampaignView(el); return; }
-  if (window.ic.level === 'adsets')   { await icLoadAdSetsView(el);   return; }
-  if (window.ic.level === 'ads')      { await icLoadAdsView(el);      return; }
+  if (window.ic.level === 'campaign')  { await icLoadCampaignView(el);  return; }
+  if (window.ic.level === 'adsets')    { await icLoadAdSetsView(el);    return; }
+  if (window.ic.level === 'ads')       { await icLoadAdsView(el);       return; }
+  if (window.ic.level === 'diagnosis') { await icLoadDiagnosisView(el); return; }
+}
+
+// ── DIAGNOSIS (Phase 9 — rule-based "why did this move") ──
+function icDiagBadgeClass(kind, val) {
+  if (kind === 'priority') {
+    return { critical:'critical', high:'warning', medium:'good', low:'none', observation_only:'none' }[val] || 'none';
+  }
+  // confidence
+  return { high:'excellent', medium:'good', low:'none' }[val] || 'none';
+}
+
+// ── Executive Diagnosis Card (Phase X.5) ──
+// Renders `dg.findings` (server-shaped by decisionEngine.findingShapeForCard()
+// -- see insights.js's diagnosis route) as one card per finding, each with
+// all 11 requested fields sourced from runtime data. `decision_history_id`
+// (present only when this finding has already reached the Decision Center)
+// is what makes Next Action interactive -- when absent, the finding is
+// reported honestly as not yet tracked rather than showing a dead button.
+function icNextActionCell(f) {
+  if (!f.decision_history_id) {
+    return '<span class="text-muted" style="font-size:11px">Not yet tracked in Decision Center</span>';
+  }
+  if (f.next_action_taken || f.next_action_status === 'completed') {
+    return '<span class="badge good">✓ Completed</span>';
+  }
+  if (f.next_action_status === 'dismissed') {
+    return '<span class="badge none">Dismissed</span>';
+  }
+  const label = (f.decision_label || f.decision_type || '').replace(/'/g, "\\'");
+  return `
+    <button class="btn btn-success btn-sm" onclick="icCompleteFinding('${f.decision_history_id}','${label}')">✓ Mark Done</button>
+    <button class="btn btn-danger btn-sm" onclick="icDismissFinding('${f.decision_history_id}')">Dismiss</button>
+  `;
+}
+
+async function icCompleteFinding(decisionHistoryId, label) {
+  openModal(`
+  <h3>✓ Mark Complete</h3>
+  <p class="text-muted" style="font-size:13px;margin-bottom:14px">What action did you take for "${label}"?</p>
+  <div class="form-group">
+    <label class="form-label">Action Notes (optional)</label>
+    <textarea class="form-input" id="ic-finding-note"></textarea>
+  </div>
+  <div class="modal-actions">
+    <button class="btn btn-ghost" onclick="closeModal()">Cancel</button>
+    <button class="btn btn-primary" onclick="icSaveFindingComplete('${decisionHistoryId}')">Mark Complete</button>
+  </div>`);
+}
+
+async function icSaveFindingComplete(decisionHistoryId) {
+  const notes = document.getElementById('ic-finding-note')?.value || '';
+  try { await apiPatch('/decisions/history/' + decisionHistoryId, { status: 'completed', action_notes: notes, action_taken: true }); } catch {}
+  closeModal();
+  window.ic.diagnosis = null; // force refetch -- the cached response is now stale
+  icLoadLevel();
+}
+
+async function icDismissFinding(decisionHistoryId) {
+  try { await apiPatch('/decisions/history/' + decisionHistoryId, { status: 'dismissed' }); } catch {}
+  window.ic.diagnosis = null;
+  icLoadLevel();
+}
+
+function icExecutiveFindingCard(f) {
+  const priorityCls = icDiagBadgeClass('priority', f.priority);
+  const confidenceCls = icDiagBadgeClass('confidence', f.confidence);
+  const evidenceText = f.evidence
+    ? (Array.isArray(f.evidence)
+        ? f.evidence.map(e => `${e.metric||''} ${e.operator||''} ${e.threshold??''} (actual: ${e.actual??'—'})`).join(' · ')
+        : `${f.evidence.metric||''} actual: ${f.evidence.actual ?? f.evidence.detected_value ?? '—'}, threshold: ${f.evidence.threshold ?? f.evidence.threshold_value ?? '—'}`)
+    : '—';
+
+  return `
+  <div class="card" style="margin-bottom:12px;border-left:3px solid ${f.governance_state==='failed' ? 'var(--red)' : 'var(--accent2)'}">
+    <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px">
+      <div>
+        <span class="chip" style="background:var(--bg3)">${f.source}</span>
+        <span style="font-size:13px;font-weight:600;margin-left:6px">${f.decision_label || f.decision_type || 'Decision: —'}</span>
+      </div>
+      <div style="display:flex;gap:6px;flex-wrap:wrap">
+        <span class="badge ${priorityCls}">${(f.priority||'—').replace('_',' ')}</span>
+        <span class="badge ${confidenceCls}">${f.confidence || '—'} confidence</span>
+        ${f.governance_state ? icGovernanceStateBadge(f.governance_state) : ''}
+      </div>
+    </div>
+    <div style="margin-top:8px;font-size:12px;color:var(--muted)">
+      Framework: <strong style="color:var(--text)">${f.framework_name || f.framework || '—'}</strong>
+      ${f.category ? ` · Root cause category: <strong style="color:var(--text);text-transform:capitalize">${f.category}</strong>` : ''}
+    </div>
+    <div style="margin-top:8px;font-size:12px;padding:8px;background:var(--bg3);border-radius:6px">💡 <strong>Recommendation:</strong> ${f.suggested_action || '—'}</div>
+    <div style="margin-top:6px;font-size:11px;color:var(--muted)">📊 <strong>Evidence:</strong> ${evidenceText}</div>
+    <div style="margin-top:6px;font-size:11px;color:var(--muted)">🎯 <strong>Expected Result:</strong> ${f.expected_impact || 'Not yet projected — this finding hasn\'t reached the Decision Center\'s history yet'}</div>
+    ${f.historical_note ? `
+    <div style="margin-top:6px;font-size:11px;color:var(--orange)">🧠 <strong>Memory:</strong> ${f.historical_note}</div>
+    ` : (f.historical_effectiveness && f.historical_effectiveness.attempts > 0 ? `
+    <div style="margin-top:6px;font-size:11px;color:var(--muted)">🧠 <strong>Memory:</strong> Tried ${f.historical_effectiveness.attempts} time(s) before — ${f.historical_effectiveness.improved} improved, ${f.historical_effectiveness.worsened} worsened, ${f.historical_effectiveness.no_change} no change.</div>
+    ` : '')}
+    <div style="margin-top:8px;display:flex;gap:6px;align-items:center">
+      <span style="font-size:11px;color:var(--muted)">Next Action:</span> ${icNextActionCell(f)}
+    </div>
+  </div>`;
+}
+
+function icExecutiveDiagnosisFindings(findings) {
+  if (!findings || !findings.length) {
+    return `<div class="empty">No Decision, Recommendation, or Alert has been generated for this finding yet.</div>`;
+  }
+  return findings.map(icExecutiveFindingCard).join('');
+}
+
+async function icLoadDiagnosisView(el) {
+  const c = window.ic.selectedCampaign;
+  el.innerHTML = '<div class="loader"><span class="spin">◌</span> Loading...</div>';
+
+  let dg = window.ic.diagnosis;
+  if (!dg) {
+    try { dg = await api(addDateQ(insightsUrl(`/campaigns/${c.id}/insights/diagnosis`))); window.ic.diagnosis = dg; } catch(e) {
+      el.innerHTML = '<div class="ic-empty">⚠ Could not load diagnosis<br><span style="font-size:11px;opacity:.7">Check your connection and try again</span></div>';
+      return;
+    }
+  }
+
+  if (dg.analyzed === false) {
+    el.innerHTML = `<div class="ic-empty">⚠ ${dg.reason || 'No Meta insights available for the selected period'}<br>
+      <span style="font-size:11px;opacity:.7">Try a different date range, or verify the account's Meta access token.</span></div>`;
+    return;
+  }
+
+  const d = dg.diagnosis || {};
+
+  if (d.status === 'insufficient_data') {
+    el.innerHTML = `
+      ${icExecutiveSummaryCard(dg.executive_summary)}
+      <div class="ic-empty">🩺 Not enough traffic to diagnose this period<br>
+      <span style="font-size:11px;opacity:.7">${d.summary || ''}</span></div>`;
+    return;
+  }
+
+  const pd = d.primaryDelta || {};
+  const pctCls = (pd.delta_pct || 0) < 0 ? 'var(--red)' : 'var(--green)';
+
+  el.innerHTML = `
+    <div style="margin-bottom:10px;display:flex;align-items:center;gap:8px">
+      ${dg.date_range ? `<span style="font-size:11px;padding:3px 8px;background:var(--bg3);border:1px solid var(--border);border-radius:6px;color:var(--muted)">${dg.date_range.since} → ${dg.date_range.until}</span>` : ''}
+      ${dg.is_mock ? '<span style="font-size:10px;padding:2px 6px;background:var(--blue-bg);color:var(--blue);border-radius:8px;font-weight:600">MOCK</span>' : ''}
+    </div>
+
+    ${icExecutiveSummaryCard(dg.executive_summary)}
+
+    <div class="card" style="margin-bottom:16px">
+      <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px">
+        <div>
+          <div class="stat-label">🔍 Root Cause: <span style="text-transform:capitalize">${d.category || 'unexplained'}</span></div>
+          <div class="stat-label" style="margin-top:8px">📈 Business Impact: ${d.primaryLabel || d.primaryKey}</div>
+          <div class="stat-value" style="color:${pctCls}">${pd.delta_pct != null ? (pd.delta_pct > 0 ? '▲' : '▼') + Math.abs(pd.delta_pct) + '%' : '—'}</div>
+        </div>
+        <div style="display:flex;gap:6px;flex-wrap:wrap">
+          <span class="badge ${icDiagBadgeClass('confidence', d.confidence)}">${d.confidence || '—'} confidence</span>
+          <span class="badge ${icDiagBadgeClass('priority', d.priority)}">${(d.priority||'—').replace('_',' ')}</span>
+        </div>
+      </div>
+      <div style="margin-top:10px;font-size:13px;color:var(--text)">${d.summary || ''}</div>
+    </div>
+
+    ${d.factors && d.factors.length ? `
+    <div class="section-header"><span class="section-title">Evidence — Contributing Factors</span></div>
+    <div class="card" style="margin-bottom:16px">
+      ${d.factors.map(f => `
+        <div style="padding:8px 0;border-bottom:1px solid var(--border)">
+          <span class="chip" style="background:var(--bg3);color:var(--muted);text-transform:capitalize">${f.category}</span>
+          <span style="margin-left:8px;font-size:13px">${f.detail}</span>
+        </div>
+      `).join('')}
+    </div>` : ''}
+
+    <div class="card" style="margin-bottom:16px">
+      <div class="stat-label">Health Score</div>
+      <div style="display:flex;align-items:center;gap:8px;margin-top:8px">
+        ${scoreCircle(dg.health_score, true)}
+        <span class="badge ${dg.health_status||'none'}">${fmtHealthStatus(dg.health_status)}</span>
+      </div>
+    </div>
+
+    <div class="section-header"><span class="section-title">Decisions &amp; Recommendations (${(dg.findings||[]).length})</span></div>
+    ${icExecutiveDiagnosisFindings(dg.findings)}
+
+    ${icGovernancePanel(dg._governance)}
+  `;
 }
 
 // ── CAMPAIGN OVERVIEW ──
@@ -897,6 +1541,8 @@ async function icLoadCampaignView(el) {
       ${ins.data_freshness?.source === 'mock' ? '<span style="font-size:10px;padding:2px 6px;background:var(--blue-bg);color:var(--blue);border-radius:8px;font-weight:600">MOCK</span>' : ''}
       ${ins.data_freshness?.data_may_be_incomplete ? '<span style="font-size:10px;padding:2px 6px;background:var(--orange-bg);color:var(--orange);border-radius:8px">⚠ Partial data</span>' : ''}
     </div>
+    ${icExecutiveSummaryCard(ins.executive_summary)}
+    ${icObjectiveIntelligenceSection(ins.objective_intelligence, ins.currency)}
     <!-- Primary KPI hero row -->
     <div class="ic-hero">
       <div class="ic-kpi-card primary">
@@ -953,7 +1599,10 @@ async function icLoadCampaignView(el) {
         <div style="border-left:3px solid ${r.severity==='critical'?'var(--red)':'var(--orange)'};padding:8px 12px;margin-bottom:8px;background:var(--bg3);border-radius:0 6px 6px 0">
           <div style="display:flex;align-items:center;justify-content:space-between;gap:8px">
             <div style="font-size:13px;font-weight:600">${r.recommendation_title}</div>
-            ${r.confidence_pct!=null ? `<span style="font-size:10px;padding:2px 7px;background:var(--bg2);border-radius:8px;color:var(--accent2);font-weight:600">${r.confidence_pct}% confidence</span>` : ''}
+            <div style="display:flex;gap:6px;align-items:center">
+              ${r.confidence_pct!=null ? `<span style="font-size:10px;padding:2px 7px;background:var(--bg2);border-radius:8px;color:var(--accent2);font-weight:600">${r.confidence_pct}% confidence</span>` : ''}
+              ${r.governance_state ? icGovernanceStateBadge(r.governance_state) : ''}
+            </div>
           </div>
           <div style="font-size:12px;color:var(--muted);margin-top:3px">${r.recommendation_body}</div>
           ${r.metric_key && r.evidence!=null && r.threshold!=null ? `
@@ -971,9 +1620,15 @@ async function icLoadCampaignView(el) {
       ${ins.alerts.map(a => `
         <div style="display:flex;align-items:center;justify-content:space-between;padding:6px 0;border-bottom:1px solid var(--border)">
           <div><span class="badge ${a.severity}" style="margin-right:8px">${a.severity}</span><span style="font-size:12px">${a.alert_message||a.alert_code}</span></div>
-          <span style="font-size:11px;color:var(--muted)">${a.occurrence_count}x</span>
+          <div style="display:flex;gap:6px;align-items:center">
+            ${a.governance_state ? icGovernanceStateBadge(a.governance_state) : ''}
+            <span style="font-size:11px;color:var(--muted)">${a.occurrence_count}x</span>
+          </div>
         </div>`).join('')}
     </div>` : ''}
+
+    ${icRuleEnginePanel(ins.framework_recommendations, ins.rule_engine_decisions)}
+    ${icGovernancePanel(ins._governance)}
   `;
 }
 
@@ -1040,7 +1695,7 @@ function icRenderAdSetRows(data, kpi, insightMap) {
           <div class="ic-cell-name">${s.name}</div>
           <div style="margin-top:2px;display:flex;gap:4px;align-items:center">${objChip(s.objective)}${s.optimization_goal ? `<span class="chip" style="font-size:9px;text-transform:none" title="Optimization Goal">${s.optimization_goal}</span>` : ''}</div>
         </div>
-        <div><span class="chip ${s.status}" style="font-size:10px">${s.status}</span></div>
+        <div style="font-size:10px">${lifecycleChip(s)}</div>
         <div style="display:flex;align-items:center;gap:5px">${icScoreEl(hs)}</div>
         <div class="ic-cell-muted" style="font-size:11px">${s.targeting_summary || '—'}</div>
         <div class="ic-cell-muted">${hasLiveMetrics ? icFmtVal(kpi.key, m[kpi.key]) : '<span style="font-style:italic;opacity:.5;font-size:10px">Click ⚡</span>'}</div>
@@ -1117,7 +1772,7 @@ async function icLoadAdsView(el) {
             <span class="ic-cell-muted" style="font-size:10px">${a.adset_name||''}</span>
           </div>
         </div>
-        <div><span class="chip ${a.status}" style="font-size:10px">${a.status}</span></div>
+        <div style="font-size:10px">${lifecycleChip(a)}</div>
         <div style="display:flex;align-items:center;gap:5px">${icScoreEl(hs)}</div>
         <div class="ic-cell-muted">${hasLiveMetrics ? icFmtVal(kpi.key, m[kpi.key]) : '<span style="font-style:italic;opacity:.5;font-size:10px">Click ⚡</span>'}</div>
         <div class="ic-cell-muted">${hasLiveMetrics ? icFmtVal(kpi.costKey, m[kpi.costKey]) : '—'}</div>
@@ -1321,7 +1976,7 @@ function renderAlertCards(alerts) {
 // RECOMMENDATIONS PAGE
 // ═══════════════════════════════════════════════════════════════
 async function loadRecommendations() {
-  const [recs, camps] = await Promise.all([api('/recommendations?limit=100'), api('/campaigns?limit=200')]);
+  const [recs, camps] = await Promise.all([apiDate('/recommendations?limit=100'), apiDate('/campaigns?limit=200')]);
   const campMap = {};
   (camps.data||[]).forEach(c => campMap[c.meta_campaign_id] = c.name);
 
@@ -1364,6 +2019,7 @@ function renderFullRecList(data, campMap) {
           <span class="badge ${r.severity}">${r.severity}</span>
           ${r.campaign_name ? `<span class="text-muted" style="font-size:12px">${r.campaign_name}</span>` : ''}
           ${r.objective ? objChip(r.objective) : ''}
+          ${r.governance_state ? icGovernanceStateBadge(r.governance_state) : ''}
         </div>
       </div>
       ${r.action_taken ? '<span class="badge good">✓ Done</span>' : ''}
@@ -1428,7 +2084,7 @@ async function saveNote(id) {
 // ALERTS PAGE
 // ═══════════════════════════════════════════════════════════════
 async function loadAlerts() {
-  const alerts = await api('/alerts?limit=200');
+  const alerts = await apiDate('/alerts?limit=200');
   document.getElementById('content').innerHTML = `
   <div class="filter-bar">
     <select onchange="filterAlerts()" id="af-severity">
@@ -1458,7 +2114,7 @@ function renderAlertsTable(data) {
   return `<table>
     <thead><tr>
       <th>Severity</th><th>Campaign</th><th>Objective</th><th>Alert</th><th>Message</th>
-      <th>Occurrences</th><th>First Detected</th><th>Last Detected</th><th>Actions</th>
+      <th>Occurrences</th><th>First Detected</th><th>Last Detected</th><th>Governance</th><th>Actions</th>
     </tr></thead>
     <tbody>
     ${data.map(a=>`
@@ -1471,6 +2127,7 @@ function renderAlertsTable(data) {
       <td>${a.occurrence_count||1}×</td>
       <td class="td-muted">${fmtDate(a.first_detected_at)}</td>
       <td class="td-muted">${fmtDate(a.last_detected_at)}</td>
+      <td>${a.governance_state ? icGovernanceStateBadge(a.governance_state) : '<span class="text-muted" style="font-size:11px">—</span>'}</td>
       <td style="white-space:nowrap">
         <button class="btn btn-ghost btn-sm" onclick="snoozeAlert('${a.id}')">Snooze</button>
         <button class="btn btn-danger btn-sm" style="margin-left:4px" onclick="dismissAlert('${a.id}')">Dismiss</button>
@@ -1528,41 +2185,33 @@ async function dismissAlert(id) {
 // ═══════════════════════════════════════════════════════════════
 async function loadSettings() {
   const settings = await api('/settings');
-  const { accounts, industries, targets, benchmark_overrides } = settings;
+  const { accounts, industries, targets, benchmark_overrides, sync_intervals } = settings;
+  const inventoryResp = await api('/rule-engine/inventory').catch(() => null);
+  const inventory = inventoryResp && inventoryResp.data;
+  // Scheduler state per account (Task 6) -- reuses the same scheduler-status
+  // endpoint the Dashboard's Executive Sync Status card calls; no separate
+  // per-account scheduling logic here.
+  const schedResp = await api('/sync/scheduler-status').catch(() => null);
+  const schedById = {};
+  ((schedResp && schedResp.data && schedResp.data.per_account) || []).forEach(r => { schedById[r.id] = r; });
 
   document.getElementById('content').innerHTML = `
   <div class="tabs">
     <div class="tab active" onclick="showSettingsTab('accounts',this)">Accounts</div>
     <div class="tab" onclick="showSettingsTab('targets',this)">Targets</div>
     <div class="tab" onclick="showSettingsTab('benchmarks',this)">Benchmarks</div>
+    <div class="tab" onclick="showSettingsTab('rule-engine',this)">Rule Engine</div>
+    <div class="tab" onclick="showSettingsTab('autosync',this)">Auto Sync</div>
   </div>
 
   <!-- Accounts Tab -->
   <div id="stab-accounts">
-    ${accounts.map(a=>`
-    <div class="card" style="margin-bottom:12px">
-      <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px">
-        <div>
-          <div style="font-weight:600;font-size:15px">${a.account_name}</div>
-          <div class="text-muted" style="font-size:12px;margin-top:3px">
-            ID: ${a.meta_account_id} · ${a.currency} · ${a.timezone}
-          </div>
-          ${a.client_label ? `<div class="text-muted" style="font-size:12px">Label: ${a.client_label}</div>` : ''}
-        </div>
-        <div style="display:flex;align-items:center;gap:10px">
-          <span class="badge ${a.token_is_valid?'good':'critical'}">${a.token_is_valid?'✓ Token Valid':'⚠ Token Invalid'}</span>
-          <span class="chip ${a.status}">${a.status}</span>
-        </div>
-      </div>
-      <hr class="divider">
-      <div class="grid grid-3" style="font-size:12px;color:var(--muted)">
-        <div>Attribution Window: <strong style="color:var(--text)">${a.attribution_window_days} days</strong></div>
-        <div>Country: <strong style="color:var(--text)">${a.country_code||'—'}</strong></div>
-        <div>Last Verified: <strong style="color:var(--text)">${fmtDate(a.last_token_verified_at)}</strong></div>
-      </div>
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">
+      <div class="section-title">Connected Ad Accounts</div>
+      <button class="btn btn-primary" onclick="openAddAccount()">+ Add Account</button>
     </div>
-    `).join('')}
-    ${!accounts.length ? '<div class="empty">No accounts connected. Use POST /api/v1/accounts to connect.</div>' : ''}
+    ${accounts.map(a=>renderAccountCard(a, schedById[a.id])).join('')}
+    ${!accounts.length ? '<div class="empty">No accounts connected yet. Click "+ Add Account" to connect one.</div>' : ''}
   </div>
 
   <!-- Targets Tab -->
@@ -1623,8 +2272,76 @@ async function loadSettings() {
       </table>
     </div>
   </div>
+
+  <!-- Rule Engine Tab -->
+  <div id="stab-rule-engine" style="display:none">
+    ${inventory ? icBusinessLogicInventoryTab(inventory) : '<div class="empty">Could not load business logic registry.</div>'}
+  </div>
+
+  <!-- Auto Sync Tab -->
+  <div id="stab-autosync" style="display:none">
+    <div class="section-title" style="margin-bottom:12px">Smart Auto Sync Intervals</div>
+    <div class="card" style="margin-bottom:16px">
+      <div class="text-muted" style="font-size:12px;margin-bottom:12px">
+        How often the background scheduler refreshes each entity type, per account. Lower values mean fresher
+        data but more Meta API calls.
+      </div>
+      <div class="grid grid-3" style="gap:12px">
+        ${['insights','campaigns','adsets','ads','creatives','metadata'].map(t => `
+          <div class="form-group">
+            <label class="form-label">${t.charAt(0).toUpperCase()+t.slice(1)} (minutes)</label>
+            <input class="form-input" type="number" min="1" id="interval-${t}" value="${sync_intervals[t]}">
+          </div>
+        `).join('')}
+      </div>
+      <button class="btn btn-primary btn-sm" style="margin-top:8px" onclick="saveSyncIntervals()">Save Intervals</button>
+      <span id="autosync-save-msg" class="text-green" style="font-size:12px;margin-left:10px"></span>
+    </div>
+
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+      <div class="section-title">Recent Sync History</div>
+      <button class="btn btn-ghost btn-sm" onclick="loadSyncHistoryTable()">Refresh</button>
+    </div>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Account</th><th>Entity</th><th>Source</th><th>Started</th><th>Duration</th><th>Updated</th><th>Failed</th><th>Status</th></tr></thead>
+        <tbody id="sync-history-tbody"><tr><td colspan="8" class="empty">Loading…</td></tr></tbody>
+      </table>
+    </div>
+  </div>
   `;
   window._settingsAccounts = accounts;
+  loadSyncHistoryTable();
+}
+
+async function saveSyncIntervals() {
+  const types = ['insights','campaigns','adsets','ads','creatives','metadata'];
+  for (const t of types) {
+    const val = parseInt(document.getElementById('interval-'+t).value, 10);
+    await apiPatch('/settings/sync-intervals', { entity_type: t, interval_minutes: val });
+  }
+  const msg = document.getElementById('autosync-save-msg');
+  msg.textContent = 'Saved ✓';
+  setTimeout(() => { msg.textContent = ''; }, 2000);
+}
+
+async function loadSyncHistoryTable() {
+  const tbody = document.getElementById('sync-history-tbody');
+  if (!tbody) return;
+  const res = await api('/sync/history?limit=30');
+  const rows = res.data || [];
+  tbody.innerHTML = rows.length ? rows.map(r => `
+    <tr>
+      <td>${r.account_name || r.ad_account_id}</td>
+      <td>${r.entity_type}</td>
+      <td class="text-muted">${r.source}</td>
+      <td class="td-muted">${fmtWhen(r.started_at)}</td>
+      <td>${fmtDuration(r.duration_ms)}</td>
+      <td class="text-green">${r.records_updated}</td>
+      <td class="${r.records_failed>0?'text-red':''}">${r.records_failed}</td>
+      <td><span class="badge ${r.status==='success'?'excellent':r.status==='partial'?'warning':'critical'}">${r.status}</span></td>
+    </tr>
+  `).join('') : '<tr><td colspan="8" class="empty">No sync runs recorded yet.</td></tr>';
 }
 
 function showSettingsTab(name, el) {
@@ -1632,6 +2349,261 @@ function showSettingsTab(name, el) {
   document.querySelectorAll('.tabs .tab').forEach(t => t.classList.remove('active'));
   document.getElementById('stab-' + name).style.display = '';
   el.classList.add('active');
+}
+
+// ═══════════════════════════════════════════════════════════════
+// ACCOUNTS TAB — Multi Meta Ad Account Management
+// ═══════════════════════════════════════════════════════════════
+function syncStatusColor(status) {
+  if (status === 'running')  return 'var(--blue)';
+  if (status === 'success')  return 'var(--green)';
+  if (status === 'failed')   return 'var(--red)';
+  return 'var(--muted)';
+}
+
+function renderAccountCard(a, sched) {
+  const syncStatus = a.last_sync_status || 'idle';
+  // Sync Health: a simple, honest rollup -- never delivering (token invalid),
+  // last attempt failed, stale (past its own interval with no success), or healthy.
+  let health = { cls: 'excellent', label: '✓ Healthy' };
+  if (!a.token_is_valid) health = { cls: 'critical', label: '⚠ Token Invalid' };
+  else if (syncStatus === 'failed') health = { cls: 'critical', label: '⛔ Last Sync Failed' };
+  else if (syncStatus === 'running') health = { cls: 'warning', label: '● Syncing' };
+  else if (a.auto_sync_enabled && sched && sched.freshness && sched.freshness.some(f => f.is_stale)) health = { cls: 'warning', label: '⏳ Stale' };
+  else if (!a.auto_sync_enabled) health = { cls: 'none', label: '⏸ Auto Sync Off' };
+
+  const nextSync = sched && sched.next_scheduled_sync_at
+    ? (sched.next_scheduled_sync_at.startsWith('due') ? sched.next_scheduled_sync_at : fmtWhen(sched.next_scheduled_sync_at))
+    : '—';
+
+  return `
+    <div class="card" style="margin-bottom:12px" id="acct-card-${a.id}">
+      <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px">
+        <div>
+          <div style="font-weight:600;font-size:15px">${a.account_name}</div>
+          <div class="text-muted" style="font-size:12px;margin-top:3px">
+            ID: ${a.meta_account_id} · ${a.currency} · ${a.timezone}
+          </div>
+          ${a.business_name ? `<div class="text-muted" style="font-size:12px">Business: ${a.business_name}</div>` : ''}
+          ${a.client_label ? `<div class="text-muted" style="font-size:12px">Label: ${a.client_label}</div>` : ''}
+          ${a.notes ? `<div class="text-muted" style="font-size:12px">Notes: ${a.notes}</div>` : ''}
+        </div>
+        <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+          <span class="badge ${a.token_is_valid?'good':'critical'}">${a.token_is_valid?'✓ Token Valid':'⚠ Token Invalid'}</span>
+          <span class="chip ${a.status==='active'||a.status==='paused'?a.status:''}" ${a.status!=='active'&&a.status!=='paused'?`style="background:var(--bg3);color:var(--muted)"`:''}>${a.status}</span>
+          ${a.auto_sync_enabled ? '<span class="badge good">✓ Auto Sync Enabled</span>' : '<span class="badge none">⏸ Auto Sync Disabled</span>'}
+        </div>
+      </div>
+      <hr class="divider">
+      <div class="grid grid-3" style="font-size:12px;color:var(--muted)">
+        <div>Attribution Window: <strong style="color:var(--text)">${a.attribution_window_days} days</strong></div>
+        <div>Country: <strong style="color:var(--text)">${a.country_code||'—'}</strong></div>
+        <div>Last Verified: <strong style="color:var(--text)">${fmtDate(a.last_token_verified_at)}</strong></div>
+      </div>
+      <div class="grid grid-3" style="font-size:12px;color:var(--muted);margin-top:8px">
+        <div>Last Sync: <strong style="color:var(--text)">${fmtDate(a.last_sync_completed_at)}</strong></div>
+        <div>Sync Status: <strong style="color:${syncStatusColor(syncStatus)}" id="acct-sync-status-${a.id}">${syncStatus}${a.sync_progress_phase?` (${a.sync_progress_phase})`:''}</strong></div>
+        <div>Auto-Sync: <strong style="color:var(--text)">${a.auto_sync_enabled?`every ${a.auto_sync_interval_minutes}m`:'off'}</strong></div>
+      </div>
+      <div class="grid grid-3" style="font-size:12px;color:var(--muted);margin-top:8px">
+        <div>Next Sync: <strong style="color:var(--text)">${nextSync}</strong></div>
+        <div>Scheduler: ${sched ? schedulerStateBadge(sched.scheduler_state) : '<span class="text-muted">—</span>'}</div>
+        <div>Sync Health: <span class="badge ${health.cls}" style="font-size:10px">${health.label}</span></div>
+      </div>
+      ${a.last_sync_error ? `<div class="text-red" style="font-size:11px;margin-top:6px">Last error: ${a.last_sync_error}</div>` : ''}
+      <hr class="divider">
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        <button class="btn btn-ghost btn-sm" onclick="openEditAccount('${a.id}')">Edit</button>
+        <button class="btn btn-ghost btn-sm" onclick="openRefreshToken('${a.id}')">Refresh Token</button>
+        <button class="btn btn-ghost btn-sm" onclick="testAccountConnection('${a.id}', this)">Test Connection</button>
+        <button class="btn btn-ghost btn-sm" onclick="syncAccountNow('${a.id}', this)" title="Immediately syncs this account only — does not interrupt the background scheduler">Run Now (Force Sync)</button>
+        ${a.auto_sync_enabled
+          ? `<button class="btn btn-ghost btn-sm" onclick="toggleAccountAutoSync('${a.id}', false, this)">Disable Auto Sync</button>`
+          : `<button class="btn btn-ghost btn-sm" onclick="toggleAccountAutoSync('${a.id}', true, this)">Enable Auto Sync</button>`}
+        ${a.status === 'active'
+          ? `<button class="btn btn-ghost btn-sm" onclick="setAccountStatus('${a.id}','paused')">Disable</button>`
+          : a.status === 'paused'
+          ? `<button class="btn btn-ghost btn-sm" onclick="setAccountStatus('${a.id}','active')">Enable</button>`
+          : `<button class="btn btn-ghost btn-sm" onclick="setAccountStatus('${a.id}','active')">Reconnect</button>`}
+        <button class="btn btn-danger btn-sm" onclick="removeAccount('${a.id}')">Remove</button>
+      </div>
+    </div>
+  `;
+}
+
+async function toggleAccountAutoSync(id, enable, btnEl) {
+  // Reuses the existing PATCH /accounts/:id + Smart Scheduler -- the
+  // Scheduler re-queries ad_accounts fresh every tick, so this takes effect
+  // on the very next cycle with no restart, no separate enable/disable path.
+  if (btnEl) { btnEl.disabled = true; }
+  await apiPatch(`/accounts/${id}`, { auto_sync_enabled: enable });
+  loadSettings();
+}
+
+function openAddAccount() {
+  openModal(`
+  <h3>Add Meta Ad Account</h3>
+  <div class="form-group"><label class="form-label">Account Name</label><input class="form-input" id="new-acct-name" placeholder="e.g. My Store — Main"></div>
+  <div class="form-group"><label class="form-label">Meta Ad Account ID</label><input class="form-input" id="new-acct-metaid" placeholder="act_1234567890 or 1234567890"></div>
+  <div class="form-group"><label class="form-label">Access Token</label><input class="form-input" type="password" id="new-acct-token" placeholder="Meta user access token"></div>
+  <div class="form-group"><label class="form-label">Business Name</label><input class="form-input" id="new-acct-business" placeholder="Optional"></div>
+  <div class="form-row">
+    <div class="form-group"><label class="form-label">Currency</label><input class="form-input" id="new-acct-currency" placeholder="Auto-detected if left blank"></div>
+    <div class="form-group"><label class="form-label">Timezone</label><input class="form-input" id="new-acct-timezone" placeholder="Auto-detected if left blank"></div>
+  </div>
+  <div class="form-group"><label class="form-label">Notes</label><textarea class="form-input" id="new-acct-notes" rows="2" placeholder="Optional"></textarea></div>
+  <div id="new-acct-error" class="text-red" style="font-size:12px;margin-top:4px"></div>
+  <div class="modal-actions">
+    <button class="btn btn-ghost" onclick="closeModal()">Cancel</button>
+    <button class="btn btn-primary" onclick="saveNewAccount()">Save</button>
+  </div>`);
+}
+
+async function saveNewAccount() {
+  const errEl = document.getElementById('new-acct-error');
+  const metaId = document.getElementById('new-acct-metaid').value.trim();
+  const token = document.getElementById('new-acct-token').value.trim();
+  if (!metaId || !token) { errEl.textContent = 'Meta Ad Account ID and Access Token are required.'; return; }
+
+  const body = {
+    meta_account_id: metaId,
+    access_token: token,
+    account_name: document.getElementById('new-acct-name').value.trim() || undefined,
+    business_name: document.getElementById('new-acct-business').value.trim() || undefined,
+    notes: document.getElementById('new-acct-notes').value.trim() || undefined,
+  };
+  const currency = document.getElementById('new-acct-currency').value.trim();
+  const timezone = document.getElementById('new-acct-timezone').value.trim();
+
+  const res = await apiPost('/accounts', body);
+  if (res.error) { errEl.textContent = res.message || res.error; return; }
+
+  // Currency/timezone overrides (Meta auto-detects on connect; only patch if user typed something)
+  if (currency || timezone) {
+    await apiPatch(`/accounts/${res.data.id}`, { currency: currency || undefined, timezone: timezone || undefined });
+  }
+
+  closeModal();
+  loadAccountSelector();
+  loadSettings();
+}
+
+function openEditAccount(id) {
+  const a = (window._settingsAccounts || []).find(x => x.id === id);
+  if (!a) return;
+  openModal(`
+  <h3>Edit Account</h3>
+  <div class="form-group"><label class="form-label">Account Name</label><input class="form-input" id="edit-acct-name" value="${a.account_name||''}"></div>
+  <div class="form-group"><label class="form-label">Business Name</label><input class="form-input" id="edit-acct-business" value="${a.business_name||''}"></div>
+  <div class="form-row">
+    <div class="form-group"><label class="form-label">Currency</label><input class="form-input" id="edit-acct-currency" value="${a.currency||''}"></div>
+    <div class="form-group"><label class="form-label">Timezone</label><input class="form-input" id="edit-acct-timezone" value="${a.timezone||''}"></div>
+  </div>
+  <div class="form-group"><label class="form-label">Notes</label><textarea class="form-input" id="edit-acct-notes" rows="2">${a.notes||''}</textarea></div>
+  <div class="form-row">
+    <div class="form-group">
+      <label class="form-label">Auto-Sync</label>
+      <select class="form-input" id="edit-acct-autosync">
+        <option value="0" ${!a.auto_sync_enabled?'selected':''}>Off</option>
+        <option value="1" ${a.auto_sync_enabled?'selected':''}>On</option>
+      </select>
+    </div>
+    <div class="form-group"><label class="form-label">Interval (minutes)</label><input class="form-input" type="number" min="5" id="edit-acct-interval" value="${a.auto_sync_interval_minutes||60}"></div>
+  </div>
+  <div class="modal-actions">
+    <button class="btn btn-ghost" onclick="closeModal()">Cancel</button>
+    <button class="btn btn-primary" onclick="saveEditAccount('${id}')">Save</button>
+  </div>`);
+}
+
+async function saveEditAccount(id) {
+  await apiPatch(`/accounts/${id}`, {
+    account_name: document.getElementById('edit-acct-name').value.trim(),
+    business_name: document.getElementById('edit-acct-business').value.trim(),
+    currency: document.getElementById('edit-acct-currency').value.trim(),
+    timezone: document.getElementById('edit-acct-timezone').value.trim(),
+    notes: document.getElementById('edit-acct-notes').value.trim(),
+    auto_sync_enabled: document.getElementById('edit-acct-autosync').value === '1',
+    auto_sync_interval_minutes: parseInt(document.getElementById('edit-acct-interval').value, 10) || 60,
+  });
+  closeModal();
+  loadAccountSelector();
+  loadSettings();
+}
+
+function openRefreshToken(id) {
+  openModal(`
+  <h3>Refresh Access Token</h3>
+  <div class="form-group"><label class="form-label">New Access Token</label><input class="form-input" type="password" id="refresh-token-value" placeholder="New Meta user access token"></div>
+  <div id="refresh-token-error" class="text-red" style="font-size:12px"></div>
+  <div class="modal-actions">
+    <button class="btn btn-ghost" onclick="closeModal()">Cancel</button>
+    <button class="btn btn-primary" onclick="saveRefreshToken('${id}')">Save</button>
+  </div>`);
+}
+
+async function saveRefreshToken(id) {
+  const token = document.getElementById('refresh-token-value').value.trim();
+  if (!token) return;
+  const res = await apiPost(`/accounts/${id}/token`, { access_token: token });
+  if (res.error) { document.getElementById('refresh-token-error').textContent = res.message || res.error; return; }
+  closeModal();
+  loadSettings();
+}
+
+async function testAccountConnection(id, btnEl) {
+  const original = btnEl.textContent;
+  btnEl.textContent = 'Testing…'; btnEl.disabled = true;
+  try {
+    const res = await apiPost(`/accounts/${id}/test-connection`, {});
+    const r = res.data || {};
+    openModal(`
+    <h3>Connection Test Result</h3>
+    <div class="details-grid">
+      <div class="detail-item"><div class="detail-label">Account Exists</div><div>${r.account_exists?'✓ Yes':'✗ No'}</div></div>
+      <div class="detail-item"><div class="detail-label">Token Valid</div><div>${r.token_valid?'✓ Yes':'✗ No'}</div></div>
+      <div class="detail-item"><div class="detail-label">Active Status</div><div>${r.active_status?'✓ Active':'⚠ Not Active'}</div></div>
+      <div class="detail-item"><div class="detail-label">Currency</div><div>${r.currency||'—'}</div></div>
+      <div class="detail-item"><div class="detail-label">Timezone</div><div>${r.timezone||'—'}</div></div>
+      <div class="detail-item"><div class="detail-label">Business Name</div><div>${r.business_name||'—'}</div></div>
+    </div>
+    <div class="form-group" style="margin-top:10px">
+      <label class="form-label">Permissions</label>
+      <div style="font-size:12px">${(r.permissions||[]).length ? r.permissions.join(', ') : '—'}</div>
+    </div>
+    ${(r.errors||[]).length ? `<div class="text-red" style="font-size:12px;margin-top:8px">${r.errors.map(e=>`[${e.check}] ${e.message}`).join('<br>')}</div>` : ''}
+    <div class="modal-actions"><button class="btn btn-ghost" onclick="closeModal()">Close</button></div>`);
+    loadSettings();
+  } finally {
+    btnEl.textContent = original; btnEl.disabled = false;
+  }
+}
+
+async function syncAccountNow(id, btnEl) {
+  const original = btnEl.textContent;
+  btnEl.textContent = 'Syncing…'; btnEl.disabled = true;
+  try {
+    await apiPost('/sync', { account_id: id });
+  } finally {
+    btnEl.textContent = original; btnEl.disabled = false;
+    loadSettings();
+    if (window._accountId === id) refreshData();
+  }
+}
+
+async function setAccountStatus(id, status) {
+  await apiPatch(`/accounts/${id}`, { status });
+  loadAccountSelector();
+  loadSettings();
+}
+
+async function removeAccount(id) {
+  const a = (window._settingsAccounts || []).find(x => x.id === id);
+  if (!confirm(`Remove "${a ? a.account_name : 'this account'}"? It will be disconnected and hidden, but its historical data is kept and it can be reconnected later.`)) return;
+  await apiDelete(`/accounts/${id}`);
+  if (window._accountId === id) { window._accountId = ''; }
+  loadAccountSelector();
+  loadSettings();
 }
 
 function openAddTarget(accounts) {
@@ -1895,10 +2867,10 @@ async function loadBreakdownCharts(campaignId) {
 async function loadDecisions() {
   document.getElementById('content').innerHTML = '<div class="loader"><span class="spin">◌</span> Generating decisions...</div>';
   const [dec, winners, losers, opps] = await Promise.all([
-    api('/decisions'),
-    api('/decisions/winners?limit=5'),
-    api('/decisions/losers?limit=5'),
-    api('/decisions/opportunities?limit=8'),
+    apiDate('/decisions'),
+    apiDate('/decisions/winners?limit=5'),
+    apiDate('/decisions/losers?limit=5'),
+    apiDate('/decisions/opportunities?limit=8'),
   ]);
 
   const decisions = dec.decisions || [];
@@ -1915,6 +2887,7 @@ async function loadDecisions() {
       <option>awareness</option><option>traffic</option><option>engagement</option><option>leads</option><option>app_promotion</option><option>sales</option>
     </select>
     <span class="text-muted" style="font-size:12px">Generated: ${new Date(dec.generated_at).toLocaleTimeString()}</span>
+    ${icPortfolioTraceBadge(dec._governance)}
   </div>
 
   <div style="display:grid;grid-template-columns:1fr 360px;gap:20px">
@@ -1936,7 +2909,7 @@ async function loadDecisions() {
       <div class="winner-card">
         <div>
           <div style="font-size:13px;font-weight:600;cursor:pointer;color:var(--accent2)" onclick="viewCampaign('${w.meta_campaign_id}')">${w.campaign_name}</div>
-          <div style="margin-top:3px;display:flex;gap:6px">${objChip(w.objective)}<span class="chip ${w.status}">${w.status}</span></div>
+          <div style="margin-top:3px;display:flex;gap:6px">${objChip(w.objective)}${lifecycleChip(w)}</div>
           ${w.strengths?.length ? '<div style="font-size:11px;color:var(--green);margin-top:3px">' + w.strengths[0] + '</div>' : ''}
         </div>
         <div style="text-align:center">
@@ -1990,6 +2963,12 @@ function renderDecisionCards(decisions) {
       </div>
     </div>
     <div class="decision-reason">${d.reason}</div>
+    ${d.rule_id ? `
+    <div style="font-size:10px;color:var(--muted);margin:2px 0">
+      <span class="chip" style="background:var(--bg3);color:var(--accent2)">${d.framework}</span>
+      Rule ${d.rule_id}
+      ${d.governance_state ? icGovernanceStateBadge(d.governance_state) : ''}
+    </div>` : ''}
     <div class="decision-action">→ ${d.suggested_action}</div>
     ${Object.keys(d.supporting_metrics||{}).length ? `
     <div class="decision-metrics">
@@ -2053,7 +3032,8 @@ async function loadReports() {
   const period    = window._reportPeriod    || 'weekly';
   const objective = window._reportObjective || '';
   const objQ = objective ? '&objective=' + objective : '';
-  const summary = await api('/reports/summary?period=' + period + objQ);
+  const acctQ = window._accountId ? '&account_id=' + window._accountId : '';
+  const summary = await api('/reports/summary?period=' + period + objQ + acctQ);
 
   const hs = summary.health || {};
   const recs = summary.recommendations || {};
@@ -2210,6 +3190,299 @@ function exportReport(format) {
 
 
 // ════════════════════════════════════════════
+// CREATIVE INTELLIGENCE ENGINE
+// Library (Step 11) + Details page (Step 10), reusing the same api()/
+// apiDate()/addDateQ()/insightsUrl()/scoreCircle()/scoreClass()/objChip()/
+// fmtHealthStatus() conventions every other page on this dashboard uses --
+// no parallel rendering system introduced for this one domain.
+// ════════════════════════════════════════════
+window._ci = { filters: {}, campaigns: [] };
+
+function ciFatigueBadgeClass(status) {
+  return { none: 'excellent', early: 'warning', moderate: 'warning', severe: 'critical' }[status] || 'none';
+}
+function ciRoleBadge(role) {
+  if (role === 'winner') return '<span class="badge excellent">🏆 Winner</span>';
+  if (role === 'loser') return '<span class="badge critical">Underperformer</span>';
+  return '';
+}
+function ciCreativeTypeIcon(t) {
+  return { video: '🎬', image: '🖼️', carousel: '🎠' }[t] || '📄';
+}
+const CI_TIMELINE_BADGE = { launch: 'info', peak: 'excellent', decline: 'warning', fatigue: 'critical', recovery: 'good', change: 'none' };
+
+async function loadCreativeLibrary() {
+  document.getElementById('content').innerHTML = '<div class="loader"><span class="spin">◌</span> Loading Creative Library...</div>';
+
+  if (!window._ci.campaigns.length) {
+    try {
+      const c = await apiDate('/campaigns?limit=200');
+      window._ci.campaigns = c.data || [];
+    } catch (e) { window._ci.campaigns = []; }
+  }
+
+  const f = window._ci.filters;
+  const params = [];
+  if (f.campaign_id) params.push('campaign_id=' + encodeURIComponent(f.campaign_id));
+  if (f.creative_type) params.push('creative_type=' + encodeURIComponent(f.creative_type));
+  if (f.fatigue_status) params.push('fatigue_status=' + encodeURIComponent(f.fatigue_status));
+  if (f.min_score) params.push('min_score=' + f.min_score);
+  if (f.is_winner) params.push('is_winner=true');
+  if (f.is_loser) params.push('is_loser=true');
+  if (f.search) params.push('search=' + encodeURIComponent(f.search));
+
+  let lib = { creatives: [], total: 0, warnings: [] };
+  try {
+    const r = await apiDate('/creative-intelligence/library' + (params.length ? '&' + params.join('&') : ''));
+    lib = r.data || lib;
+  } catch (e) { /* leave lib as the honest empty default */ }
+
+  const rows = lib.creatives || [];
+  const scoreBuckets = [0, 0, 0, 0, 0]; // 0-20, 21-40, 41-60, 61-80, 81-100
+  rows.forEach(c => { if (c.score_overall != null) scoreBuckets[Math.min(4, Math.floor(c.score_overall / 20))]++; });
+  const bucketLabels = ['0-20', '21-40', '41-60', '61-80', '81-100'];
+  const maxBucket = Math.max(1, ...scoreBuckets);
+
+  document.getElementById('content').innerHTML = `
+  <div class="filter-bar">
+    <select class="form-input" style="width:auto" onchange="ciSetFilter('campaign_id', this.value)">
+      <option value="">All Campaigns</option>
+      ${window._ci.campaigns.map(c => `<option value="${c.meta_campaign_id}"${f.campaign_id === c.meta_campaign_id ? ' selected' : ''}>${c.name}</option>`).join('')}
+    </select>
+    <select class="form-input" style="width:auto" onchange="ciSetFilter('creative_type', this.value)">
+      <option value="">All Types</option>
+      ${['image', 'video', 'carousel'].map(t => `<option value="${t}"${f.creative_type === t ? ' selected' : ''}>${t}</option>`).join('')}
+    </select>
+    <select class="form-input" style="width:auto" onchange="ciSetFilter('fatigue_status', this.value)">
+      <option value="">Any Fatigue</option>
+      ${['none', 'early', 'moderate', 'severe'].map(s => `<option value="${s}"${f.fatigue_status === s ? ' selected' : ''}>${s}</option>`).join('')}
+    </select>
+    <select class="form-input" style="width:auto" onchange="ciSetRoleFilter(this.value)">
+      <option value="">Winner / Loser: All</option>
+      <option value="winner"${f.is_winner ? ' selected' : ''}>Winners Only</option>
+      <option value="loser"${f.is_loser ? ' selected' : ''}>Underperformers Only</option>
+    </select>
+    <input class="form-input" style="width:220px" placeholder="Search headline / copy..." value="${f.search || ''}" onkeydown="if(event.key==='Enter')ciSetFilter('search', this.value)">
+    <button class="btn btn-ghost btn-sm" onclick="ciClearFilters()">Clear</button>
+  </div>
+
+  ${(lib.warnings || []).map(w => `<div style="padding:8px 12px;background:var(--bg3);border-radius:8px;margin-bottom:12px;font-size:12px;color:var(--muted)">⚠ ${w}</div>`).join('')}
+
+  <div class="card" style="margin-bottom:20px">
+    <div class="section-title" style="margin-bottom:16px">Score Distribution (${rows.length} creative${rows.length === 1 ? '' : 's'})</div>
+    <div class="chart-wrap">
+      <div class="chart-bars">
+        ${bucketLabels.map((lbl, i) => `
+        <div class="bar-wrap" title="${scoreBuckets[i]} creative(s) scoring ${lbl}">
+          <div class="bar" style="height:${Math.round((scoreBuckets[i] / maxBucket) * 70)}px;background:var(--accent2)"></div>
+          <div class="bar-label">${lbl}</div>
+        </div>`).join('')}
+      </div>
+    </div>
+  </div>
+
+  <div class="grid grid-3" id="ci-library-grid">
+    ${rows.length ? rows.map(c => ciRenderCreativeCard(c)).join('') : '<div class="empty">No creatives match these filters for the selected date range. Run a Creative Analytics sync for this account if none have synced yet.</div>'}
+  </div>
+  `;
+}
+
+function ciSetFilter(key, value) {
+  window._ci.filters[key] = value || null;
+  loadCreativeLibrary();
+}
+function ciSetRoleFilter(value) {
+  window._ci.filters.is_winner = value === 'winner';
+  window._ci.filters.is_loser = value === 'loser';
+  loadCreativeLibrary();
+}
+function ciClearFilters() {
+  window._ci.filters = {};
+  loadCreativeLibrary();
+}
+
+function ciRenderCreativeCard(c) {
+  return `
+  <div class="card" style="cursor:pointer" onclick="viewCreativeDetails('${c.meta_ad_id}')">
+    <div style="display:flex;gap:10px;align-items:flex-start">
+      ${c.thumbnail_url
+        ? `<img src="${c.thumbnail_url}" style="width:48px;height:48px;border-radius:8px;object-fit:cover;flex-shrink:0">`
+        : `<div style="width:48px;height:48px;border-radius:8px;background:var(--bg3);display:flex;align-items:center;justify-content:center;font-size:20px;flex-shrink:0">${ciCreativeTypeIcon(c.creative_type)}</div>`}
+      <div style="flex:1;min-width:0">
+        <div style="font-size:13px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${c.headline || c.ad_name || 'Untitled creative'}</div>
+        <div style="font-size:11px;color:var(--muted);margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${c.campaign_name || ''}${c.adset_name ? ' · ' + c.adset_name : ''}</div>
+      </div>
+      ${scoreCircle(c.score_overall, true)}
+    </div>
+    <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:10px">
+      ${ciRoleBadge(c.library_role)}
+      <span class="badge ${ciFatigueBadgeClass(c.fatigue_status)}">${c.fatigue_status || 'unscored'}</span>
+      ${c.campaign_objective ? objChip(c.campaign_objective) : ''}
+    </div>
+    <div class="grid grid-3" style="margin-top:10px;gap:8px">
+      <div><div style="font-size:10px;color:var(--muted)">CTR</div><div style="font-size:13px;font-weight:600">${c.ctr != null ? fmtNum(c.ctr) + '%' : '—'}</div></div>
+      <div><div style="font-size:10px;color:var(--muted)">ROAS</div><div style="font-size:13px;font-weight:600">${c.roas != null ? fmtNum(c.roas) + 'x' : '—'}</div></div>
+      <div><div style="font-size:10px;color:var(--muted)">Spend</div><div style="font-size:13px;font-weight:600">${c.spend != null ? fmtNum(c.spend, 0) : '—'}</div></div>
+    </div>
+  </div>`;
+}
+
+// ── Details page (Step 10) ──
+async function viewCreativeDetails(adId) {
+  document.getElementById('content').innerHTML = '<div class="loader"><span class="spin">◌</span> Loading creative details...</div>';
+
+  let d = null;
+  try {
+    const r = await api(addDateQ(insightsUrl(`/creative-intelligence/${adId}`)));
+    d = r.data;
+  } catch (e) {
+    document.getElementById('content').innerHTML = `
+      <button class="btn btn-ghost btn-sm" onclick="navigate('creative')">← Back to Library</button>
+      <div class="empty" style="margin-top:16px">⚠ Could not load creative details.</div>`;
+    return;
+  }
+
+  if (!d) {
+    document.getElementById('content').innerHTML = `
+      <button class="btn btn-ghost btn-sm" onclick="navigate('creative')">← Back to Library</button>
+      <div class="empty" style="margin-top:16px">Creative not found.</div>`;
+    return;
+  }
+
+  if (d.analyzed === false) {
+    document.getElementById('content').innerHTML = `
+      <button class="btn btn-ghost btn-sm" onclick="navigate('creative')">← Back to Library</button>
+      <div class="empty" style="margin-top:16px">⚠ ${d.reason}</div>`;
+    return;
+  }
+
+  document.getElementById('content').innerHTML = ciRenderDetails(d);
+}
+
+function ciRenderDetails(d) {
+  const s = d.snapshot || {};
+  const scores = d.scores || {};
+  const ai = d.ai_analysis || {};
+  const fatigue = d.fatigue || {};
+  const comp = d.comparison || {};
+  const intel = d.intelligence;
+  const isWinner = comp.winner?.meta_ad_id === d.meta_ad_id;
+  const isWorst = comp.worst?.meta_ad_id === d.meta_ad_id;
+
+  const scoreDims = [
+    ['Hook', 'score_hook'], ['Headline', 'score_headline'], ['Copy', 'score_copy'], ['Visual', 'score_visual'],
+    ['CTA', 'score_cta'], ['Offer', 'score_offer'], ['Trust', 'score_trust'], ['Psychology', 'score_psychology'],
+    ['Conversion Potential', 'score_conversion_potential'], ['Scroll Stop', 'score_scroll_stop'],
+    ['Retention', 'score_retention'], ['Brand', 'score_brand'], ['Fatigue', 'score_fatigue'],
+  ];
+
+  const aiSections = ['hook', 'headline', 'copy', 'cta', 'offer', 'trust', 'psychology', 'mobile_friendliness', 'visual']
+    .filter(k => ai[k])
+    .map(k => `
+      <div style="padding:10px 0;border-bottom:1px solid var(--border)">
+        <div style="display:flex;justify-content:space-between;align-items:center">
+          <div style="font-size:12px;font-weight:600;text-transform:capitalize">${k.replace(/_/g, ' ')}</div>
+          ${ai[k].score != null ? `<span class="badge ${scoreClass(ai[k].score)}">${ai[k].score}</span>` : ''}
+        </div>
+        <div style="font-size:12px;color:var(--muted);margin-top:4px">${ai[k].evidence || ai[k].label || '—'}</div>
+      </div>`).join('');
+
+  return `
+  <button class="btn btn-ghost btn-sm" onclick="navigate('creative')">← Back to Library</button>
+
+  <div style="display:flex;gap:16px;align-items:flex-start;margin-top:16px;margin-bottom:20px">
+    ${s.thumbnail_url
+      ? `<img src="${s.thumbnail_url}" style="width:80px;height:80px;border-radius:10px;object-fit:cover;flex-shrink:0">`
+      : `<div style="width:80px;height:80px;border-radius:10px;background:var(--bg3);display:flex;align-items:center;justify-content:center;font-size:32px;flex-shrink:0">${ciCreativeTypeIcon(s.creative_type)}</div>`}
+    <div style="flex:1;min-width:0">
+      <div style="font-size:18px;font-weight:700">${s.headline || 'Untitled creative'}</div>
+      <div style="font-size:12px;color:var(--muted);margin-top:4px">${s.primary_text || ''}</div>
+      <div style="display:flex;gap:8px;margin-top:8px;flex-wrap:wrap">
+        ${ciRoleBadge(isWinner ? 'winner' : (isWorst ? 'loser' : null))}
+        <span class="badge ${ciFatigueBadgeClass(fatigue.status)}">Fatigue: ${fatigue.status || 'unscored'}</span>
+        ${fatigue.recommendation ? `<span class="badge info">Suggested: ${fatigue.recommendation}</span>` : ''}
+        <span class="chip ${s.creative_type || 'unknown'}">${s.creative_type || 'unknown'}</span>
+      </div>
+    </div>
+    ${scoreCircle(scores.score_overall)}
+  </div>
+
+  ${d.executive_summary ? `<div class="card" style="margin-bottom:20px"><div class="section-title" style="margin-bottom:8px">Executive Summary</div><div style="font-size:13px">${d.executive_summary}</div></div>` : ''}
+
+  <div class="grid grid-2" style="margin-bottom:20px">
+    <div class="card">
+      <div class="section-title" style="margin-bottom:16px">Creative Score Breakdown</div>
+      ${scoreDims.map(([label, key]) => {
+        const v = scores[key];
+        return `<div style="margin-bottom:10px">
+          <div style="display:flex;justify-content:space-between;font-size:11px;color:var(--muted);margin-bottom:3px"><span>${label}</span><span>${v != null ? v : 'N/A'}</span></div>
+          <div style="height:6px;background:var(--bg3);border-radius:3px;overflow:hidden"><div style="height:100%;width:${v != null ? v : 0}%;background:var(--accent2)"></div></div>
+        </div>`;
+      }).join('')}
+    </div>
+
+    <div class="card">
+      <div class="section-title" style="margin-bottom:8px">AI Analysis</div>
+      ${aiSections || '<div class="empty">No AI analysis available.</div>'}
+      ${(ai.not_analyzed || []).length ? `<div style="font-size:11px;color:var(--muted);margin-top:8px">Not analyzed (no real data source for this system): ${ai.not_analyzed.join(', ')}</div>` : ''}
+    </div>
+  </div>
+
+  <div class="grid grid-2" style="margin-bottom:20px">
+    <div class="card">
+      <div class="section-title" style="margin-bottom:12px">Ad Set Comparison</div>
+      ${comp.winner ? `
+        <div style="font-size:12px;margin-bottom:6px">🏆 Winner: <strong>${comp.winner.ad_name}</strong> (${comp.winner.score})</div>
+        ${comp.runner_up ? `<div style="font-size:12px;margin-bottom:6px">🥈 Runner-up: ${comp.runner_up.ad_name} (${comp.runner_up.score})</div>` : ''}
+        ${comp.worst ? `<div style="font-size:12px;margin-bottom:6px">⚠ Weakest: ${comp.worst.ad_name} (${comp.worst.score})</div>` : ''}
+        ${(comp.comparisons || []).map(c => `
+          <div style="font-size:11px;color:var(--muted);margin-top:8px;padding:8px;background:var(--bg3);border-radius:6px">
+            <strong>Why the winner beats the weakest:</strong> ${(c.why || []).join('; ')}
+          </div>`).join('')}
+      ` : '<div class="empty">Not enough creatives in this ad set (same date range) to compare.</div>'}
+    </div>
+
+    <div class="card">
+      <div class="section-title" style="margin-bottom:12px">Recommendations</div>
+      ${(d.recommendations || []).length ? d.recommendations.map(r => {
+        const pcls = r.priority === 'high' ? 'critical' : r.priority === 'medium' ? 'warning' : 'info';
+        return `<div class="rec-card ${pcls}" style="margin-bottom:10px">
+          <div style="display:flex;justify-content:space-between;gap:8px"><strong style="font-size:13px">${r.action}</strong><span class="badge ${pcls}">${r.priority}</span></div>
+          <div style="font-size:12px;color:var(--muted);margin-top:4px">${r.reason}</div>
+        </div>`;
+      }).join('') : '<div class="empty">No recommendations right now.</div>'}
+    </div>
+  </div>
+
+  <div class="card" style="margin-bottom:20px">
+    <div class="section-title" style="margin-bottom:12px">Timeline</div>
+    ${(d.timeline?.events || []).length ? `<div style="display:flex;flex-direction:column;gap:2px">
+      ${d.timeline.events.map(e => `
+        <div style="display:flex;gap:10px;align-items:flex-start;padding:8px 0;border-bottom:1px solid var(--border)">
+          <span class="badge ${CI_TIMELINE_BADGE[e.type] || 'none'}" style="min-width:74px;text-align:center;flex-shrink:0">${e.type}</span>
+          <div style="font-size:12px">
+            <div style="color:var(--muted)">${e.date}</div>
+            ${e.score_overall != null ? `<div>Score: ${e.score_overall}${e.drop_from_peak_pct != null ? ` (−${e.drop_from_peak_pct}% from peak)` : ''}</div>` : ''}
+            ${e.field ? `<div>${e.field}: "${e.from || '(none)'}" → "${e.to || '(none)'}"</div>` : ''}
+            ${e.recommendation ? `<div>Recommended: ${e.recommendation}</div>` : ''}
+          </div>
+        </div>`).join('')}
+    </div>` : `<div class="empty">${d.timeline?.status === 'insufficient_data' ? 'Only one sync snapshot so far -- a timeline needs at least two.' : 'Not enough history yet for a timeline.'}</div>`}
+  </div>
+
+  ${intel && intel.analyzed !== false ? `
+  <div class="card">
+    <div class="section-title" style="margin-bottom:12px">Rule Engine &amp; Governance (reused from Ad Intelligence)</div>
+    <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px">${scoreCircle(intel.health_score, true)}<span class="badge ${intel.health_status || 'none'}">${fmtHealthStatus(intel.health_status)}</span></div>
+    ${(intel.framework_recommendations || []).length
+      ? intel.framework_recommendations.map(f => `<div style="font-size:12px;padding:8px 0;border-bottom:1px solid var(--border)"><strong>${f.rule_name}</strong> (${f.rule_id}) — ${f.reason}</div>`).join('')
+      : '<div class="empty">No Rule Engine findings fired for this ad right now.</div>'}
+  </div>` : `<div class="card"><div class="section-title" style="margin-bottom:8px">Rule Engine &amp; Governance</div><div class="empty">${intel?.reason || 'Ad-grain intelligence is unavailable right now.'}</div></div>`}
+  `;
+}
+
+
+// ════════════════════════════════════════════
 // PHASE 6C — Global State + Helpers
 // ════════════════════════════════════════════
 
@@ -2217,7 +3490,9 @@ function exportReport(format) {
 window._dr = { preset: 'last_7_days', since: null, until: null };
 window._accountId = '';
 
-// Load accounts into selector on boot
+// Load accounts into selector -- called on boot AND after any account
+// add/edit/remove so the header dropdown never goes stale without a page
+// refresh.
 async function loadAccountSelector() {
   try {
     const r = await fetch(API + '/accounts');
@@ -2225,12 +3500,25 @@ async function loadAccountSelector() {
     window._accountsCache = j.data || []; // Phase 8: populate cache used by hasValidToken()
     const sel = document.getElementById('acct-selector');
     if (!sel) return;
-    (j.data || []).forEach(a => {
+    // Clear all options except the first ("All Accounts") before
+    // repopulating -- otherwise re-running this after an account change
+    // duplicates every existing option.
+    while (sel.options.length > 1) sel.remove(1);
+    // Removed/disconnected accounts are hidden from the selector (soft
+    // remove); disabled (paused) accounts still show so their history
+    // remains viewable.
+    (j.data || []).filter(a => a.status !== 'disconnected').forEach(a => {
       const opt = document.createElement('option');
       opt.value = a.id;
-      opt.textContent = a.account_name + (a.client_label ? ' — ' + a.client_label : '') + (a.token_is_valid ? '' : ' (no live data)');
+      opt.textContent = a.account_name + (a.client_label ? ' — ' + a.client_label : '') + (a.token_is_valid ? '' : ' (no live data)') + (a.status === 'paused' ? ' (disabled)' : '');
       sel.appendChild(opt);
     });
+    // If the currently-selected account no longer exists in the list
+    // (e.g. it was just removed), fall back to "All Accounts".
+    if (window._accountId && !sel.querySelector(`option[value="${window._accountId}"]`)) {
+      window._accountId = '';
+    }
+    sel.value = window._accountId;
   } catch {}
 }
 
@@ -2336,7 +3624,7 @@ async function loadPortfolio() {
     apiDate('/portfolio'),
     apiDate('/portfolio/accounts'),
     apiDate('/portfolio/objectives'),
-    api('/portfolio/alerts'),
+    apiDate('/portfolio/alerts'),
   ]);
 
   const ph = overview.data?.portfolio_health || {};
@@ -2350,6 +3638,7 @@ async function loadPortfolio() {
       ${scoreCircle(sc)}
       <div class="badge ${scCls}" style="margin-top:6px">${scoreLabel(sc)}</div>
       <div style="font-size:11px;color:var(--muted);margin-top:4px">${ph.weighting === 'spend_weighted' ? 'Spend-weighted' : 'Equal weight'}</div>
+      <div style="margin-top:6px">${icPortfolioTraceBadge(overview._governance)}</div>
     </div>
     <div class="grid grid-4">
       <div class="stat-card">

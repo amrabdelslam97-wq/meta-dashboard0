@@ -12,7 +12,7 @@ const { asyncHandler } = require('../../middleware/errorHandler');
 
 // ── GET /alerts ───────────────────────────────────────────────
 router.get('/', asyncHandler(async (req, res) => {
-  const { severity, campaign_id, status = 'active', limit: lp = '100', offset: op = '0' } = req.query;
+  const { severity, campaign_id, account_id, status = 'active', limit: lp = '100', offset: op = '0' } = req.query;
 
   const limit  = Math.min(Math.max(parseInt(lp, 10) || 100, 1), 500);
   const offset = Math.max(parseInt(op, 10) || 0, 0);
@@ -34,6 +34,7 @@ router.get('/', asyncHandler(async (req, res) => {
 
   if (severity) { conditions.push('a.severity = ?'); params.push(severity); }
   if (campaign_id) { conditions.push('a.entity_meta_id = ?'); params.push(campaign_id); }
+  if (account_id) { conditions.push('a.ad_account_id = ?'); params.push(account_id); }
 
   const where = conditions.length ? 'WHERE ' + conditions.join(' AND ') : '';
 
@@ -44,7 +45,7 @@ router.get('/', asyncHandler(async (req, res) => {
        a.id, a.alert_code, a.entity_type, a.entity_meta_id, a.entity_label,
        a.severity, a.alert_message, a.detected_value, a.threshold_value,
        a.status, a.first_detected_at, a.last_detected_at, a.occurrence_count,
-       a.snoozed_until, a.resolved_at,
+       a.snoozed_until, a.resolved_at, a.governance_state,
        r.alert_name, r.description as rule_description,
        c.name as campaign_name, c.objective
      FROM active_alerts a

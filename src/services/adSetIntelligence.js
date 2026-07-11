@@ -13,7 +13,7 @@
 
 const db                    = require('../db/database');
 
-const { runScoringPipeline } = require('./intelligenceOrchestrator');
+const { orchestrateIntelligence } = require('./mmsOrchestrator');
 const { fetchAdSetMetrics, computeDeltas } = require('./metricsFetcher');
 const { resolveDateRange, priorPeriod } = require('./dateRangeHelper');
 const { decryptToken } = require('./tokenCrypto');
@@ -176,20 +176,42 @@ async function runAdSetIntelligence(adSetId, options = {}) {
   }
 
   const startedAt = Date.now();
+  const deltas = computeDeltas(currentMetrics, priorMetrics);
 
-  // FIX 4 (Phase 9): Sequential-safety pattern -- preserved by
-  // runScoringPipeline (shared with intelligenceOrchestrator.js and
-  // adIntelligence.js instead of duplicated inline). sql.js auto-persists
-  // on every db.run(), making SQLite BEGIN/COMMIT transactions
-  // incompatible with the module-level db API used here, so scoring is
-  // computed first (pure, no DB writes) and only written if it succeeds.
-  const { healthResult, benchmarkResult, recommendations, alerts, trend } =
-    runScoringPipeline(entity, currentMetrics, priorMetrics, adAccountId, 'ad_set');
+  // Phase X.1 (Runtime Unification): previously called
+  // intelligenceOrchestrator.runScoringPipeline() directly, which meant ad
+  // sets never reached Diagnosis Engine, Rule Engine, or MAIFS at all --
+  // now calls the same single orchestrator every other entity grain uses,
+  // with entityType:'ad_set' so Rule Engine's grain filtering applies
+  // (every currently-registered native rule is campaign-scoped, so none
+  // fire here today -- this wiring makes that scope enforceable, not a
+  // behavior change by itself). persist:false: this route is read on every
+  // Ad Sets detail-tab view, and rule_engine_log writes aren't yet wanted
+  // at this volume/grain (see Phase X.1 plan's risk assessment) --
+  // Diagnosis/Rule Engine analysis still runs and is still returned, it
+  // just isn't written to rule_engine_log or exposed on the Decision Center
+  // yet. FIX 4 (Phase 9)'s sequential-safety pattern (scoring computed
+  // before any DB write) is preserved inside orchestrateIntelligence/
+  // runScoringPipeline unchanged.
+  const {
+    intelligence, diagnosis, ruleEngineResult, governance,
+  } = orchestrateIntelligence({
+    campaign: entity,
+    entityType: 'ad_set',
+    adAccountId,
+    currentMetrics,
+    priorMetrics,
+    deltas,
+    persist: false,
+    effectiveStatus: adSet.effective_status,
+  });
+  const { healthResult, benchmarkResult, recommendations, alerts, trend } = intelligence;
 
   return {
     meta_adset_id:    adSet.meta_adset_id,
     adset_name:       adSet.name,
     status:           adSet.status,
+    effective_status: adSet.effective_status || null,
     objective:        entity.objective,
     campaign_name:    campaign?.name || null,
     meta_campaign_id: campaign?.meta_campaign_id || null,
@@ -205,7 +227,7 @@ async function runAdSetIntelligence(adSetId, options = {}) {
 
     metrics:       currentMetrics,
     prior_metrics: priorMetrics,
-    deltas:        computeDeltas(currentMetrics, priorMetrics),
+    deltas,
 
     health_score:     healthResult.health_score,
     health_status:    healthResult.health_status,
@@ -219,6 +241,13 @@ async function runAdSetIntelligence(adSetId, options = {}) {
     benchmark:       { summary: benchmarkResult.summary, metrics: benchmarkResult.metrics },
     recommendations,
     alerts,
+
+    // New, additive fields (Phase X.1) -- absent from this function's
+    // output before this change, never previously computed at ad-set grain.
+    diagnosis,
+    framework_recommendations: ruleEngineResult.fired,
+    rule_engine_conflicts:     ruleEngineResult.conflicts,
+    _governance: governance,
 
     _meta: { duration_ms: Date.now() - startedAt },
   };
@@ -248,7 +277,7 @@ function getAdSetsList(filters = {}) {
   // per row in a .map() (same N+1 fix as adIntelligence.getAdsList).
   const adSets = db.all(
     `SELECT
-       s.id, s.meta_adset_id, s.name, s.status,
+       s.id, s.meta_adset_id, s.name, s.status, s.effective_status,
        s.daily_budget, s.lifetime_budget, s.optimization_goal,
        s.campaign_id, s.ad_account_id,
        c.meta_campaign_id, c.name as campaign_name, c.objective,

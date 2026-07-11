@@ -22,6 +22,17 @@
  *
  * POST /api/v1/campaigns/:id/insights/refresh
  *   Clears cache for this campaign and reloads.
+ *
+ * GET /api/v1/campaigns/:id/insights/diagnosis
+ *   Rule-based "why did this move" decomposition of the primary KPI
+ *   (Phase 9 — Diagnosis Engine). See src/services/diagnosisEngine.js.
+ *   Both this route and the main GET / route above also attach a
+ *   `_governance` field (Phase 10 — MAIFS/MMS governance trace, see
+ *   src/services/mmsOrchestrator.js) attributing results to the Meta
+ *   Framework(s) that govern them, without changing any existing field,
+ *   and a `framework_recommendations` / `rule_engine_decisions` field
+ *   (Phase 11 — Rule Engine, see src/services/ruleEngine.js) exposing
+ *   every executed Framework rule with full Rule/Framework attribution.
  */
 
 const express = require('express');
@@ -33,10 +44,17 @@ const cache             = require('../../services/cacheService');
 const { resolveDateRange, priorPeriod, isInAttributionWindow } = require('../../services/dateRangeHelper');
 const { fetchCampaignMetrics, fetchAdSetMetrics, fetchAdMetrics, fetchTrendData } = require('../../services/metricsFetcher');
 const { fetchBreakdown, fetchAllBreakdowns, enrichBreakdown } = require('../../services/breakdownsFetcher');
-const { runIntelligencePipeline } = require('../../services/intelligenceOrchestrator');
 const { asyncHandler }            = require('../../middleware/errorHandler');
 const { isMockRequested, rejectMockInProduction } = require('../../services/mockGuard');
 const { decryptToken } = require('../../services/tokenCrypto');
+const { orchestrateIntelligence } = require('../../services/mmsOrchestrator');
+const { loadActiveRecommendations } = require('../../services/recommendationEngine');
+const { loadActiveAlerts } = require('../../services/alertEngine');
+const { findingShapeForCard } = require('../../services/decisionEngine');
+const { applyHistoricalLearning } = require('../../services/executiveMemory');
+const { buildExecutiveSummary } = require('../../services/executiveSummaryEngine');
+const { buildObjectiveIntelligence } = require('../../services/objectiveIntelligenceEngine');
+const { enrichObjectiveIntelligence } = require('../../services/objectiveDiagnosisEngine');
 
 // ─────────────────────────────────────────────
 // Mock data (development / no Meta token)
@@ -96,6 +114,25 @@ function loadCampaign(id) {
   // Decrypted here once so every call site below can keep using
   // campaign.access_token_encrypted unchanged.
   if (campaign) campaign.access_token_encrypted = decryptToken(campaign.access_token_encrypted);
+
+  // The campaign's real Meta optimization_goal (an ad-set-level field,
+  // already synced into ad_sets.optimization_goal by syncService.js) --
+  // passed to metricsFetcher.js so Cost/Conv is computed from the EXACT
+  // conversion event this campaign is actually configured to optimize for,
+  // instead of a generic per-objective assumption. Most-common non-null
+  // value across the campaign's ad sets, matching kpiProfileResolver.js's
+  // existing single-optimization_goal-per-campaign assumption (used for the
+  // Awareness/Video Views sub-profile).
+  if (campaign) {
+    const goalRow = db.get(
+      `SELECT optimization_goal, COUNT(*) as c FROM ad_sets
+       WHERE campaign_id = ? AND optimization_goal IS NOT NULL
+       GROUP BY optimization_goal ORDER BY c DESC LIMIT 1`,
+      [campaign.id]
+    );
+    campaign.optimization_goal = goalRow ? goalRow.optimization_goal : null;
+  }
+
   return campaign;
 }
 
@@ -132,7 +169,7 @@ router.get('/', asyncHandler(async (req, res) => {
   } else {
     let metricsResult;
     try {
-      metricsResult  = await fetchCampaignMetrics(campaign.meta_campaign_id, campaign.access_token_encrypted, dateRange, campaign.attribution_window_days);
+      metricsResult  = await fetchCampaignMetrics(campaign.meta_campaign_id, campaign.access_token_encrypted, dateRange, campaign.attribution_window_days, campaign.optimization_goal);
       currentMetrics = metricsResult.current;
       priorMetrics   = metricsResult.prior;
       deltas         = metricsResult.deltas;
@@ -169,13 +206,87 @@ router.get('/', asyncHandler(async (req, res) => {
   // Attribution window check
   const dataIncomplete = isInAttributionWindow(until, campaign.attribution_window_days || 7);
 
-  // Run intelligence pipeline (health score, recommendations, alerts)
-  const intelligence = runIntelligencePipeline(
-    { id: campaign.id, meta_campaign_id: campaign.meta_campaign_id, name: campaign.name, objective: campaign.objective },
+  const relatedDecisions = db.all(
+    `SELECT decision_type, priority, confidence, suggested_action FROM decision_history
+     WHERE meta_campaign_id = ? ORDER BY priority_score DESC, created_at DESC LIMIT 5`,
+    [campaign.meta_campaign_id]
+  );
+
+  // Budget Utilization (MF6.14.2) -- the campaign's aggregate ad-set budget
+  // over the period, computed here (not inside ruleEngine.js, which stays
+  // DB-free) and passed to the orchestrator as a precomputed metric.
+  const budgetRow = db.get(
+    `SELECT SUM(daily_budget) as total_daily_budget FROM ad_sets WHERE campaign_id = ?`,
+    [campaign.id]
+  );
+  const budgetUtilizationPct = (budgetRow?.total_daily_budget && prior.days)
+    ? (currentMetrics.spend / (budgetRow.total_daily_budget * prior.days)) * 100
+    : null;
+
+  // Phase X.1 — Runtime Unification: the single sequenced call for
+  // [health/benchmark/recommendation/alert] -> Rule Engine -> Diagnosis
+  // Engine -> Decision Engine -> MAIFS enforcement -> Governance trace.
+  // `runIntelligencePipeline()` is no longer called separately here -- the
+  // orchestrator now runs it internally as its own first step (entityType
+  // defaults to 'campaign'), so there is exactly one call, not two.
+  const {
+    intelligence, diagnosis, ruleEngineResult, ruleEngineDecisions, governance,
+  } = orchestrateIntelligence({
+    campaign: { id: campaign.id, meta_campaign_id: campaign.meta_campaign_id, name: campaign.name, objective: campaign.objective },
+    adAccountId,
     currentMetrics,
     priorMetrics,
-    adAccountId
-  );
+    deltas,
+    relatedDecisions,
+    budgetUtilizationPct,
+    effectiveStatus: campaign.effective_status,
+  });
+
+  // Product Completion Mode, Milestone 1 — Executive Summary: `diagnosis` was
+  // already computed by orchestrateIntelligence() on this route but never
+  // used here before now (discarded). No new computation beyond the
+  // template-based assembly itself.
+  const executiveSummary = buildExecutiveSummary({
+    objective: campaign.objective,
+    healthScore: intelligence.health.score,
+    healthStatus: intelligence.health.status,
+    diagnosis,
+    ruleEngineDecisions,
+    recommendations: intelligence.recommendations,
+    alerts: intelligence.alerts,
+  });
+
+  // Product Completion Mode, Milestone 2 — Objective Intelligence: joins
+  // already-computed benchmark/diagnosis/rule/governance data into one
+  // per-KPI table for the detected objective. Zero new calculations --
+  // see objectiveIntelligenceEngine.js's header.
+  const objectiveIntelligenceRaw = buildObjectiveIntelligence({
+    objective: campaign.objective,
+    adAccountId,
+    currentMetrics,
+    healthScore: intelligence.health.score,
+    healthStatus: intelligence.health.status,
+    benchmark: intelligence.benchmark,
+    diagnosis,
+    ruleEngineFired: ruleEngineResult.fired,
+    recommendations: intelligence.recommendations,
+    alerts: intelligence.alerts,
+    executiveSummary,
+  });
+
+  // Product Completion Mode, Milestone 3 — Executive Objective Diagnosis:
+  // extends each KPI row above with root_cause/business_impact/
+  // executive_recommendation/severity/confidence/evidence, reusing
+  // diagnosis/rule engine/decision data already computed on this route.
+  // objectiveIntelligenceRaw's own fields are untouched (see
+  // objectiveDiagnosisEngine.js's header).
+  const objectiveIntelligence = enrichObjectiveIntelligence(objectiveIntelligenceRaw, {
+    objective: campaign.objective,
+    diagnosis,
+    ruleEngineDecisions,
+    recommendations: intelligence.recommendations,
+    alerts: intelligence.alerts,
+  });
 
   return res.json({
     campaign_id:    campaign.meta_campaign_id,
@@ -208,6 +319,9 @@ router.get('/', asyncHandler(async (req, res) => {
     deltas,
     comparisons:    buildComparisons(currentMetrics, priorMetrics, deltas, req.query.preset || 'last_7_days'),
 
+    executive_summary: executiveSummary,
+    objective_intelligence: objectiveIntelligence,
+
     health_score:     intelligence.health.score,
     health_status:    intelligence.health.status,
     health_breakdown: intelligence.health.breakdown,
@@ -218,9 +332,17 @@ router.get('/', asyncHandler(async (req, res) => {
     recommendations:  intelligence.recommendations,
     alerts:           intelligence.alerts,
 
+    // Phase 11 — Rule Engine: every fired Framework rule (Framework, Rule
+    // ID, Rule Name, Severity, Evidence, Reason, Recommendation) plus the
+    // same findings shaped as Decisions (decisionEngine.js's own shape).
+    framework_recommendations: ruleEngineResult.fired,
+    rule_engine_decisions:     ruleEngineDecisions,
+    rule_engine_conflicts:     ruleEngineResult.conflicts,
+
     fetched_at: fetchedAt,
     is_mock:    useMock,
     _meta:      intelligence.meta,
+    _governance: governance,
   });
 }));
 
@@ -405,6 +527,200 @@ router.get('/cache-stats', asyncHandler(async (req, res) => {
     return res.status(404).json({ error: 'Not found' });
   }
   return res.json(cache.stats());
+}));
+
+// ─────────────────────────────────────────────
+// GET /insights/diagnosis — Phase 9: rule-based "why did this move"
+// decomposition of the campaign's primary KPI. Reuses the same
+// loadCampaign/resolveDateRange/mock-handling as every other sub-route on
+// this router rather than duplicating it in a standalone route file.
+// ─────────────────────────────────────────────
+router.get('/diagnosis', asyncHandler(async (req, res) => {
+  if (rejectMockInProduction(req, res)) return;
+  const { id }  = req.params;
+  const useMock = isMockRequested(req);
+  const campaign = loadCampaign(id);
+  if (!campaign) return res.status(404).json({ error: 'Campaign not found', id });
+
+  const dateRange = resolveDateRange(req.query);
+  const { since, until } = dateRange;
+
+  let currentMetrics, priorMetrics, deltas;
+
+  if (useMock) {
+    currentMetrics = getMockMetrics(campaign.objective);
+    priorMetrics   = getMockPriorMetrics(campaign.objective);
+    deltas         = getMockDeltas(currentMetrics, priorMetrics);
+  } else {
+    let metricsResult;
+    try {
+      metricsResult = await fetchCampaignMetrics(campaign.meta_campaign_id, campaign.access_token_encrypted, dateRange, campaign.attribution_window_days, campaign.optimization_goal);
+    } catch (err) {
+      return res.status(502).json({
+        analyzed:      false,
+        reason:        'Meta API error: ' + err.message,
+        campaign_id:   campaign.meta_campaign_id,
+        campaign_name: campaign.name,
+      });
+    }
+    currentMetrics = metricsResult.current;
+    priorMetrics   = metricsResult.prior;
+    deltas         = metricsResult.deltas;
+
+    if (!currentMetrics) {
+      return res.json({
+        analyzed:      false,
+        reason:        'No Meta insights available for the selected period',
+        campaign_id:   campaign.meta_campaign_id,
+        campaign_name: campaign.name,
+        objective:     campaign.objective,
+        date_range:    { since, until },
+        is_mock:       false,
+      });
+    }
+  }
+
+  // Attach existing context (never recomputed here) -- health score/status
+  // as already persisted by healthScoreEngine, and any Decisions already
+  // generated for this campaign, matched by meta_campaign_id.
+  const healthRow = db.get(
+    `SELECT health_score, health_status FROM health_score_history
+     WHERE entity_meta_id = ? ORDER BY calculated_at DESC LIMIT 1`,
+    [campaign.meta_campaign_id]
+  );
+
+  // Phase X.5 — Executive Diagnosis Card: supporting_metrics/expected_impact/
+  // action_taken/action_notes already exist as decision_history columns
+  // (schema.phase5.js) but were never selected here -- added so the
+  // dashboard can show real Evidence/Expected Result/Next Action instead of
+  // leaving those fields empty.
+  const relatedDecisions = db.all(
+    `SELECT id, decision_type, priority, confidence, reason, suggested_action, status, created_at,
+            supporting_metrics, expected_impact, action_taken, action_notes
+     FROM decision_history WHERE meta_campaign_id = ?
+     ORDER BY priority_score DESC, created_at DESC LIMIT 5`,
+    [campaign.meta_campaign_id]
+  );
+
+  const budgetRow = db.get(
+    `SELECT SUM(daily_budget) as total_daily_budget FROM ad_sets WHERE campaign_id = ?`,
+    [campaign.id]
+  );
+  const periodDays = Math.round((new Date(until) - new Date(since)) / 86400000) + 1;
+  const budgetUtilizationPct = (budgetRow?.total_daily_budget && periodDays > 0)
+    ? (currentMetrics.spend / (budgetRow.total_daily_budget * periodDays)) * 100
+    : null;
+
+  // Phase X.1 — Runtime Unification: same single orchestrator call as the
+  // main route above. `intelligence: {}` is passed explicitly to keep this
+  // route's existing behavior unchanged -- it has never run the health/
+  // benchmark/recommendation/alert pipeline (and therefore never written
+  // to recommendation_log/active_alerts), and this migration does not
+  // change that; passing a truthy value here (even an empty object) tells
+  // the orchestrator to skip its internal step 0 rather than compute it.
+  const {
+    diagnosis, ruleEngineResult, ruleEngineDecisions, governance,
+  } = orchestrateIntelligence({
+    campaign: { id: campaign.id, meta_campaign_id: campaign.meta_campaign_id, name: campaign.name, objective: campaign.objective },
+    adAccountId: campaign.internal_account_id,
+    currentMetrics,
+    priorMetrics,
+    deltas,
+    intelligence: {},
+    relatedDecisions,
+    budgetUtilizationPct,
+    effectiveStatus: campaign.effective_status,
+  });
+
+  // Phase X.5 — Executive Diagnosis Card: pure reads (no db.run()/upsert in
+  // either function), so this route's write profile is unchanged -- these
+  // surface already-persisted recommendation-/alert-sourced findings
+  // (including their Phase X.3 governance_state) that this route has never
+  // shown before, without re-running either engine.
+  const recommendationFindings = loadActiveRecommendations(campaign.meta_campaign_id);
+  const alertFindings = loadActiveAlerts(campaign.meta_campaign_id);
+
+  // Phase X.5 — Executive Diagnosis Card: one unified, card-ready `findings`
+  // array regardless of source, each enriched with Expected Result/Next
+  // Action from the matching decision_history row (same meta_campaign_id +
+  // decision_type matching key deduplicateDecisions() already uses
+  // elsewhere) when one exists. `matched` is null for a finding that
+  // hasn't reached the Decision Center yet -- reported honestly, not faked.
+  // Phase X.6 — Executive Memory: rule-engine-sourced findings already carry
+  // historical_note/historical_effectiveness from orchestrateIntelligence()'s
+  // applyHistoricalLearning() call (Step 3.5) -- passed through unchanged
+  // below. Recommendation-/alert-sourced findings never went through that
+  // call on this route (orchestrateIntelligence() was invoked with
+  // `intelligence: {}` above, skipping Step 0/3.5/4b for them), so
+  // applyHistoricalLearning() is called on them here instead -- a second,
+  // legitimate call site for the same read-only function (queries
+  // decision_outcomes, no live metrics needed), not a duplicate
+  // implementation. Applying it to the rule-engine ones a second time would
+  // double-downgrade an already-downgraded confidence, so they're kept separate.
+  const ruleEngineFindings = ruleEngineDecisions.map(d => findingShapeForCard('rule_engine', d));
+  const recAlertFindings = applyHistoricalLearning(
+    [
+      ...recommendationFindings.map(r => findingShapeForCard('recommendation', r)),
+      ...alertFindings.map(a => findingShapeForCard('alert', a)),
+    ].map(f => ({ ...f, meta_campaign_id: campaign.meta_campaign_id }))
+  );
+
+  const findings = [...ruleEngineFindings, ...recAlertFindings].map(finding => {
+    const matched = relatedDecisions.find(rd => rd.decision_type === finding.decision_type);
+    return {
+      ...finding,
+      expected_impact: matched?.expected_impact ?? null,
+      next_action_status: matched?.status ?? null,
+      next_action_taken: matched ? !!matched.action_taken : null,
+      next_action_notes: matched?.action_notes ?? null,
+      decision_history_id: matched?.id ?? null,
+    };
+  });
+
+  // Lifecycle fix: healthRow reflects the last PERSISTED health_score_
+  // history row, which orchestrateIntelligence() deliberately does NOT
+  // write to while an entity is not delivering (a numeric score computed
+  // for a non-delivering entity would be fabricated data, and the table
+  // has no "not delivering" health_status value) -- without this override,
+  // this route would keep showing the stale, pre-pause score/status
+  // indefinitely instead of "Not Delivering".
+  const isNotDelivering = diagnosis.status === 'not_delivering';
+  const effectiveHealthScore  = isNotDelivering ? null              : (healthRow ? healthRow.health_score  : null);
+  const effectiveHealthStatus = isNotDelivering ? 'not_delivering'  : (healthRow ? healthRow.health_status : null);
+
+  // Product Completion Mode, Milestone 1 — Executive Summary, same function
+  // as the main insights route, using this route's own already-computed
+  // diagnosis/health/findings inputs.
+  const executiveSummary = buildExecutiveSummary({
+    objective: campaign.objective,
+    healthScore: effectiveHealthScore,
+    healthStatus: effectiveHealthStatus,
+    diagnosis,
+    ruleEngineDecisions,
+    recommendations: recommendationFindings,
+    alerts: alertFindings,
+  });
+
+  return res.json({
+    campaign_id:   campaign.meta_campaign_id,
+    campaign_name: campaign.name,
+    objective:     campaign.objective,
+    date_range:    { since, until },
+    diagnosis,
+    executive_summary: executiveSummary,
+    health_score:      effectiveHealthScore,
+    health_status:     effectiveHealthStatus,
+    related_decisions: relatedDecisions,
+    framework_recommendations: ruleEngineResult.fired,
+    rule_engine_decisions:     ruleEngineDecisions,
+    rule_engine_conflicts:     ruleEngineResult.conflicts,
+    recommendation_findings: recommendationFindings,
+    alert_findings: alertFindings,
+    findings,
+    is_mock:    useMock,
+    fetched_at: new Date().toISOString(),
+    _governance: governance,
+  });
 }));
 
 module.exports = router;

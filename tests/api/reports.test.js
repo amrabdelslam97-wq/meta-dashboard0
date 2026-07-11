@@ -191,4 +191,40 @@ describe('API: /api/v1/reports', () => {
       expect(objectives.size).toBeGreaterThan(1);
     });
   });
+
+  // Multi-account scoping (Multi Meta Ad Account Management milestone):
+  // getDefaultAccount() in this route previously always picked "the first
+  // active account", completely ignoring any account_id the dashboard had
+  // selected -- switching accounts in the UI never changed the report.
+  describe('account_id scoping (reports previously ignored the selected account)', () => {
+    let secondAccountId;
+
+    beforeAll(() => {
+      secondAccountId = uuidv4();
+      testDb.db.run(
+        `INSERT INTO ad_accounts (id, meta_account_id, account_name, access_token_encrypted, status, created_at, updated_at)
+         VALUES (?, 'act_report_second', 'Second Report Account', 'enc:v1:x', 'active', datetime('now'), datetime('now'))`,
+        [secondAccountId]
+      );
+      testDb.db.run(
+        `INSERT INTO health_score_history
+           (id, ad_account_id, entity_type, entity_meta_id, entity_label, objective,
+            health_score, health_status, score_reference, calculated_at)
+         VALUES (?, ?, 'campaign', 'camp_second_account', 'Second Account Campaign', 'traffic', 65, 'good', 'platform_default', datetime('now'))`,
+        [uuidv4(), secondAccountId]
+      );
+    });
+
+    test('GET /reports/summary?account_id=<second account> reports on that account, not the first active one', async () => {
+      const res = await request(app).get('/api/v1/reports/summary').query({ period: 'daily', account_id: secondAccountId });
+      expect(res.status).toBe(200);
+      expect(res.body.top_campaigns.some(c => c.entity_meta_id === 'camp_second_account')).toBe(true);
+      expect(res.body.top_campaigns.some(c => c.entity_meta_id === 'camp_sales_kpi')).toBe(false);
+    });
+
+    test('GET /reports/summary with no account_id keeps reporting on the first active account (unchanged default)', async () => {
+      const res = await request(app).get('/api/v1/reports/summary').query({ period: 'daily' });
+      expect(res.body.top_campaigns.some(c => c.entity_meta_id === 'camp_second_account')).toBe(false);
+    });
+  });
 });

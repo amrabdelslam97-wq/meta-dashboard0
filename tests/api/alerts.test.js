@@ -41,6 +41,13 @@ describe('API: /api/v1/alerts', () => {
     expect(res.body.data.some(a => a.id === alertId)).toBe(true);
   });
 
+  test('GET /alerts includes governance_state (Phase X.3 — MAIFS Enforcement), null when not yet governed', async () => {
+    const res = await request(app).get('/api/v1/alerts');
+    const alert = res.body.data.find(a => a.id === alertId);
+    expect(alert).toHaveProperty('governance_state');
+    expect(alert.governance_state).toBeNull();
+  });
+
   test('PATCH /alerts/:id action=dismiss dismisses the alert', async () => {
     const res = await request(app)
       .patch(`/api/v1/alerts/${alertId}`)
@@ -130,5 +137,55 @@ describe('API: /api/v1/alerts', () => {
       .patch('/api/v1/alerts/00000000-0000-0000-0000-000000000000')
       .send({ action: 'dismiss' });
     expect(res.status).toBe(404);
+  });
+
+  // Multi-account scoping (Multi Meta Ad Account Management milestone):
+  // GET /alerts previously had no account_id filter, so every connected
+  // account's active alerts were always mixed together.
+  describe('account_id scoping', () => {
+    let ownAccountId, ownAlertId, otherAccountId, otherAlertId;
+
+    beforeAll(() => {
+      ownAccountId = uuidv4();
+      testDb.db.run(
+        `INSERT INTO ad_accounts (id, meta_account_id, account_name, access_token_encrypted, created_at, updated_at)
+         VALUES (?, 'act_alert_scope_own', 'Alert Scope Own', 'enc:v1:x', datetime('now'), datetime('now'))`,
+        [ownAccountId]
+      );
+      ownAlertId = uuidv4();
+      testDb.db.run(
+        `INSERT INTO active_alerts
+           (id, ad_account_id, alert_code, entity_type, entity_meta_id, entity_label, severity, alert_message)
+         VALUES (?, ?, 'CTR_DROP', 'campaign', 'camp_alert_scope_own', 'Own Account Campaign', 'warning', 'CTR dropped')`,
+        [ownAlertId, ownAccountId]
+      );
+
+      otherAccountId = uuidv4();
+      testDb.db.run(
+        `INSERT INTO ad_accounts (id, meta_account_id, account_name, access_token_encrypted, created_at, updated_at)
+         VALUES (?, 'act_alert_scope_other', 'Alert Scope Other', 'enc:v1:x', datetime('now'), datetime('now'))`,
+        [otherAccountId]
+      );
+      otherAlertId = uuidv4();
+      testDb.db.run(
+        `INSERT INTO active_alerts
+           (id, ad_account_id, alert_code, entity_type, entity_meta_id, entity_label, severity, alert_message)
+         VALUES (?, ?, 'CTR_DROP', 'campaign', 'camp_alert_scope_other', 'Other Account Campaign', 'warning', 'CTR dropped')`,
+        [otherAlertId, otherAccountId]
+      );
+    });
+
+    test('?account_id= scopes results to that account only', async () => {
+      const res = await request(app).get(`/api/v1/alerts?account_id=${ownAccountId}`);
+      expect(res.status).toBe(200);
+      expect(res.body.data.some(a => a.id === ownAlertId)).toBe(true);
+      expect(res.body.data.some(a => a.id === otherAlertId)).toBe(false);
+    });
+
+    test('omitting account_id keeps today\'s default behavior (all accounts mixed)', async () => {
+      const res = await request(app).get('/api/v1/alerts');
+      expect(res.body.data.some(a => a.id === ownAlertId)).toBe(true);
+      expect(res.body.data.some(a => a.id === otherAlertId)).toBe(true);
+    });
   });
 });

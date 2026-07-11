@@ -21,6 +21,14 @@ const CORE_FIELDS = [
   'ctr', 'cpm', 'cpc', 'frequency',
   'actions', 'cost_per_action_type',
   'purchase_roas', 'website_purchase_roas',
+  // unique_clicks/unique_ctr are standard, documented Meta Insights numeric
+  // fields (deduplicated-by-person versions of clicks/ctr). outbound_clicks
+  // is actions[]-shaped like `actions` itself (one entry per action_type,
+  // typically just 'outbound_click') -- added for Creative Intelligence's
+  // Outbound CTR / Unique CTR metrics (Executive Marketing Analytics Layer
+  // follow-on). Flagged for live verification against a real Insights
+  // response the same way action_values was, per this file's house rule.
+  'unique_clicks', 'unique_ctr', 'outbound_clicks',
   // action_values is the correct Meta Insights field name for monetary
   // value per action_type (mirrors the actions[] structure). The
   // previously-used 'conversion_values' does not match Meta's documented
@@ -54,73 +62,175 @@ const ADSET_FIELDS = CORE_FIELDS + ',adset_id,adset_name';
 const AD_FIELDS     = CORE_FIELDS + ',ad_id,ad_name,adset_id';
 
 // ─────────────────────────────────────────────
+// Deterministic action_type priority per generic metric bucket.
+//
+// ROOT CAUSE this fixes: several distinct Meta action_types legitimately
+// share one of our generic buckets (e.g. 'onsite_conversion.messaging_
+// conversation_started_7d' AND 'onsite_conversion.messaging_first_reply'
+// both feed 'results'/'cpr' for a Conversations-optimized campaign). The
+// previous code picked whichever one happened to appear FIRST in Meta's
+// cost_per_action_type[] response array -- which Meta does not guarantee
+// any stable ordering for. Confirmed against a real campaign's real Meta
+// Insights response (spend=2773.67, ad set optimization_goal=CONVERSATIONS):
+//   onsite_conversion.messaging_conversation_started_7d: value=185, cost=14.992811  (2773.67/185 = 14.9928..., i.e. Meta's own math)
+//   onsite_conversion.messaging_first_reply:              value=184, cost=15.074293  (a narrower subset -- not every started conversation gets a first reply)
+// Meta's response listed messaging_first_reply BEFORE messaging_conversation_
+// started_7d, so the old "first array entry wins" logic silently used
+// 15.074293 instead of the correct 14.992811 -- a real, reproducible ~0.5%
+// overstatement in this example, and structurally *always* an overstatement
+// (never an understatement) whenever it happens, because messaging_first_
+// reply's count can never exceed messaging_conversation_started_7d's for the
+// same campaign, so its cost-per-result mechanically can't be lower. That
+// asymmetry is exactly why the discrepancy was reported as "consistently
+// higher", not randomly higher-or-lower.
+//
+// Fix: pick by OUR fixed, documented priority order below (matching Meta's
+// own official "which action_type is the real Result for this optimization
+// goal" precedence), not by array position. Each list is ordered
+// most-authoritative-first; the first action_type actually present in the
+// response wins, regardless of where in the array it sits.
+// ─────────────────────────────────────────────
+const RESULT_ACTION_PRIORITY = {
+  // 'results' (engagement objective's generic bucket, default when no
+  // ad set optimization_goal is known -- see RESULT_ACTION_TYPES_BY_GOAL
+  // below for the optimization_goal-exact path, which takes precedence).
+  results:      ['onsite_conversion.messaging_conversation_started_7d', 'onsite_conversion.messaging_conversation_started', 'onsite_conversion.messaging_first_reply'],
+  leads:        ['onsite_conversion.lead_grouped', 'lead', 'leadgen_grouped'],
+  purchases:    ['omni_purchase', 'offsite_conversion.fb_pixel_purchase', 'purchase'],
+  app_installs: ['omni_app_install', 'mobile_app_install'],
+};
+
+// Meta's documented mapping from an ad set's optimization_goal to the
+// SPECIFIC action_type it reports as "Results" in Ads Manager for that goal
+// -- used when the caller knows the ad set's real optimization_goal (see
+// fetchCampaignMetrics()'s optimizationGoal param), so the exact configured
+// conversion event is used rather than the objective-level default above.
+// Only goals we can back with an action_type already recognized by
+// ACTION_MAP/CPA_MAP are listed -- an OFFSITE_CONVERSIONS ad set optimizing
+// for a custom (non-purchase) pixel event would need the ad set's
+// promoted_object.custom_event_type (not currently fetched) to resolve
+// further; not fabricated here.
+const RESULT_ACTION_TYPES_BY_GOAL = {
+  CONVERSATIONS:      { bucket: 'results',      actionTypes: RESULT_ACTION_PRIORITY.results },
+  LEAD_GENERATION:    { bucket: 'leads',         actionTypes: RESULT_ACTION_PRIORITY.leads },
+  QUALITY_LEAD:       { bucket: 'leads',         actionTypes: RESULT_ACTION_PRIORITY.leads },
+  OFFSITE_CONVERSIONS:{ bucket: 'purchases',     actionTypes: RESULT_ACTION_PRIORITY.purchases },
+  VALUE:              { bucket: 'purchases',     actionTypes: RESULT_ACTION_PRIORITY.purchases },
+  APP_INSTALLS:       { bucket: 'app_installs',  actionTypes: RESULT_ACTION_PRIORITY.app_installs },
+};
+
+/**
+ * Pick the value for the first action_type (in priority order) actually
+ * present in a Meta actions[]/cost_per_action_type[] array. Returns null
+ * (never 0) when none of the priority list's action_types are present, so
+ * callers can distinguish "genuinely no data" from "found, value 0".
+ */
+function pickByPriority(sourceArray, priorityList) {
+  if (!Array.isArray(sourceArray)) return null;
+  for (const actionType of priorityList) {
+    const match = sourceArray.find(a => a.action_type === actionType);
+    if (match) return parseFloat(match.value) || 0;
+  }
+  return null;
+}
+
+// ─────────────────────────────────────────────
 // Parse Meta actions[] + cost_per_action_type[]
 // Maps all known action_types to flat metric keys
+//
+// @param {string|null} optimizationGoal - the ad set's real Meta
+//   optimization_goal (e.g. "CONVERSATIONS"), when known. When provided and
+//   recognized, its exact configured conversion event (RESULT_ACTION_TYPES_
+//   BY_GOAL) overrides the objective-level default bucket -- e.g. "never use
+//   generic results when the optimization event is different."
 // ─────────────────────────────────────────────
-function parseActions(actions, costPerAction, actionValues) {
+function parseActions(actions, costPerAction, actionValues, optimizationGoal = null) {
   const result = {};
   if (!Array.isArray(actions)) return result;
 
-  // Action type → flat metric key mappings
+  // Action type → flat metric key mappings for the NON-ambiguous buckets
+  // only (exactly one Meta action_type per bucket, so no duplicate-
+  // counting/priority resolution is needed). results/leads/purchases/
+  // app_installs are NOT listed here -- multiple action_types can each
+  // legitimately represent them (see RESULT_ACTION_PRIORITY above), so
+  // they're resolved deterministically below instead of by simple lookup.
   const ACTION_MAP = {
-    // Messaging
-    'onsite_conversion.messaging_conversation_started_7d': 'results',
-    'onsite_conversion.messaging_first_reply':             'results',
-    'onsite_conversion.messaging_conversation_started':    'results',
-    // Leads
-    'lead':                                   'leads',
-    'onsite_conversion.lead_grouped':         'leads',
-    'leadgen_grouped':                        'leads',
-    // Purchases / Sales
-    'purchase':                               'purchases',
-    'offsite_conversion.fb_pixel_purchase':   'purchases',
-    'omni_purchase':                          'purchases',
     // Traffic
-    'link_click':                             'link_clicks',
-    'landing_page_view':                      'landing_page_views',
+    'link_click':       'link_clicks',
+    'landing_page_view':'landing_page_views',
     // Engagement -- 'post_engagement'/'page_engagement'/'like' confirmed
     // present with real values against a real campaign in the connected
     // account (e.g. post_engagement=62239) before adding.
-    'post_engagement':                        'post_engagements',
-    'page_engagement':                        'page_engagements',
-    'like':                                   'page_likes',
-    // App Promotion -- these are Meta's documented standard action_types
-    // for app installs, but this account has zero App Promotion
-    // campaigns, so they could NOT be verified against a real response
-    // the way the engagement/video entries above were. Left in per
-    // Meta's public Insights API documentation rather than omitted, but
-    // explicitly flagged as unverified until a real app-install campaign
-    // can be checked.
-    'mobile_app_install':                     'app_installs',
-    'omni_app_install':                       'app_installs',
+    'post_engagement':  'post_engagements',
+    'page_engagement':  'page_engagements',
+    'like':             'page_likes',
+    // Individual reaction breakdown (Creative Intelligence Engine) --
+    // Meta's documented standard action_types for post-level engagement.
+    // 'comment' and 'post' (share) are well-established Marketing API
+    // action_types; 'onsite_conversion.post_save' is Meta's documented save
+    // action. Flagged for live verification against a real Insights
+    // response the same way action_values was, per this file's house rule.
+    'comment':                      'comments',
+    'post':                         'shares',
+    'onsite_conversion.post_save':  'saves',
   };
 
   for (const { action_type, value } of actions) {
     const key = ACTION_MAP[action_type];
     if (key) {
-      // Use highest value when multiple action_types map to same key
-      const existing = result[key] || 0;
-      result[key] = Math.max(existing, parseFloat(value) || 0);
+      result[key] = parseFloat(value) || 0;
     }
   }
 
-  // Cost per action type → cost metrics
+  // Ambiguous buckets (results/leads/purchases/app_installs): several
+  // distinct Meta action_types can each legitimately represent "the"
+  // result count for these, and Meta does not report them as additive --
+  // they're alternative attributions/countings of the same underlying
+  // conversions. Resolve deterministically: prefer the ad set's actual
+  // optimization_goal's exact configured action_type when known, otherwise
+  // fall back to RESULT_ACTION_PRIORITY's documented order -- never by
+  // Meta's arbitrary response array position (see this section's header
+  // comment for the real-data proof of why that was wrong).
+  const goalOverride = optimizationGoal
+    ? RESULT_ACTION_TYPES_BY_GOAL[String(optimizationGoal).toUpperCase().trim()]
+    : null;
+
+  const bucketsToResolve = goalOverride
+    ? [goalOverride]
+    : Object.entries(RESULT_ACTION_PRIORITY).map(([bucket, actionTypes]) => ({ bucket, actionTypes }));
+
+  for (const { bucket, actionTypes } of bucketsToResolve) {
+    const value = pickByPriority(actions, actionTypes);
+    if (value !== null) result[bucket] = value;
+  }
+  // When an optimization_goal override applies, the OTHER ambiguous buckets
+  // (not the goal's own bucket) still fall back to their default priority
+  // list -- e.g. a Conversations-optimized campaign may still have
+  // incidental leads/purchases worth showing elsewhere on the dashboard,
+  // even though `results`/`cpr` (not `leads`/`cpl` or `purchases`/`cpa`) is
+  // its actual primary KPI. Conversely, when a campaign's real
+  // optimization_goal has NO matching entry in RESULT_ACTION_TYPES_BY_GOAL
+  // at all (goalOverride is null), every bucket already got resolved by the
+  // `bucketsToResolve` loop above using its own default priority list --
+  // this second loop only fires when goalOverride IS set, filling in the
+  // buckets that loop skipped.
+  if (goalOverride) {
+    for (const bucket of Object.keys(RESULT_ACTION_PRIORITY)) {
+      if (bucket !== goalOverride.bucket && result[bucket] === undefined) {
+        const fallbackValue = pickByPriority(actions, RESULT_ACTION_PRIORITY[bucket]);
+        if (fallbackValue !== null) result[bucket] = fallbackValue;
+      }
+    }
+  }
+
+  // Cost per action type → cost metrics.
+  // Non-ambiguous costs (exactly one action_type per bucket).
   if (Array.isArray(costPerAction)) {
     const CPA_MAP = {
-      'onsite_conversion.messaging_conversation_started_7d': 'cpr',
-      'onsite_conversion.messaging_first_reply':             'cpr',
-      'onsite_conversion.messaging_conversation_started':    'cpr',
-      'lead':                                 'cpl',
-      'onsite_conversion.lead_grouped':       'cpl',
-      'purchase':                             'cpa',
-      'offsite_conversion.fb_pixel_purchase': 'cpa',
-      'landing_page_view':                    'cost_per_landing_page_view',
+      'landing_page_view': 'cost_per_landing_page_view',
       // Confirmed present with a real value (e.g. post_engagement
       // cost=0.410191) against a real campaign in the connected account.
-      'post_engagement':                      'cost_per_engagement',
-      // Unverified -- see the matching ACTION_MAP comment above.
-      'mobile_app_install':                   'cpi',
-      'omni_app_install':                     'cpi',
+      'post_engagement':   'cost_per_engagement',
     };
     for (const { action_type, value } of costPerAction) {
       const key = CPA_MAP[action_type];
@@ -128,6 +238,36 @@ function parseActions(actions, costPerAction, actionValues) {
         result[key] = parseFloat(value) || 0;
       }
     }
+
+    // Ambiguous cost buckets: same priority-ordered resolution as the
+    // values above, and using the SAME resolved action_type per bucket
+    // (so e.g. cpr's cost always corresponds to the exact action_type
+    // `results`'s value came from -- they can never silently disagree).
+    const COST_BUCKET_KEY = { results: 'cpr', leads: 'cpl', purchases: 'cpa', app_installs: 'cpi' };
+    const costBucketsToResolve = goalOverride
+      ? [{ bucket: goalOverride.bucket, actionTypes: goalOverride.actionTypes }]
+      : Object.entries(RESULT_ACTION_PRIORITY).map(([bucket, actionTypes]) => ({ bucket, actionTypes }));
+
+    for (const { bucket, actionTypes } of costBucketsToResolve) {
+      const cost = pickByPriority(costPerAction, actionTypes);
+      if (cost !== null) result[COST_BUCKET_KEY[bucket]] = cost;
+    }
+    if (goalOverride) {
+      for (const bucket of Object.keys(RESULT_ACTION_PRIORITY)) {
+        const costKey = COST_BUCKET_KEY[bucket];
+        if (bucket !== goalOverride.bucket && result[costKey] === undefined) {
+          const fallbackCost = pickByPriority(costPerAction, RESULT_ACTION_PRIORITY[bucket]);
+          if (fallbackCost !== null) result[costKey] = fallbackCost;
+        }
+      }
+    }
+
+    // 'mobile_app_install'/'omni_app_install' costs are already covered by
+    // the app_installs priority resolution above (RESULT_ACTION_PRIORITY.
+    // app_installs); no separate CPA_MAP entry needed -- kept unverified-
+    // status note from the original mapping: Meta's documented standard
+    // action_types for app installs, not yet checked against a real
+    // App Promotion campaign (none exist in the connected accounts).
   }
 
   // Purchase value from action_values
@@ -192,8 +332,10 @@ function parseVideoMetrics(d) {
 
 // ─────────────────────────────────────────────
 // Normalize a single Meta insights data row
+//
+// @param {string|null} optimizationGoal - see parseActions()'s param doc.
 // ─────────────────────────────────────────────
-function normalizeRow(d) {
+function normalizeRow(d, optimizationGoal = null) {
   if (!d) return null;
 
   const base = {
@@ -205,9 +347,20 @@ function normalizeRow(d) {
     cpm:         parseFloat(d.cpm         || 0),
     cpc:         parseFloat(d.cpc         || 0),
     frequency:   parseFloat(d.frequency   || 0),
+    unique_clicks: parseFloat(d.unique_clicks || 0),
+    unique_ctr:    parseFloat(d.unique_ctr    || 0),
     date_start:  d.date_start || null,
     date_stop:   d.date_stop  || null,
   };
+
+  // outbound_clicks is actions[]-shaped (one entry per action_type,
+  // typically just 'outbound_click') -- same extraction pattern as
+  // parseVideoMetrics() below, not a bare number.
+  if (Array.isArray(d.outbound_clicks) && d.outbound_clicks.length > 0) {
+    const outboundEntry = d.outbound_clicks.find(a => a.action_type === 'outbound_click') || d.outbound_clicks[0];
+    const outboundValue = parseFloat(outboundEntry.value);
+    if (!Number.isNaN(outboundValue)) base.outbound_clicks = outboundValue;
+  }
 
   // ROAS from Meta's purchase_roas array
   const roasSource = d.purchase_roas || d.website_purchase_roas;
@@ -215,7 +368,7 @@ function normalizeRow(d) {
   if (pickedRoas !== null) base.roas = pickedRoas;
 
   // Actions → objective-specific metrics
-  const actionMetrics = parseActions(d.actions, d.cost_per_action_type, d.action_values);
+  const actionMetrics = parseActions(d.actions, d.cost_per_action_type, d.action_values, optimizationGoal);
   Object.assign(base, actionMetrics);
 
   // Derive missing cost metrics from volume + spend
@@ -231,6 +384,13 @@ function normalizeRow(d) {
   // Landing page view rate (%)
   if (base.landing_page_views > 0 && base.clicks > 0) {
     base.landing_page_view_rate = (base.landing_page_views / base.clicks) * 100;
+  }
+
+  // Outbound CTR (%) -- Meta reports outbound_clicks as a count, not a rate;
+  // derived the same way ctr itself is (clicks/impressions), consistent
+  // with this file's existing "derive when Meta doesn't supply it directly" pattern.
+  if (base.outbound_clicks > 0 && base.impressions > 0) {
+    base.outbound_ctr = (base.outbound_clicks / base.impressions) * 100;
   }
 
   // Video watched-actions (Video Views KPI sub-profile). Only merge keys
@@ -269,9 +429,9 @@ function normalizeRow(d) {
 // Normalize full Meta insights API response
 // Returns single aggregated metrics object
 // ─────────────────────────────────────────────
-function normalizeInsights(raw) {
+function normalizeInsights(raw, optimizationGoal = null) {
   if (!raw?.data?.length) return null;
-  return normalizeRow(raw.data[0]);
+  return normalizeRow(raw.data[0], optimizationGoal);
 }
 
 // ─────────────────────────────────────────────
@@ -296,6 +456,8 @@ const NUMERIC_METRICS = [
   'video_plays','video_p25_watched','video_p50_watched','video_p75_watched',
   'video_p95_watched','video_p100_watched','thruplays','video_avg_watch_time',
   'cost_per_thruplay','video_retention_rate',
+  'unique_clicks','unique_ctr','outbound_clicks','outbound_ctr',
+  'comments','shares','saves','page_likes',
 ];
 
 function computeDeltas(current, prior) {
@@ -348,8 +510,14 @@ async function fetchInsights(entityId, accessToken, since, until, extraParams = 
 
 // ─────────────────────────────────────────────
 // CAMPAIGN METRICS
+//
+// @param {string|null} optimizationGoal - the campaign's ad set's real Meta
+//   optimization_goal (e.g. "CONVERSATIONS"), when the caller can resolve
+//   one -- see parseActions()'s param doc. Passed through to both the
+//   current and prior period so a delta is always comparing the same
+//   resolved action_type on both sides.
 // ─────────────────────────────────────────────
-async function fetchCampaignMetrics(metaCampaignId, accessToken, dateRange, attributionWindowDays) {
+async function fetchCampaignMetrics(metaCampaignId, accessToken, dateRange, attributionWindowDays, optimizationGoal = null) {
   const range = dateRange || defaultRange();
   const { since, until } = range;
   const prior  = priorPeriod(since, until);
@@ -370,7 +538,7 @@ async function fetchCampaignMetrics(metaCampaignId, accessToken, dateRange, attr
 
   if (!currentMetrics) {
     const raw = await fetchInsights(metaCampaignId, accessToken, since, until, attributionWindowParams(attributionWindowDays));
-    currentMetrics = normalizeInsights(raw);
+    currentMetrics = normalizeInsights(raw, optimizationGoal);
     if (currentMetrics) cache.set(currentKey, currentMetrics, 'current');
   }
 
@@ -381,7 +549,7 @@ async function fetchCampaignMetrics(metaCampaignId, accessToken, dateRange, attr
   if (!priorMetrics) {
     try {
       const raw = await fetchInsights(metaCampaignId, accessToken, prior.since, prior.until, attributionWindowParams(attributionWindowDays));
-      priorMetrics = normalizeInsights(raw);
+      priorMetrics = normalizeInsights(raw, optimizationGoal);
       if (priorMetrics) cache.set(priorKey, priorMetrics, 'prior'); // 24h TTL
     } catch (err) {
       console.warn(`[Metrics] Prior period fetch failed for ${metaCampaignId}:`, err.message);
@@ -577,9 +745,13 @@ module.exports = {
   normalizeInsights,
   normalizeTrend,
   normalizeRow,
+  parseActions,
+  pickByPriority,
   pickRoasValue,
   attributionWindowParams,
   computeDeltas,
   defaultDateRange: defaultRange,
   getPriorPeriod: priorPeriod,
+  RESULT_ACTION_PRIORITY,
+  RESULT_ACTION_TYPES_BY_GOAL,
 };

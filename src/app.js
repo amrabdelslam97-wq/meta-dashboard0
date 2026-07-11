@@ -19,11 +19,42 @@ const { runPhase6Migrations } = require('./db/schema.phase6');
 const { runPhase7BMigrations } = require('./db/schema.phase7b');
 const { runPhase8Migrations } = require('./db/schema.phase8');
 const { runUniqueConstraintsMigration } = require('./db/schema.uniqueConstraints');
+const { runPhase11Migrations } = require('./db/schema.phase11');
+const { runPhase12Migrations } = require('./db/schema.phase12');
+const { runPhase13Migrations } = require('./db/schema.phase13');
+const { runPhase14Migrations } = require('./db/schema.phase14');
+const { runPhase15Migrations } = require('./db/schema.phase15');
+const { runPhase16Migrations } = require('./db/schema.phase16');
+const { runPhase17Migrations } = require('./db/schema.phase17');
+const { runPhase18Migrations } = require('./db/schema.phase18');
+const { runPhase19Migrations } = require('./db/schema.phase19');
+const { runPhase20Migrations } = require('./db/schema.phase20');
+const { runPhase21Migrations } = require('./db/schema.phase21');
+const { runPhase22Migrations } = require('./db/schema.phase22');
 const { seedIntelligenceConfig } = require('./db/seedIntelligence');
+const { startAutoSyncScheduler } = require('./services/autoSyncScheduler');
+const { recoverInterruptedSyncs } = require('./services/syncService');
 const { encryptLegacyTokens }    = require('./db/encryptLegacyTokens');
 const { requireEncryptionKey }   = require('./services/tokenCrypto');
 const apiRouter                  = require('./api/router');
 const { errorHandler }           = require('./middleware/errorHandler');
+const { parseAllowedOrigins, requestOrigin, isOriginAllowed } = require('./middleware/corsOriginPolicy');
+
+/**
+ * Parse TRUST_PROXY into whatever Express's "trust proxy" setting expects
+ * (boolean / hop count / IP-or-subnet list) -- env vars only ever give us
+ * strings. Left unset by default (Express's own default: trust nothing),
+ * so a directly-exposed deployment can't have req.protocol or IP-based
+ * rate limiting spoofed via a forged X-Forwarded-* header from an
+ * untrusted client. Only set this when actually running behind a real
+ * reverse proxy that overwrites/strips inbound X-Forwarded-* itself.
+ */
+function parseTrustProxy(raw) {
+  if (raw === undefined || raw === '') return undefined;
+  if (raw === 'true') return true;
+  if (raw === 'false') return false;
+  return isNaN(Number(raw)) ? raw : Number(raw);
+}
 
 const PORT    = parseInt(process.env.PORT || '3000', 10);
 const DB_PATH = process.env.DB_PATH || './data/meta_ads.db';
@@ -44,8 +75,29 @@ async function initializeApp(dbPath = DB_PATH) {
   runPhase7BMigrations();
   runPhase8Migrations();
   runUniqueConstraintsMigration();
+  runPhase11Migrations();
+  runPhase12Migrations();
+  runPhase13Migrations();
+  runPhase14Migrations();
+  runPhase15Migrations();
+  runPhase16Migrations();
+  runPhase17Migrations();
+  runPhase18Migrations();
+  runPhase19Migrations();
+  runPhase20Migrations();
+  runPhase21Migrations();
+  runPhase22Migrations();
   encryptLegacyTokens();
   seedIntelligenceConfig();
+
+  // Task 2 — Automatic Recovery For Interrupted Sync. Must run after every
+  // migration (needs the full ad_accounts column set) and before the
+  // scheduler starts (start(), below) so no account is ever left stuck in
+  // last_sync_status='running' from a prior ungraceful shutdown.
+  const recovery = recoverInterruptedSyncs();
+  if (recovery.recovered > 0) {
+    console.log(`[Sync] Recovered ${recovery.recovered} interrupted sync(s) on startup.`);
+  }
 }
 
 /**
@@ -56,6 +108,12 @@ async function initializeApp(dbPath = DB_PATH) {
 function createApp() {
   const app = express();
 
+  // Opt-in only -- see parseTrustProxy()'s comment above. Must be set
+  // before anything reads req.protocol/req.ip (CORS below, and
+  // express-rate-limit further down both do).
+  const trustProxy = parseTrustProxy(process.env.TRUST_PROXY);
+  if (trustProxy !== undefined) app.set('trust proxy', trustProxy);
+
   // Security headers. CSP is disabled because public/index.html is a
   // single-file dashboard relying on inline <script>/<style> and
   // inline event handlers (onclick=...) throughout -- the default
@@ -64,19 +122,28 @@ function createApp() {
   // HSTS, etc.) stay enabled.
   app.use(helmet({ contentSecurityPolicy: false }));
 
-  // CORS: this app serves its own dashboard from the same origin as
-  // the API, so cross-origin access is closed by default. Set
-  // ALLOWED_ORIGINS (comma-separated) to allow specific external
-  // origins (e.g. a separately-hosted frontend) to call the API.
-  const allowedOrigins = (process.env.ALLOWED_ORIGINS || '')
-    .split(',')
-    .map(o => o.trim())
-    .filter(Boolean);
-  app.use(cors({
-    origin(origin, callback) {
-      if (!origin || allowedOrigins.includes(origin)) return callback(null, true);
-      return callback(new Error('Not allowed by CORS'));
-    },
+  // CORS: same-origin requests (including the bundled dashboard's own
+  // POST/PATCH/DELETE fetch() calls, which -- unlike simple GETs --
+  // browsers send with an Origin header even when same-origin) are always
+  // allowed automatically, computed fresh per request from that request's
+  // own protocol+host -- never a hardcoded "localhost". Set ALLOWED_ORIGINS
+  // (comma-separated) to additionally allow specific external origins
+  // (e.g. a separately-hosted frontend calling this API cross-origin).
+  // Everything else is rejected exactly as before.
+  //
+  // Uses cors()'s per-request "options delegate" form (a function passed
+  // directly to cors(), receiving (req, callback)) instead of a static
+  // options object, purely to get access to req -- the actual CORS
+  // enforcement is still done entirely by the same `cors` middleware.
+  app.use(cors((req, callback) => {
+    const allowedOrigins = parseAllowedOrigins(process.env.ALLOWED_ORIGINS);
+    const serverOrigin = requestOrigin(req);
+    callback(null, {
+      origin(origin, cb) {
+        if (isOriginAllowed(origin, serverOrigin, allowedOrigins)) return cb(null, true);
+        return cb(new Error('Not allowed by CORS'));
+      },
+    });
   }));
 
   // Rate limiting: general API traffic gets a generous ceiling; the
@@ -135,6 +202,8 @@ async function start() {
   await initializeApp(DB_PATH);
 
   const app = createApp();
+
+  startAutoSyncScheduler();
 
   app.listen(PORT, () => {
     console.log('');

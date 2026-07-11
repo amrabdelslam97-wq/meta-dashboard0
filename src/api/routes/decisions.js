@@ -16,16 +16,9 @@ const { generateTodaysDecisions, persistDecisions, getDecisionHistory, DECISION_
 const { getTopWinners }          = require('../../services/topWinnersEngine');
 const { getTopLosers }           = require('../../services/topLosersEngine');
 const { detectAllOpportunities } = require('../../services/opportunityEngine');
+const { buildPortfolioTrace }    = require('../../services/mmsOrchestrator');
+const { resolveAccount: getDefaultAccount } = require('../../services/accountResolver');
 const { asyncHandler }           = require('../../middleware/errorHandler');
-
-// ─────────────────────────────────────────────
-// Helper: get default account (single-user system)
-// ─────────────────────────────────────────────
-function getDefaultAccount(req) {
-  const accountId = req.query.account_id || req.body?.account_id;
-  if (accountId) return db.get('SELECT id FROM ad_accounts WHERE id = ?', [accountId]);
-  return db.get("SELECT id FROM ad_accounts WHERE status = 'active' LIMIT 1");
-}
 
 // ─────────────────────────────────────────────
 // GET /decisions — today's priority actions
@@ -42,6 +35,7 @@ router.get('/', asyncHandler(async (req, res) => {
   return res.json({
     ...result,
     decision_labels: DECISION_LABELS,
+    _governance: buildPortfolioTrace({ decisions: result.decisions }),
   });
 }));
 
@@ -50,8 +44,8 @@ router.get('/', asyncHandler(async (req, res) => {
 // ─────────────────────────────────────────────
 router.get('/winners', asyncHandler(async (req, res) => {
   const limit = Math.min(parseInt(req.query.limit || '5', 10), 20);
-  const winners = getTopWinners(limit);
-  return res.json({ data: winners, total: winners.length });
+  const winners = getTopWinners(limit, req.query.account_id || null);
+  return res.json({ data: winners, total: winners.length, _governance: buildPortfolioTrace({ decisions: winners }) });
 }));
 
 // ─────────────────────────────────────────────
@@ -59,8 +53,8 @@ router.get('/winners', asyncHandler(async (req, res) => {
 // ─────────────────────────────────────────────
 router.get('/losers', asyncHandler(async (req, res) => {
   const limit = Math.min(parseInt(req.query.limit || '5', 10), 20);
-  const losers = getTopLosers(limit);
-  return res.json({ data: losers, total: losers.length });
+  const losers = getTopLosers(limit, req.query.account_id || null);
+  return res.json({ data: losers, total: losers.length, _governance: buildPortfolioTrace({ decisions: losers }) });
 }));
 
 // ─────────────────────────────────────────────
@@ -68,7 +62,7 @@ router.get('/losers', asyncHandler(async (req, res) => {
 // ─────────────────────────────────────────────
 router.get('/opportunities', asyncHandler(async (req, res) => {
   const limit = Math.min(parseInt(req.query.limit || '10', 10), 30);
-  const opps  = detectAllOpportunities(limit);
+  const opps  = detectAllOpportunities(limit, req.query.account_id || null);
   return res.json({ data: opps, total: opps.length });
 }));
 

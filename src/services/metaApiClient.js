@@ -31,6 +31,20 @@ function isRateLimitErrorCode(code) {
 }
 
 /**
+ * True if a caught error is a Meta rate-limit failure (after metaGet()'s own
+ * internal retries were exhausted) -- the single source of truth for this
+ * check, since this module is what tags errors with .isRateLimit/.isMetaError/
+ * .code in the first place. New callers (e.g. analyticsEngine.js) should use
+ * this rather than re-deriving their own copy of RATE_LIMIT_ERROR_CODES.
+ */
+function isRateLimitError(err) {
+  if (!err) return false;
+  if (err.isRateLimit) return true;
+  if (err.isMetaError && isRateLimitErrorCode(err.code)) return true;
+  return false;
+}
+
+/**
  * Sleep for a given number of milliseconds.
  */
 function sleep(ms) {
@@ -176,7 +190,11 @@ async function fetchCampaigns(metaAccountId, accessToken) {
   const campaigns = await metaGetAll(
     `${metaAccountId}/campaigns`,
     {
-      fields: 'id,name,objective,status,created_time,updated_time',
+      // effective_status is the REAL delivery state (accounts for ad
+      // review/policy/billing/account-level restrictions on top of this
+      // campaign's own status) -- status alone is not enough to know
+      // whether this campaign is actually delivering right now.
+      fields: 'id,name,objective,status,effective_status,created_time,updated_time',
       limit: 100,
     },
     accessToken
@@ -200,8 +218,34 @@ async function fetchAdSets(metaCampaignId, accessToken) {
       // optimization_goal powers the Video Views KPI sub-profile
       // (kpiProfileResolver.resolveProfile) and the Optimization Goal
       // filter -- no separate API call needed, this endpoint already
-      // returns it once requested in `fields`.
-      fields: 'id,name,status,daily_budget,lifetime_budget,created_time,updated_time,optimization_goal',
+      // returns it once requested in `fields`. effective_status: see
+      // fetchCampaigns()'s comment -- an ad set can be status=ACTIVE while
+      // effective_status=CAMPAIGN_PAUSED (its parent campaign is paused).
+      // targeting{...} -- real Meta AdSet targeting fields, added to this
+      // SAME existing call (zero new Meta requests). Sub-fields requested as
+      // PLAIN names within targeting{}, never further nested -- confirmed
+      // via a real production bug (metaApiClient.js's fetchAdCreativeDetail()
+      // asset_feed_spec{id} request) that guessing a *second* level of `{}`
+      // sub-field expansion on a JSON-blob-shaped field reliably 400s with
+      // "(#100) Tried accessing nonexisting field"; only `targeting{locales}`
+      // (one level) was ever confirmed against a real account, so every new
+      // field below stays at that same one level and is parsed defensively
+      // (extractAudienceSignals() in syncService.js never assumes a shape
+      // Meta didn't actually return):
+      //   locales -- Language Analytics' configuration view (Phase 17).
+      //   custom_audiences / excluded_custom_audiences / lookalike_spec /
+      //     flexible_spec / geo_locations / targeting_automation --
+      //     Attribution & Customer Journey Intelligence's audience-type
+      //     classification (Step 9). custom_audiences' referenced audience
+      //     IDs are resolved to their real subtype (CUSTOM/WEBSITE/
+      //     ENGAGEMENT/APP/LOOKALIKE) via a separate, ACCOUNT-level (not
+      //     per-ad-set) fetchCustomAudiences() call, cached and joined by id
+      //     -- that subtype is NOT a property of the ad set's own targeting.
+      //   targeting_automation.advantage_audience -- real Meta field marking
+      //     Advantage+ Audience; without it, an Advantage+ ad set would be
+      //     indistinguishable from a broad one.
+      fields: 'id,name,status,effective_status,daily_budget,lifetime_budget,created_time,updated_time,optimization_goal,' +
+              'targeting{locales,custom_audiences,excluded_custom_audiences,lookalike_spec,flexible_spec,geo_locations,targeting_automation}',
       limit: 100,
     },
     accessToken
@@ -223,7 +267,14 @@ async function fetchAds(metaAdSetId, accessToken) {
     {
       // creative{...} requests the AdCreative sub-object inline on the same
       // call -- no extra request needed for id/thumbnail_url/image_url.
-      fields: 'id,name,status,created_time,updated_time,creative{id,thumbnail_url,image_url}',
+      // effective_status: see fetchCampaigns()'s comment -- an ad can be
+      // status=ACTIVE while effective_status=ADSET_PAUSED/CAMPAIGN_PAUSED
+      // (a parent is paused), or DISAPPROVED/PENDING_REVIEW/WITH_ISSUES
+      // (Meta's ad review pipeline), none of which mean it's delivering.
+      // destination_type -- real Meta Ad field (MESSENGER, WHATSAPP,
+      // INSTAGRAM_DIRECT, ON_AD, ...), added for Messaging Destination
+      // Analytics (Executive Marketing Analytics Layer, Phase 17).
+      fields: 'id,name,status,effective_status,created_time,updated_time,destination_type,creative{id,thumbnail_url,image_url}',
       limit: 100,
     },
     accessToken
@@ -262,11 +313,102 @@ async function fetchAdPreview(metaAdId, accessToken, adFormat = 'DESKTOP_FEED_ST
   return match ? match[1].replace(/&amp;/g, '&') : null;
 }
 
+/**
+ * Fetch full creative detail for one ad -- headline/primary text/description/
+ * CTA/video, none of which are part of the Insights API (metricsFetcher.js's
+ * fetchAdMetrics() covers performance; this covers creative content). Used
+ * by creativeAnalytics.js (Executive Marketing Analytics Layer).
+ *
+ * object_story_spec is the real Meta AdCreative field that carries these --
+ * shaped differently for a link/image ad (link_data) vs. a video ad
+ * (video_data), so both are checked; neither fabricated when absent (e.g.
+ * very old boosted-post creatives Meta doesn't expose full spec for).
+ *
+ * @param {string} metaAdId
+ * @param {string} accessToken
+ * @returns {object} raw creative fields (id, name, object_type, video_id,
+ *   image_url, thumbnail_url, object_story_spec)
+ */
+async function fetchAdCreativeDetail(metaAdId, accessToken) {
+  const response = await metaGet(
+    `${metaAdId}`,
+    {
+      // image_hash (Creative Intelligence Engine, Executive Marketing
+      // Analytics Layer follow-on): Meta's real AdCreative field
+      // identifying the underlying media asset, used to detect the same
+      // creative reused across multiple ads (dedup for the Creative
+      // Library, Step 11/12) without a second Meta call. link_data.link /
+      // video_data.call_to_action.value.link are the real fields carrying
+      // the ad's destination URL -- neither is part of object_story_spec's
+      // top level, both must be requested explicitly like any nested field.
+      // asset_feed_spec is requested only to detect its PRESENCE -- Dynamic
+      // Creative / Advantage+ creatives use asset_feed_spec instead of a
+      // single object_story_spec. Requested as a plain field, not
+      // `asset_feed_spec{id}` -- confirmed via live Meta API verification
+      // that asset_feed_spec does not support `{id}` sub-field expansion
+      // (Meta returns "(#100) Tried accessing nonexisting field (id)"); the
+      // plain field already returns its full object when present, or is
+      // simply absent from the response otherwise -- exactly the
+      // presence/absence signal this needs, no extra request shape required.
+      fields: 'creative{id,name,object_type,video_id,image_url,image_hash,thumbnail_url,' +
+              'object_story_spec{link_data{link,call_to_action{type,value}},video_data{call_to_action{type,value}}},' +
+              'asset_feed_spec}',
+    },
+    accessToken
+  );
+  return response?.creative || null;
+}
+
+/**
+ * Fetch a video's real length (seconds) -- Meta's Video object, not part of
+ * Insights or AdCreative. Called only for ads whose creative has a video_id
+ * (Creative Intelligence Engine's "Video Length" field, Step 1) -- one call
+ * per distinct video, and only for creatives not yet detailed (same
+ * checkpoint discipline as fetchAdCreativeDetail's caller).
+ *
+ * @param {string} videoId
+ * @param {string} accessToken
+ * @returns {number|null} length in seconds, or null if Meta doesn't report it
+ */
+async function fetchVideoDetail(videoId, accessToken) {
+  const response = await metaGet(`${videoId}`, { fields: 'length' }, accessToken);
+  const length = parseFloat(response?.length);
+  return Number.isNaN(length) ? null : length;
+}
+
+/**
+ * Fetch every Custom Audience defined on an ad account, with its real
+ * `subtype` (CUSTOM, WEBSITE, ENGAGEMENT, APP, LOOKALIKE, ...) -- Attribution
+ * & Customer Journey Intelligence's audience-type classification (Step 9).
+ * This is the ONE piece of audience-type signal that genuinely cannot come
+ * from an ad set's own `targeting.custom_audiences` (which only ever
+ * returns each referenced audience's `id`, never its subtype): fetched ONCE
+ * per account, not once per ad set, and cached/joined by id by the caller
+ * (audienceAttributionEngine.js) -- an O(1)-per-account call, not O(n)
+ * per-ad-set, consistent with this system's "no unnecessary Meta calls" rule.
+ *
+ * @param {string} metaAccountId - e.g. act_123456
+ * @param {string} accessToken
+ * @returns {Array<{id:string, name:string, subtype:string|null}>}
+ */
+async function fetchCustomAudiences(metaAccountId, accessToken) {
+  const audiences = await metaGetAll(
+    `${metaAccountId}/customaudiences`,
+    { fields: 'id,name,subtype', limit: 100 },
+    accessToken
+  );
+  return audiences;
+}
+
 module.exports = {
   fetchCampaigns,
   fetchAdSets,
   fetchAds,
   fetchAdPreview,
+  fetchVideoDetail,
+  fetchAdCreativeDetail,
+  fetchCustomAudiences,
   metaGet,
   metaGetAll,
+  isRateLimitError,
 };

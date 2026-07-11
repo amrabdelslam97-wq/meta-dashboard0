@@ -12,7 +12,7 @@ const { asyncHandler } = require('../../middleware/errorHandler');
 
 // ── GET /recommendations ──────────────────────────────────────
 router.get('/', asyncHandler(async (req, res) => {
-  const { severity, campaign_id, status, limit: lp = '50', offset: op = '0' } = req.query;
+  const { severity, campaign_id, status, account_id, limit: lp = '50', offset: op = '0' } = req.query;
 
   const limit  = Math.min(Math.max(parseInt(lp, 10) || 50, 1), 200);
   const offset = Math.max(parseInt(op, 10) || 0, 0);
@@ -40,6 +40,10 @@ router.get('/', asyncHandler(async (req, res) => {
     conditions.push('r.entity_meta_id = ?');
     params.push(campaign_id);
   }
+  if (account_id) {
+    conditions.push('r.ad_account_id = ?');
+    params.push(account_id);
+  }
 
   const where = conditions.length ? 'WHERE ' + conditions.join(' AND ') : '';
 
@@ -51,7 +55,7 @@ router.get('/', asyncHandler(async (req, res) => {
     `SELECT
        r.id, r.rule_code, r.entity_meta_id, r.entity_label,
        r.objective, r.severity, r.recommendation_title, r.recommendation_body,
-       r.metric_snapshot,
+       r.metric_snapshot, r.governance_state,
        r.health_score_at_generation, r.generated_at, r.last_generated_at,
        r.dismissed_at, r.action_taken, r.action_notes, r.action_taken_at,
        c.name as campaign_name, c.status as campaign_status

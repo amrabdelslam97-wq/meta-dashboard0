@@ -16,6 +16,7 @@
 const db = require('../db/database');
 const { detectTrend, loadLatestScoresMap, loadScoreHistoryMap, loadAlertCountsMap } = require('./topWinnersEngine');
 const { resolveProfile, DEFAULT_OPPORTUNITY_THRESHOLDS } = require('./kpiProfileResolver');
+const { isDelivering } = require('./metaLifecycle');
 
 // ─────────────────────────────────────────────
 // Resolve the gating thresholds for one objective. These four opportunity
@@ -72,6 +73,13 @@ function extractFromBreakdown(breakdownJson, metricKey) {
 // Detect opportunities for one campaign
 // ─────────────────────────────────────────────
 function detectOpportunitiesForCampaign(camp, latestScore, scoreHistory, alertCounts, activeRecs) {
+  // Lifecycle fix: "Ready To Scale"/"Audience Expansion"/"Budget
+  // Reallocation" all suggest increasing spend or duplicating an audience --
+  // never appropriate for a campaign that isn't actually delivering. Falls
+  // back to `status` only when effective_status hasn't been synced yet
+  // (Phase 15 migration transition), never assumed ACTIVE by default.
+  if (!isDelivering(camp.effective_status || camp.status?.toUpperCase())) return [];
+
   const opportunities = [];
   const hs    = latestScore.health_score;
   const freq  = extractFromBreakdown(latestScore.score_breakdown, 'frequency');
@@ -182,14 +190,15 @@ function detectOpportunitiesForCampaign(camp, latestScore, scoreHistory, alertCo
 // ─────────────────────────────────────────────
 // MAIN: Run opportunity engine across all campaigns
 // ─────────────────────────────────────────────
-function detectAllOpportunities(limit = 10) {
+function detectAllOpportunities(limit = 10, accountId = null) {
   const campaigns = db.all(`
-    SELECT c.id, c.meta_campaign_id, c.name, c.objective, c.status,
+    SELECT c.id, c.meta_campaign_id, c.name, c.objective, c.status, c.effective_status,
            a.account_name, a.currency
     FROM campaigns c
     JOIN ad_accounts a ON c.ad_account_id = a.id
     WHERE c.status IN ('active','paused')
-  `);
+    ${accountId ? 'AND c.ad_account_id = ?' : ''}
+  `, accountId ? [accountId] : []);
 
   const activeRecs = db.all(`
     SELECT rule_code, entity_meta_id, severity FROM recommendation_log

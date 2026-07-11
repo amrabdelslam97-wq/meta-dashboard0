@@ -227,7 +227,7 @@ function loadActiveRecommendations(metaCampaignId, entityType = 'campaign') {
     `SELECT
        r.rule_code, r.recommendation_title, r.recommendation_body,
        r.severity, r.generated_at, r.last_generated_at,
-       r.action_taken, r.action_notes, r.metric_snapshot,
+       r.action_taken, r.action_notes, r.metric_snapshot, r.governance_state,
        rr.condition_logic
      FROM recommendation_log r
      LEFT JOIN recommendation_rules rr ON rr.rule_code = r.rule_code
@@ -269,6 +269,7 @@ function loadActiveRecommendations(metaCampaignId, entityType = 'campaign') {
       last_generated_at:    row.last_generated_at,
       action_taken:         row.action_taken,
       action_notes:         row.action_notes,
+      governance_state:     row.governance_state,
       problem:    metricKey ? `${metricKey.toUpperCase()} outside expected range` : null,
       evidence:   evidenceValue,
       threshold:  threshold,

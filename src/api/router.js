@@ -27,6 +27,14 @@ const adsetsRouter          = require('./routes/adsets');
 const adsRouter             = require('./routes/adRoutes');
 // Phase 6C
 const portfolioRouter       = require('./routes/portfolio');
+// Phase X.2
+const ruleEngineRouter      = require('./routes/ruleEngine');
+// Phase 17 — Executive Marketing Analytics Layer
+const analyticsRouter       = require('./routes/analytics');
+// Creative Intelligence Engine
+const creativeIntelligenceRouter = require('./routes/creativeIntelligence');
+// Phase 8 — Attribution & Customer Journey Intelligence
+const attributionRouter      = require('./routes/attribution');
 
 router.get('/health', (req, res) => {
   res.json({ status: 'ok', timestamp: new Date().toISOString(), version: '6.1.0', phase: 'Phase 6C — Full Integration' });
@@ -52,6 +60,14 @@ router.use('/adsets',     adsetsRouter);
 router.use('/ads',        adsRouter);
 // Phase 6C
 router.use('/portfolio',  portfolioRouter);
+// Phase X.2
+router.use('/rule-engine', ruleEngineRouter);
+// Phase 17 — Executive Marketing Analytics Layer
+router.use('/analytics', analyticsRouter);
+// Creative Intelligence Engine
+router.use('/creative-intelligence', creativeIntelligenceRouter);
+// Phase 8 — Attribution & Customer Journey Intelligence
+router.use('/attribution', attributionRouter);
 
 router.use((req, res) => {
   res.status(404).json({ error: 'Not found', path: req.path });

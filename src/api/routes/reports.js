@@ -15,17 +15,13 @@ const fs      = require('fs');
 const os      = require('os');
 const { randomUUID } = require('crypto');
 
-const db = require('../../db/database');
 const {
   buildSummaryData, generateCSV, generateExcel, generatePDFHtml,
   resolvePeriod,
 } = require('../../services/reportEngine');
 const { VALID_OBJECTIVES } = require('../../services/kpiProfileResolver');
+const { resolveAccount } = require('../../services/accountResolver');
 const { asyncHandler } = require('../../middleware/errorHandler');
-
-function getDefaultAccount() {
-  return db.get("SELECT id FROM ad_accounts WHERE status = 'active' LIMIT 1");
-}
 
 // `objective` is optional -- validated against the same canonical list the
 // rest of the app uses (kpiProfileResolver.VALID_OBJECTIVES) so a typo'd
@@ -44,7 +40,7 @@ function validateObjective(objective) {
 // GET /reports/summary
 // ─────────────────────────────────────────────
 router.get('/summary', asyncHandler(async (req, res) => {
-  const account = getDefaultAccount();
+  const account = resolveAccount(req);
   if (!account) return res.status(404).json({ error: 'No active ad account found' });
 
   const { period = 'weekly', since, until, objective } = req.query;
@@ -59,7 +55,7 @@ router.get('/summary', asyncHandler(async (req, res) => {
 // GET /reports/export
 // ─────────────────────────────────────────────
 router.get('/export', asyncHandler(async (req, res) => {
-  const account = getDefaultAccount();
+  const account = resolveAccount(req);
   if (!account) return res.status(404).json({ error: 'No active ad account found' });
 
   const { format = 'csv', period = 'weekly', since, until, objective } = req.query;

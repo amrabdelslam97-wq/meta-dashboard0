@@ -102,6 +102,114 @@ const DECISION_LABELS = {
 };
 
 // ─────────────────────────────────────────────
+// MAIFS Enforcement adapter (Phase X.3 -- MAIFS Enforcement). A
+// recommendation/alert row doesn't carry the decision_type/priority/
+// confidence/suggested_action shape maifsGovernance.runDecisionValidations()/
+// enforceGovernance() actually read -- this builds the minimal shape from
+// already-existing data, reusing REC_TO_DECISION/ALERT_TO_DECISION (the
+// same maps decisionsFromRecommendations()/decisionsFromAlerts() use) rather
+// than inventing a second mapping. `priority`/`confidence` here are
+// governance-input approximations from severity (same severity->confidence
+// convention already used in decisionsFromRecommendations()/
+// decisionsFromAlerts() above) -- not the same as the priority_score
+// computed for the Decision Center, which needs a health-score/trend
+// lookup this adapter deliberately skips (governance only needs to know
+// "does this decision's priority require high confidence").
+// ─────────────────────────────────────────────
+function decisionShapeForGovernance(source, row) {
+  const map = source === 'recommendation' ? REC_TO_DECISION : ALERT_TO_DECISION;
+  const code = source === 'recommendation' ? row.rule_code : row.alert_code;
+  const mapping = map[code];
+  return {
+    decision_type: mapping ? mapping.type : null,
+    priority: row.severity === 'critical' ? 'critical' : 'high',
+    confidence: row.severity === 'critical' ? 'high' : 'medium',
+    suggested_action: source === 'recommendation' ? row.recommendation_body : (row.alert_message || row.message),
+  };
+}
+
+// ─────────────────────────────────────────────
+// Executive Diagnosis Card adapter (Phase X.5). Unifies a rule-engine
+// decision (already fully shaped by decisionsFromRuleEngine()/
+// decisionsFromRuleEngineLog() above) with a raw recommendation/alert row
+// (from recommendationEngine.loadActiveRecommendations()/alertEngine.
+// loadActiveAlerts()) into ONE card-ready shape, so the dashboard can render
+// Decision/Recommendation/Framework/Evidence/Governance identically
+// regardless of source. Reuses REC_TO_DECISION/ALERT_TO_DECISION/
+// DECISION_LABELS -- the exact same mapping tables decisionsFromRecommendations()/
+// decisionsFromAlerts()/decisionShapeForGovernance() already use -- rather
+// than inventing a second lookup. `framework`/`category` are honestly null
+// for recommendation-/alert-sourced findings: those rules are not
+// Framework-attributed (see ruleRegistrySeed.js's `attributed()` entries
+// for the handful that document a cross-reference), and forcing a value
+// here would be exactly the kind of fabrication this phase must not do.
+// ─────────────────────────────────────────────
+function findingShapeForCard(source, row) {
+  if (source === 'rule_engine') {
+    return {
+      source: 'rule_engine',
+      source_id: row.rule_id || row.source_id || null,
+      decision_type: row.decision_type,
+      decision_label: row.decision_label || DECISION_LABELS[row.decision_type] || null,
+      priority: row.priority,
+      confidence: row.confidence,
+      suggested_action: row.suggested_action,
+      framework: row.framework || null,
+      framework_name: row.framework_name || null,
+      category: row.category || null,
+      evidence: row.evidence || null,
+      governance_state: row.governance_state || null,
+      // Phase X.6 -- Executive Memory: already computed inside
+      // orchestrateIntelligence()'s applyHistoricalLearning() call for
+      // rule-engine-sourced decisions -- passed through, never recomputed
+      // here (recomputing would double-apply the confidence downgrade).
+      historical_note: row.historical_note || null,
+      historical_effectiveness: row.historical_effectiveness || null,
+    };
+  }
+
+  const map = source === 'recommendation' ? REC_TO_DECISION : ALERT_TO_DECISION;
+  const code = source === 'recommendation' ? row.rule_code : row.alert_code;
+  const mapping = map[code];
+
+  return {
+    source,
+    source_id: code,
+    decision_type: mapping ? mapping.type : null,
+    decision_label: mapping ? DECISION_LABELS[mapping.type] : null,
+    priority: row.severity === 'critical' ? 'critical' : 'high',
+    confidence: row.severity === 'critical' ? 'high' : 'medium',
+    suggested_action: source === 'recommendation' ? row.recommendation_body : (row.alert_message || row.message),
+    framework: null,
+    framework_name: null,
+    category: null,
+    evidence: source === 'recommendation'
+      ? { metric: row.metric_key, actual: row.evidence, threshold: row.threshold }
+      : { detected_value: row.detected_value, threshold_value: row.threshold_value },
+    governance_state: row.governance_state || null,
+  };
+}
+
+// ─────────────────────────────────────────────
+// Persist a governed decision's state back onto the row it came from, keyed
+// by the same (code, entity_meta_id) pattern upsertRecommendation()/
+// upsertAlert() already use for dedup -- computed once (inside
+// orchestrateIntelligence(), where full currentMetrics/diagnosis context
+// exists), read by every later caller (decisionsFromRecommendations()/
+// decisionsFromAlerts() above, and any direct SELECT * against these
+// tables) -- never recomputed.
+// ─────────────────────────────────────────────
+function persistGovernanceState(table, codeColumn, code, entityMetaId, governanceState, dbHandle = db) {
+  const activeCondition = table === 'recommendation_log'
+    ? 'dismissed_at IS NULL'
+    : `status IN ('active','snoozed')`;
+  dbHandle.run(
+    `UPDATE ${table} SET governance_state = ? WHERE ${codeColumn} = ? AND entity_meta_id = ? AND ${activeCondition}`,
+    [governanceState, code, entityMetaId]
+  );
+}
+
+// ─────────────────────────────────────────────
 // Build a decision object from a recommendation
 // ─────────────────────────────────────────────
 function decisionsFromRecommendations(adAccountId) {
@@ -131,6 +239,13 @@ function decisionsFromRecommendations(adAccountId) {
       objectiveWeight: resolveProfile(rec.objective).priorityWeight ?? 1.0,
     });
 
+    // MAIFS enforcement (Phase X.3): governance_state is persisted by
+    // orchestrateIntelligence() at the point this recommendation was
+    // generated (full currentMetrics/diagnosis context available there) --
+    // read back here and applied the same way decisionsFromRuleEngineLog()
+    // already downgrades rule-engine decisions, never recomputed.
+    const governanceFailed = rec.governance_state === 'failed';
+
     decisions.push({
       id:              uuidv4(),
       source:          'recommendation',
@@ -140,14 +255,15 @@ function decisionsFromRecommendations(adAccountId) {
       objective:       rec.objective,
       decision_type:   mapping.type,
       decision_label:  DECISION_LABELS[mapping.type],
-      priority:        priorityResult.priority,
-      priority_score:  priorityResult.priority_score,
+      priority:        governanceFailed ? 'observation_only' : priorityResult.priority,
+      priority_score:  governanceFailed ? 0 : priorityResult.priority_score,
       reason:          rec.recommendation_title,
       detail:          rec.recommendation_body,
       suggested_action: actionText(mapping.type, rec.campaign_name || rec.entity_label, rec.objective),
       supporting_metrics: rec.metric_snapshot ? JSON.parse(rec.metric_snapshot) : {},
       health_score:    latestScore?.health_score || null,
       confidence:      rec.severity === 'critical' ? 'high' : 'medium',
+      governance_state: rec.governance_state || null,
     });
   }
   return decisions;
@@ -184,6 +300,10 @@ function decisionsFromAlerts(adAccountId) {
       objectiveWeight: resolveProfile(alert.objective).priorityWeight ?? 1.0,
     });
 
+    // MAIFS enforcement (Phase X.3) -- see decisionsFromRecommendations()'s
+    // identical comment; same persisted-once, read-many pattern.
+    const governanceFailed = alert.governance_state === 'failed';
+
     decisions.push({
       id:              uuidv4(),
       source:          'alert',
@@ -193,8 +313,8 @@ function decisionsFromAlerts(adAccountId) {
       objective:       alert.objective,
       decision_type:   mapping.type,
       decision_label:  DECISION_LABELS[mapping.type],
-      priority:        priorityResult.priority,
-      priority_score:  priorityResult.priority_score,
+      priority:        governanceFailed ? 'observation_only' : priorityResult.priority,
+      priority_score:  governanceFailed ? 0 : priorityResult.priority_score,
       reason:          alert.alert_message || alert.alert_code,
       detail:          `Alert detected ${alert.occurrence_count || 1} time(s). First detected: ${alert.first_detected_at?.slice(0,10)}`,
       suggested_action: actionText(mapping.type, alert.campaign_name || alert.entity_label, alert.objective),
@@ -205,6 +325,7 @@ function decisionsFromAlerts(adAccountId) {
       },
       health_score:    latestScore?.health_score || null,
       confidence:      alert.severity === 'critical' ? 'high' : 'medium',
+      governance_state: alert.governance_state || null,
     });
   }
   return decisions;
@@ -244,6 +365,195 @@ function decisionsFromOpportunities() {
       health_score:    opp.health_score,
       confidence:      opp.confidence,
       expected_impact: opp.expected_impact,
+    };
+  });
+}
+
+// ─────────────────────────────────────────────
+// Build decisions from Rule Engine output (Phase 11 — Framework Rule-Based
+// Intelligence). Takes an already-computed ruleEngine.executeRules().fired
+// array for ONE campaign (the caller already has current/deltas from its
+// own insights fetch) -- this function does no metric evaluation of its
+// own, it only maps a fired native rule onto the same Decision shape every
+// other decisionsFromX() function here produces, so the Decision Center/
+// dashboard render Rule Engine findings identically to every other
+// decision source, with the addition of rule_id/framework/rule_name/
+// evidence fields for full Framework/Rule traceability.
+// ─────────────────────────────────────────────
+function decisionsFromRuleEngine(campaign, adAccountId, ruleEngineFired = []) {
+  const latestScore = db.get(`
+    SELECT health_score FROM health_score_history
+    WHERE entity_meta_id = ? ORDER BY calculated_at DESC LIMIT 1
+  `, [campaign.meta_campaign_id]);
+
+  return ruleEngineFired.map(fired => {
+    const priorityResult = computePriorityScore({
+      healthScore:     latestScore?.health_score || 50,
+      alertSeverity:   fired.severity,
+      alertCount:      1,
+      trendDirection:  getTrendForEntity(campaign.meta_campaign_id),
+      objectiveWeight: resolveProfile(campaign.objective).priorityWeight ?? 1.0,
+    });
+
+    return {
+      id:              uuidv4(),
+      source:          'rule_engine',
+      source_id:       fired.rule_id,
+      meta_campaign_id: campaign.meta_campaign_id,
+      campaign_name:   campaign.name,
+      objective:       campaign.objective,
+      decision_type:   fired.action.type,
+      decision_label:  DECISION_LABELS[fired.action.type],
+      priority:        priorityResult.priority,
+      priority_score:  priorityResult.priority_score,
+      reason:          fired.reason,
+      detail:          fired.rule_name,
+      suggested_action: fired.action.suggestedActionOverride || actionText(fired.action.type, campaign.name, campaign.objective),
+      supporting_metrics: {},
+      health_score:    latestScore?.health_score || null,
+      confidence:      fired.severity === 'critical' ? 'high' : 'medium',
+      // Framework/Rule attribution -- not present on other decision
+      // sources, additive fields only.
+      rule_id:         fired.rule_id,
+      framework:       fired.framework,
+      framework_name:  fired.framework_name,
+      rule_name:       fired.rule_name,
+      category:        fired.category,
+      evidence:        fired.evidence,
+      governance_state: fired.governance_state || null,
+    };
+  });
+}
+
+// ─────────────────────────────────────────────
+// Persist Rule Engine firings (Phase 11) to rule_engine_log, mirroring
+// upsertRecommendation()'s own dedup lifecycle (one active row per
+// rule+entity, refreshed in place on repeat firings, dismissed when a
+// rule that previously fired no longer does). This is what lets
+// generateTodaysDecisions() -- the Decision Center's data source -- see
+// Rule Engine findings from campaigns it isn't actively re-analyzing this
+// moment, exactly like it already does for recommendation_log/
+// active_alerts.
+// ─────────────────────────────────────────────
+function persistRuleEngineFirings(adAccountId, campaign, ruleEngineFired = [], entityType = 'campaign') {
+  const now = new Date().toISOString();
+
+  // Phase X.1 (Runtime Unification) fix: entity_type was previously
+  // hardcoded to the literal 'campaign' regardless of what entity this was
+  // actually called for -- harmless while only campaign grain ever called
+  // this function, but would have mislabeled every ad_set/ad rule firing
+  // once that grain was wired in (and, since decisionsFromRuleEngineLog()
+  // doesn't filter by entity_type, an ad set's own meta_adset_id would have
+  // been exposed as `meta_campaign_id` in the Decision Center feed).
+  //
+  // Phase X.1 also wraps every write in one transaction instead of one
+  // db.run() per fired rule -- database.js's persist() re-serializes and
+  // rewrites the entire DB file on every write outside a transaction
+  // (see CLAUDE.md), so this was previously up to (fired-rules + 1)
+  // full-DB rewrites per request; now it's one.
+  db.transaction(tx => {
+    for (const fired of ruleEngineFired) {
+      const existing = tx.get(
+        `SELECT id FROM rule_engine_log WHERE rule_id = ? AND entity_meta_id = ? AND dismissed_at IS NULL`,
+        [fired.rule_id, campaign.meta_campaign_id]
+      );
+      if (existing) {
+        tx.run(
+          `UPDATE rule_engine_log
+           SET last_generated_at = ?, evidence = ?, category = ?, governance_state = ?
+           WHERE id = ?`,
+          [now, JSON.stringify(fired.evidence || []), fired.category || null, fired.governance_state || null, existing.id]
+        );
+      } else {
+        tx.run(
+          `INSERT INTO rule_engine_log
+             (id, rule_id, framework, rule_name, ad_account_id, entity_type, entity_meta_id,
+              entity_label, objective, category, severity, reason, evidence, decision_type,
+              governance_state, generated_at, last_generated_at)
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+          [
+            uuidv4(), fired.rule_id, fired.framework, fired.rule_name, adAccountId, entityType,
+            campaign.meta_campaign_id, campaign.name, campaign.objective, fired.category || null,
+            fired.severity, fired.reason, JSON.stringify(fired.evidence || []), fired.action.type,
+            fired.governance_state || null, now, now,
+          ]
+        );
+      }
+    }
+
+    // Resolve (dismiss) any previously-fired rule for this entity that did
+    // not fire this time -- mirrors resolveRecommendation()'s own
+    // auto-dismiss behavior so stale findings don't linger indefinitely.
+    const firedIds = ruleEngineFired.map(f => f.rule_id);
+    if (firedIds.length > 0) {
+      tx.run(
+        `UPDATE rule_engine_log SET dismissed_at = ?
+         WHERE entity_meta_id = ? AND dismissed_at IS NULL AND rule_id NOT IN (${firedIds.map(() => '?').join(',')})`,
+        [now, campaign.meta_campaign_id, ...firedIds]
+      );
+    } else {
+      tx.run(
+        `UPDATE rule_engine_log SET dismissed_at = ? WHERE entity_meta_id = ? AND dismissed_at IS NULL`,
+        [now, campaign.meta_campaign_id]
+      );
+    }
+  });
+}
+
+// ─────────────────────────────────────────────
+// Read persisted Rule Engine firings back as Decision-shaped objects, for
+// generateTodaysDecisions() (the Decision Center's data source) -- the
+// same read-then-shape pattern decisionsFromRecommendations()/
+// decisionsFromAlerts() already use against their own DB tables.
+// ─────────────────────────────────────────────
+function decisionsFromRuleEngineLog(adAccountId) {
+  const rows = db.all(
+    `SELECT * FROM rule_engine_log WHERE ad_account_id = ? AND dismissed_at IS NULL
+     ORDER BY last_generated_at DESC`,
+    [adAccountId]
+  );
+
+  return rows.map(row => {
+    const latestScore = db.get(
+      `SELECT health_score FROM health_score_history WHERE entity_meta_id = ? ORDER BY calculated_at DESC LIMIT 1`,
+      [row.entity_meta_id]
+    );
+    const priorityResult = computePriorityScore({
+      healthScore:     latestScore?.health_score || 50,
+      alertSeverity:   row.severity,
+      alertCount:      1,
+      trendDirection:  getTrendForEntity(row.entity_meta_id),
+      objectiveWeight: resolveProfile(row.objective).priorityWeight ?? 1.0,
+    });
+
+    // MAIFS enforcement (Phase 4): a rule whose own governance check failed
+    // is downgraded to observation_only regardless of its computed
+    // priority score -- governance changes runtime behavior here, not
+    // just a reported field.
+    const priority = row.governance_state === 'failed' ? 'observation_only' : priorityResult.priority;
+
+    return {
+      id:              uuidv4(),
+      source:          'rule_engine',
+      source_id:       row.rule_id,
+      meta_campaign_id: row.entity_meta_id,
+      campaign_name:   row.entity_label,
+      objective:       row.objective,
+      decision_type:   row.decision_type,
+      decision_label:  DECISION_LABELS[row.decision_type],
+      priority,
+      priority_score:  row.governance_state === 'failed' ? 0 : priorityResult.priority_score,
+      reason:          row.reason,
+      detail:          row.rule_name,
+      suggested_action: actionText(row.decision_type, row.entity_label, row.objective),
+      supporting_metrics: row.evidence ? JSON.parse(row.evidence) : {},
+      health_score:    latestScore?.health_score || null,
+      confidence:      row.severity === 'critical' ? 'high' : 'medium',
+      rule_id:         row.rule_id,
+      framework:       row.framework,
+      rule_name:       row.rule_name,
+      category:        row.category,
+      governance_state: row.governance_state,
     };
   });
 }
@@ -289,9 +599,15 @@ function deduplicateDecisions(decisions) {
 // MAIN: Generate today's priority actions
 // ─────────────────────────────────────────────
 function generateTodaysDecisions(adAccountId) {
-  const fromRecs     = decisionsFromRecommendations(adAccountId);
-  const fromAlerts   = decisionsFromAlerts(adAccountId);
-  const fromOpps     = decisionsFromOpportunities();
+  const fromRecs       = decisionsFromRecommendations(adAccountId);
+  const fromAlerts     = decisionsFromAlerts(adAccountId);
+  const fromOpps       = decisionsFromOpportunities();
+  // Phase 11 — Rule Engine findings persisted by insights.js's routes via
+  // persistRuleEngineFirings(), read back here so the Decision Center
+  // reflects Framework rule activity even for campaigns not being viewed
+  // in this exact moment (closing the Decision Engine/Rule Engine
+  // disconnect the Framework Runtime Evidence audit found).
+  const fromRuleEngine = decisionsFromRuleEngineLog(adAccountId);
 
   // Filter opportunities to this account's campaigns
   const accountCampaignIds = new Set(
@@ -300,7 +616,7 @@ function generateTodaysDecisions(adAccountId) {
   );
   const filteredOpps = fromOpps.filter(d => accountCampaignIds.has(d.meta_campaign_id));
 
-  const allDecisions = [...fromAlerts, ...fromRecs, ...filteredOpps];
+  const allDecisions = [...fromAlerts, ...fromRecs, ...fromRuleEngine, ...filteredOpps];
   const deduped = deduplicateDecisions(allDecisions);
 
   // Sort by priority_score descending
@@ -378,5 +694,13 @@ module.exports = {
   generateTodaysDecisions,
   persistDecisions,
   getDecisionHistory,
+  decisionsFromRuleEngine,
+  persistRuleEngineFirings,
+  decisionsFromRuleEngineLog,
+  decisionsFromRecommendations,
+  decisionsFromAlerts,
+  decisionShapeForGovernance,
+  persistGovernanceState,
+  findingShapeForCard,
   DECISION_LABELS,
 };

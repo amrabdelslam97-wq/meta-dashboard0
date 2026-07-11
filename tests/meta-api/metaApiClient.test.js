@@ -1,7 +1,7 @@
 'use strict';
 
 const nock = require('nock');
-const { metaGet, metaGetAll, fetchAdPreview, fetchCampaigns, fetchAdSets } = require('../../src/services/metaApiClient');
+const { metaGet, metaGetAll, fetchAdPreview, fetchCampaigns, fetchAdSets, fetchCustomAudiences } = require('../../src/services/metaApiClient');
 
 const BASE = 'https://graph.facebook.com';
 const VERSION = process.env.META_API_VERSION || 'v21.0';
@@ -158,10 +158,10 @@ describe('metaApiClient.fetchCampaigns', () => {
     nock.cleanAll();
   });
 
-  test('requests the documented campaign fields and returns raw Meta objects', async () => {
+  test('requests the documented campaign fields (including effective_status) and returns raw Meta objects', async () => {
     const scope = nock(BASE).get(`/${VERSION}/act_123/campaigns`)
-      .query(q => q.fields === 'id,name,objective,status,created_time,updated_time')
-      .reply(200, { data: [{ id: 'camp_1', name: 'X', objective: 'OUTCOME_LEADS', status: 'ACTIVE' }] });
+      .query(q => q.fields === 'id,name,objective,status,effective_status,created_time,updated_time')
+      .reply(200, { data: [{ id: 'camp_1', name: 'X', objective: 'OUTCOME_LEADS', status: 'ACTIVE', effective_status: 'ACTIVE' }] });
 
     const campaigns = await fetchCampaigns('act_123', 'token');
     expect(scope.isDone()).toBe(true);
@@ -187,5 +187,41 @@ describe('metaApiClient.fetchAdSets', () => {
     const adSets = await fetchAdSets('camp_1', 'token');
     expect(scope.isDone()).toBe(true);
     expect(adSets[0].optimization_goal).toBe('THRUPLAY');
+  });
+
+  // Attribution & Customer Journey Intelligence (Step 9): requests targeting
+  // sub-fields at one level only, never `field{subfield}` on an inner field
+  // -- the exact shape of a real bug found and fixed in
+  // fetchAdCreativeDetail()'s asset_feed_spec{id} request.
+  test('requests audience-targeting fields (custom_audiences, lookalike_spec, flexible_spec, geo_locations, targeting_automation) at one nesting level', async () => {
+    const scope = nock(BASE).get(`/${VERSION}/camp_1/adsets`)
+      .query(q => q.fields.includes('custom_audiences') && q.fields.includes('lookalike_spec')
+        && q.fields.includes('flexible_spec') && q.fields.includes('geo_locations') && q.fields.includes('targeting_automation')
+        && !q.fields.includes('custom_audiences{') && !q.fields.includes('targeting_automation{'))
+      .reply(200, { data: [{ id: 'adset_1', name: 'AdSet', status: 'ACTIVE', targeting: { custom_audiences: [{ id: 'aud_1' }] } }] });
+
+    const adSets = await fetchAdSets('camp_1', 'token');
+    expect(scope.isDone()).toBe(true);
+    expect(adSets[0].targeting.custom_audiences).toEqual([{ id: 'aud_1' }]);
+  });
+});
+
+describe('metaApiClient.fetchCustomAudiences', () => {
+  afterEach(() => { nock.cleanAll(); });
+
+  test('fetches every custom audience on an account with its real subtype', async () => {
+    const scope = nock(BASE).get(`/${VERSION}/act_1/customaudiences`)
+      .query(q => q.fields === 'id,name,subtype')
+      .reply(200, { data: [
+        { id: 'aud_1', name: 'Website Visitors 30d', subtype: 'WEBSITE' },
+        { id: 'aud_2', name: 'Lookalike 1% US', subtype: 'LOOKALIKE' },
+      ] });
+
+    const audiences = await fetchCustomAudiences('act_1', 'token');
+    expect(scope.isDone()).toBe(true);
+    expect(audiences.map(a => ({ id: a.id, name: a.name, subtype: a.subtype }))).toEqual([
+      { id: 'aud_1', name: 'Website Visitors 30d', subtype: 'WEBSITE' },
+      { id: 'aud_2', name: 'Lookalike 1% US', subtype: 'LOOKALIKE' },
+    ]);
   });
 });

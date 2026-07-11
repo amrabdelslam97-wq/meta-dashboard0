@@ -13,7 +13,7 @@
 
 const db                    = require('../db/database');
 
-const { runScoringPipeline } = require('./intelligenceOrchestrator');
+const { orchestrateIntelligence } = require('./mmsOrchestrator');
 const { fetchAdMetrics, computeDeltas } = require('./metricsFetcher');
 const { resolveDateRange, priorPeriod } = require('./dateRangeHelper');
 const { decryptToken } = require('./tokenCrypto');
@@ -194,19 +194,49 @@ async function runAdIntelligence(adId, options = {}) {
   }
 
   const startedAt = Date.now();
+  const deltas = computeDeltas(currentMetrics, priorMetrics);
 
-  // FIX 4 (Phase 9): Sequential-safety pattern -- preserved by
-  // runScoringPipeline (shared with intelligenceOrchestrator.js and
-  // adSetIntelligence.js instead of duplicated inline): scoring is
-  // computed first (pure, no DB writes), and only if it succeeds do the
-  // writes proceed.
-  const { healthResult, benchmarkResult, recommendations, alerts, trend } =
-    runScoringPipeline(entity, currentMetrics, priorMetrics, adAccountId, 'ad');
+  // Creative Intelligence Engine phase: cta_type is not part of the
+  // Insights fetch (fetchAdMetrics) -- it's synced separately by
+  // creativeAnalytics.js into creative_analytics. Fetched here (latest row
+  // for this ad) and passed to orchestrateIntelligence()'s creativeContext
+  // param so MF4.13.12 (Weak CTA) can evaluate it. Absent for ads that
+  // haven't had a creative-analytics sync yet -- the rule simply won't fire
+  // (evaluateCondition treats a missing metric as not-matched), never a crash.
+  const creativeRow = db.get(
+    `SELECT cta_type FROM creative_analytics WHERE meta_ad_id = ? ORDER BY date_until DESC LIMIT 1`,
+    [ad.meta_ad_id]
+  );
+  const creativeContext = creativeRow?.cta_type ? { cta_type: creativeRow.cta_type } : null;
+
+  // Phase X.1 (Runtime Unification): same change as adSetIntelligence.js --
+  // previously called intelligenceOrchestrator.runScoringPipeline()
+  // directly, never reaching Diagnosis Engine/Rule Engine/MAIFS. Now calls
+  // the single orchestrator with entityType:'ad' (Rule Engine grain
+  // filtering applies; ad-scoped native rules -- MF4.13.3/13.4/13.5/13.12/
+  // 15.2/15.4 as of the Creative Intelligence Engine phase -- fire here).
+  // persist:false for the same reason as adSetIntelligence.js (see its
+  // comment) -- this is a per-detail-view read, not a list view.
+  const {
+    intelligence, diagnosis, ruleEngineResult, governance,
+  } = orchestrateIntelligence({
+    campaign: entity,
+    entityType: 'ad',
+    adAccountId,
+    currentMetrics,
+    priorMetrics,
+    deltas,
+    creativeContext,
+    persist: false,
+    effectiveStatus: ad.effective_status,
+  });
+  const { healthResult, benchmarkResult, recommendations, alerts, trend } = intelligence;
 
   return {
     meta_ad_id:       ad.meta_ad_id,
     ad_name:          ad.name,
     status:           ad.status,
+    effective_status: ad.effective_status || null,
     objective:        entity.objective,
     adset_name:       adSet?.name || null,
     meta_adset_id:    adSet?.meta_adset_id || null,
@@ -231,7 +261,7 @@ async function runAdIntelligence(adId, options = {}) {
 
     metrics:       currentMetrics,
     prior_metrics: priorMetrics,
-    deltas:        computeDeltas(currentMetrics, priorMetrics),
+    deltas,
 
     health_score:     healthResult.health_score,
     health_status:    healthResult.health_status,
@@ -245,6 +275,13 @@ async function runAdIntelligence(adId, options = {}) {
     benchmark:       { summary: benchmarkResult.summary, metrics: benchmarkResult.metrics },
     recommendations,
     alerts,
+
+    // New, additive fields (Phase X.1) -- absent from this function's
+    // output before this change, never previously computed at ad grain.
+    diagnosis,
+    framework_recommendations: ruleEngineResult.fired,
+    rule_engine_conflicts:     ruleEngineResult.conflicts,
+    _governance: governance,
 
     _meta: { duration_ms: Date.now() - startedAt },
   };
@@ -279,7 +316,7 @@ function getAdsList(filters = {}) {
   // to return a single page.
   const ads = db.all(
     `SELECT
-       ad.id, ad.meta_ad_id, ad.name, ad.status,
+       ad.id, ad.meta_ad_id, ad.name, ad.status, ad.effective_status,
        ad.ad_set_id, ad.campaign_id, ad.ad_account_id,
        ad.creative_id, ad.thumbnail_url, ad.image_url, ad.preview_url,
        s.meta_adset_id, s.name as adset_name,

@@ -69,8 +69,10 @@ CREATE TABLE IF NOT EXISTS campaigns (
   meta_campaign_id        TEXT NOT NULL UNIQUE,
   name                    TEXT NOT NULL,
   objective               TEXT NOT NULL
+                            -- schema.phase8.js migrates existing databases to this same 7-value list
+                            -- (kept in sync here so a fresh DB matches the post-migration shape exactly)
                             CHECK(objective IN (
-                              'messaging','leads','sales','traffic','awareness','unknown'
+                              'awareness','traffic','engagement','leads','app_promotion','sales','unknown'
                             )),
   objective_effective_from TEXT,
   status                  TEXT NOT NULL

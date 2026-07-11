@@ -104,6 +104,7 @@ router.get('/', asyncHandler(async (req, res) => {
       c.name,
       c.objective,
       c.status,
+      c.effective_status,
       h.health_score,
       h.health_status,
       h.calculated_at as score_calculated_at,

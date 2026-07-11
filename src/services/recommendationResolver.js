@@ -17,6 +17,7 @@
  */
 
 const db = require('../db/database');
+const { compare } = require('./conditionComparator');
 
 // ─────────────────────────────────────────────
 // Evaluate a single condition object against metrics
@@ -29,17 +30,7 @@ function evaluateCondition(condition, metrics) {
   const actual = metrics[metric];
   if (actual === null || actual === undefined) return false;
 
-  const v = parseFloat(actual);
-  if (isNaN(v)) return false;
-
-  switch (operator) {
-    case 'lt':  return v < threshold;
-    case 'gt':  return v > threshold;
-    case 'lte': return v <= threshold;
-    case 'gte': return v >= threshold;
-    case 'eq':  return v === threshold;
-    default:    return false;
-  }
+  return compare(actual, operator, threshold);
 }
 
 // ─────────────────────────────────────────────

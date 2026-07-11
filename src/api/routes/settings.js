@@ -14,13 +14,17 @@ const router = express.Router();
 const { v4: uuidv4 } = require('uuid');
 const db = require('../../db/database');
 const { asyncHandler } = require('../../middleware/errorHandler');
+const smartSyncEngine = require('../../services/smartSyncEngine');
 
 // ── GET /settings ─────────────────────────────────────────────
 router.get('/', asyncHandler(async (req, res) => {
   const accounts = db.all(`
     SELECT id, meta_account_id, account_name, client_label, currency,
            timezone, country_code, attribution_window_days, status,
-           token_is_valid, last_token_verified_at
+           token_is_valid, last_token_verified_at, business_name, notes,
+           last_sync_started_at, last_sync_completed_at, last_successful_sync_at,
+           last_failed_sync_at, last_sync_status, last_sync_error, sync_progress_phase,
+           auto_sync_enabled, auto_sync_interval_minutes
     FROM ad_accounts ORDER BY account_name
   `);
 
@@ -47,12 +51,39 @@ router.get('/', asyncHandler(async (req, res) => {
   );
 
   return res.json({
-    accounts: accounts.map(a => ({ ...a, token_is_valid: Boolean(a.token_is_valid) })),
+    accounts: accounts.map(a => ({
+      ...a,
+      token_is_valid: Boolean(a.token_is_valid),
+      auto_sync_enabled: Boolean(a.auto_sync_enabled),
+    })),
     industries,
     targets: targetsByAccount,
     benchmark_overrides: benchmarkOverrides,
     scoring_configs: scoringConfigs,
+    sync_intervals: smartSyncEngine.getScheduleConfig(),
   });
+}));
+
+// ── GET /settings/sync-intervals ──────────────────────────────
+// Configurable cadence (minutes) per entity type for the Smart Auto Sync
+// scheduler — insights/campaigns/adsets/ads/creatives/metadata.
+router.get('/sync-intervals', asyncHandler(async (req, res) => {
+  return res.json({ data: smartSyncEngine.getScheduleConfig() });
+}));
+
+// ── PATCH /settings/sync-intervals ────────────────────────────
+// Body: { entity_type: 'insights', interval_minutes: 15 }
+router.patch('/sync-intervals', asyncHandler(async (req, res) => {
+  const { entity_type, interval_minutes } = req.body || {};
+  if (!entity_type || interval_minutes === undefined) {
+    return res.status(400).json({ error: 'entity_type and interval_minutes are required' });
+  }
+  try {
+    const updated = smartSyncEngine.setScheduleInterval(entity_type, interval_minutes);
+    return res.json({ data: updated, all: smartSyncEngine.getScheduleConfig() });
+  } catch (err) {
+    return res.status(err.status || 400).json({ error: err.message });
+  }
 }));
 
 // ── GET /settings/targets/:account_id ────────────────────────

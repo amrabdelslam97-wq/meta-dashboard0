@@ -1,5 +1,6 @@
 'use strict';
 
+const http = require('http');
 const request = require('supertest');
 const { createTestDb } = require('../helpers/testDb');
 const { createApp } = require('../../src/app');
@@ -50,6 +51,100 @@ describe('API security: helmet headers + CORS', () => {
     } finally {
       process.env.ALLOWED_ORIGINS = original;
     }
+  });
+});
+
+// Regression coverage for the "Origin not allowed" bug: a same-origin
+// POST/PATCH/DELETE (e.g. the dashboard's own "Add Account" Save button)
+// was previously rejected because browsers attach an Origin header to
+// those even when same-origin, and the old static allowlist had no
+// same-origin exception at all. These tests bind a REAL listening server
+// (not supertest's default ephemeral-per-call server) so the Origin header
+// can be set to exactly match the server's own address, proving the
+// same-origin match is computed dynamically -- never a hardcoded
+// "localhost" -- for whatever host the request actually arrives on.
+describe('CORS: dynamic same-origin allowance (no hardcoded origins)', () => {
+  let testDb;
+  let server;
+  let port;
+
+  beforeAll(async () => {
+    testDb = await createTestDb();
+    server = http.createServer(createApp());
+    await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+    port = server.address().port;
+  });
+
+  afterAll(async () => {
+    testDb.cleanup();
+    await new Promise(resolve => server.close(resolve));
+  });
+
+  test('same-origin POST (Origin exactly matches this server\'s own address) is never rejected', async () => {
+    const res = await request(server)
+      .post('/api/v1/sync/cache/flush')
+      .set('Origin', `http://127.0.0.1:${port}`)
+      .send({});
+    expect(res.status).not.toBe(403);
+    expect(res.headers['access-control-allow-origin']).toBe(`http://127.0.0.1:${port}`);
+  });
+
+  test('same-origin PATCH is never rejected (not just GET/POST)', async () => {
+    const res = await request(server)
+      .patch('/api/v1/accounts/00000000-0000-0000-0000-000000000000')
+      .set('Origin', `http://127.0.0.1:${port}`)
+      .send({ status: 'active' });
+    expect(res.status).not.toBe(403); // 404 (unknown account) is fine -- 403 is the bug this guards against
+  });
+
+  test('localhost origin is allowed when the request itself arrived via localhost, with zero hardcoding', async () => {
+    const res = await request(`http://localhost:${port}`)
+      .post('/api/v1/sync/cache/flush')
+      .set('Origin', `http://localhost:${port}`)
+      .send({});
+    expect(res.status).not.toBe(403);
+  });
+
+  test('a request with no Origin header at all is allowed (curl, server-to-server, simple same-origin GET)', async () => {
+    const res = await request(server).post('/api/v1/sync/cache/flush').send({});
+    expect(res.status).not.toBe(403);
+  });
+
+  test('a genuinely foreign/invalid origin is still rejected with 403 -- CORS is not weakened', async () => {
+    const res = await request(server)
+      .post('/api/v1/sync/cache/flush')
+      .set('Origin', 'https://evil.example.com')
+      .send({});
+    expect(res.status).toBe(403);
+    expect(res.body.error).toBe('Origin not allowed');
+  });
+
+  test('an origin one port off from this server\'s own is still a different origin and is rejected', async () => {
+    const res = await request(server)
+      .post('/api/v1/sync/cache/flush')
+      .set('Origin', `http://127.0.0.1:${port + 1}`)
+      .send({});
+    expect(res.status).toBe(403);
+  });
+
+  test('a CORS preflight OPTIONS request for a same-origin call succeeds with the right headers', async () => {
+    const res = await request(server)
+      .options('/api/v1/accounts')
+      .set('Origin', `http://127.0.0.1:${port}`)
+      .set('Access-Control-Request-Method', 'POST')
+      .set('Access-Control-Request-Headers', 'Content-Type');
+    expect(res.status).toBe(204);
+    expect(res.headers['access-control-allow-origin']).toBe(`http://127.0.0.1:${port}`);
+    expect(res.headers['access-control-allow-methods']).toBeDefined();
+  });
+
+  test('a CORS preflight OPTIONS request for a foreign origin is rejected', async () => {
+    const res = await request(server)
+      .options('/api/v1/accounts')
+      .set('Origin', 'https://evil.example.com')
+      .set('Access-Control-Request-Method', 'POST');
+    expect(res.status).toBe(403);
+    expect(res.body.error).toBe('Origin not allowed');
   });
 });
 

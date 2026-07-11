@@ -13,6 +13,7 @@ const express = require('express');
 const router  = express.Router();
 const { resolveDateRange }          = require('../../services/dateRangeHelper');
 const { asyncHandler }              = require('../../middleware/errorHandler');
+const { buildPortfolioTrace }       = require('../../services/mmsOrchestrator');
 const {
   getPortfolioHealth,
   getAccountRankings,
@@ -29,32 +30,35 @@ router.get('/', asyncHandler(async (req, res) => {
     getPortfolioSummary(dateRange),
     getCrossAccountAlerts(),
   ]);
-  return res.json({ data: { ...summary, cross_account_alerts: alerts.slice(0, 5), date_range: dateRange } });
+  return res.json({
+    data: { ...summary, cross_account_alerts: alerts.slice(0, 5), date_range: dateRange },
+    _governance: buildPortfolioTrace({ decisions: alerts }),
+  });
 }));
 
 router.get('/accounts', asyncHandler(async (req, res) => {
   const rankings = getAccountRankings(dr(req));
-  return res.json({ data: rankings, total: rankings.length });
+  return res.json({ data: rankings, total: rankings.length, _governance: buildPortfolioTrace({ decisions: rankings }) });
 }));
 
 router.get('/summary', asyncHandler(async (req, res) => {
   const summary = getPortfolioSummary(dr(req));
-  return res.json({ data: summary });
+  return res.json({ data: summary, _governance: buildPortfolioTrace({ decisions: [] }) });
 }));
 
 router.get('/health', asyncHandler(async (req, res) => {
   const health = getPortfolioHealth(dr(req));
-  return res.json({ data: health });
+  return res.json({ data: health, _governance: buildPortfolioTrace({ decisions: [] }) });
 }));
 
 router.get('/objectives', asyncHandler(async (req, res) => {
   const summary = getPortfolioObjectiveSummary(dr(req));
-  return res.json({ data: summary });
+  return res.json({ data: summary, _governance: buildPortfolioTrace({ decisions: [] }) });
 }));
 
 router.get('/alerts', asyncHandler(async (req, res) => {
   const alerts = getCrossAccountAlerts();
-  return res.json({ data: alerts, total: alerts.length });
+  return res.json({ data: alerts, total: alerts.length, _governance: buildPortfolioTrace({ decisions: alerts }) });
 }));
 
 module.exports = router;

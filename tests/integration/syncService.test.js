@@ -46,6 +46,11 @@ describe('syncService.syncAccount (full nock-mocked Meta account tree)', () => {
     nock(BASE).get(`/${VERSION}/act_sync_test/campaigns`).query(true).reply(200, {
       data: [{ id: 'camp_1', name: 'Campaign One', objective: 'OUTCOME_LEADS', status: 'ACTIVE' }],
     });
+    // Explicitly mocked (never relying on nock's "no match" fallback path --
+    // that path has a confirmed flaky async-error-propagation interaction
+    // with this nock/axios version, the same class of issue fixed in
+    // metricsFetcher.test.js's rate-limit-retry test).
+    nock(BASE).get(`/${VERSION}/act_sync_test/customaudiences`).query(true).reply(200, { data: [] });
     nock(BASE).get(`/${VERSION}/camp_1/adsets`).query(true).reply(200, {
       data: [{ id: 'adset_1', name: 'AdSet One', status: 'ACTIVE', daily_budget: '5000' }],
     });
@@ -74,6 +79,59 @@ describe('syncService.syncAccount (full nock-mocked Meta account tree)', () => {
     expect(ad.creative_id).toBe('creative_1');
     expect(ad.thumbnail_url).toBe('https://x/thumb.jpg');
     expect(ad.image_url).toBe('https://x/full.jpg');
+
+    // Multi Meta Ad Account Management milestone: sync tracking columns on
+    // ad_accounts must reflect a completed, successful sync.
+    const acctRow = testDb.db.get('SELECT * FROM ad_accounts WHERE id = ?', [account.id]);
+    expect(acctRow.last_sync_status).toBe('success');
+    expect(acctRow.last_sync_started_at).not.toBeNull();
+    expect(acctRow.last_sync_completed_at).not.toBeNull();
+    expect(acctRow.last_successful_sync_at).not.toBeNull();
+    expect(acctRow.last_failed_sync_at).toBeNull();
+    expect(acctRow.sync_progress_phase).toBeNull();
+  });
+
+  test('classifies audience_type from real targeting fields, resolving custom audience subtypes via the account-level fetchCustomAudiences() call', async () => {
+    nock(BASE).get(`/${VERSION}/act_sync_test/campaigns`).query(true).reply(200, {
+      data: [{ id: 'camp_aud', name: 'Audience Campaign', objective: 'LINK_CLICKS', status: 'ACTIVE' }],
+    });
+    nock(BASE).get(`/${VERSION}/act_sync_test/customaudiences`).query(true).reply(200, {
+      data: [
+        { id: 'aud_lookalike', name: 'LAL 1%', subtype: 'LOOKALIKE' },
+        { id: 'aud_website', name: 'Website Visitors', subtype: 'WEBSITE' },
+        { id: 'aud_list', name: 'Uploaded List', subtype: 'CUSTOM' },
+      ],
+    });
+    nock(BASE).get(`/${VERSION}/camp_aud/adsets`).query(true).reply(200, {
+      data: [
+        { id: 'adset_lookalike', name: 'Lookalike AdSet', status: 'ACTIVE', targeting: { custom_audiences: [{ id: 'aud_lookalike' }] } },
+        { id: 'adset_remarketing', name: 'Remarketing AdSet', status: 'ACTIVE', targeting: { custom_audiences: [{ id: 'aud_website' }] } },
+        { id: 'adset_custom', name: 'Custom List AdSet', status: 'ACTIVE', targeting: { custom_audiences: [{ id: 'aud_list' }] } },
+        { id: 'adset_interest', name: 'Interest AdSet', status: 'ACTIVE', targeting: { flexible_spec: [{ interests: [{ id: '123', name: 'Fitness' }] }] } },
+        { id: 'adset_broad', name: 'Broad AdSet', status: 'ACTIVE', targeting: {} },
+        { id: 'adset_advantage', name: 'Advantage+ AdSet', status: 'ACTIVE', targeting: { targeting_automation: { advantage_audience: 1 } } },
+      ],
+    });
+    nock(BASE).get(`/${VERSION}/adset_lookalike/ads`).query(true).reply(200, { data: [] });
+    nock(BASE).get(`/${VERSION}/adset_remarketing/ads`).query(true).reply(200, { data: [] });
+    nock(BASE).get(`/${VERSION}/adset_custom/ads`).query(true).reply(200, { data: [] });
+    nock(BASE).get(`/${VERSION}/adset_interest/ads`).query(true).reply(200, { data: [] });
+    nock(BASE).get(`/${VERSION}/adset_broad/ads`).query(true).reply(200, { data: [] });
+    nock(BASE).get(`/${VERSION}/adset_advantage/ads`).query(true).reply(200, { data: [] });
+
+    const summary = await syncAccount(account);
+    expect(summary.errors).toEqual([]);
+
+    const typeFor = (metaAdsetId) => testDb.db.get('SELECT audience_type FROM ad_sets WHERE meta_adset_id = ?', [metaAdsetId]).audience_type;
+    expect(typeFor('adset_lookalike')).toBe('lookalike');
+    expect(typeFor('adset_remarketing')).toBe('remarketing');
+    expect(typeFor('adset_custom')).toBe('custom_audience');
+    expect(typeFor('adset_interest')).toBe('interest');
+    expect(typeFor('adset_broad')).toBe('broad');
+    expect(typeFor('adset_advantage')).toBe('advantage_plus');
+
+    const targetingJson = JSON.parse(testDb.db.get('SELECT targeting_json FROM ad_sets WHERE meta_adset_id = ?', ['adset_lookalike']).targeting_json);
+    expect(targetingJson.custom_audiences).toEqual([{ id: 'aud_lookalike' }]);
   });
 
   test('isolates a single ad-set-level fetch failure without aborting sibling campaigns', async () => {
@@ -83,6 +141,7 @@ describe('syncService.syncAccount (full nock-mocked Meta account tree)', () => {
         { id: 'camp_ok', name: 'OK Campaign', objective: 'LINK_CLICKS', status: 'ACTIVE' },
       ],
     });
+    nock(BASE).get(`/${VERSION}/act_sync_test/customaudiences`).query(true).reply(200, { data: [] });
     nock(BASE).get(`/${VERSION}/camp_broken/adsets`).query(true).reply(500, {});
     nock(BASE).get(`/${VERSION}/camp_ok/adsets`).query(true).reply(200, {
       data: [{ id: 'adset_ok', name: 'OK AdSet', status: 'ACTIVE' }],
@@ -105,6 +164,7 @@ describe('syncService.syncAccount (full nock-mocked Meta account tree)', () => {
       paging: { cursors: {}, next: `${BASE}/${VERSION}/act_sync_test/campaigns?after=BROKEN` },
     });
     nock(BASE).get(`/${VERSION}/act_sync_test/campaigns`).query({ after: 'BROKEN' }).reply(500, {});
+    nock(BASE).get(`/${VERSION}/act_sync_test/customaudiences`).query(true).reply(200, { data: [] });
     nock(BASE).get(`/${VERSION}/camp_paged/adsets`).query(true).reply(200, { data: [] });
 
     const summary = await syncAccount(account);
@@ -123,6 +183,13 @@ describe('syncService.syncAccount (full nock-mocked Meta account tree)', () => {
     expect(summary.campaigns.synced).toBe(0);
     expect(summary.errors[0].level).toBe('account');
     expect(summary.errors[0].message).toMatch(/Invalid OAuth access token/);
+
+    // Multi Meta Ad Account Management milestone: an aborted sync must be
+    // recorded as failed, not silently left at 'running' forever.
+    const acctRow = testDb.db.get('SELECT * FROM ad_accounts WHERE id = ?', [account.id]);
+    expect(acctRow.last_sync_status).toBe('failed');
+    expect(acctRow.last_failed_sync_at).not.toBeNull();
+    expect(acctRow.last_sync_error).toMatch(/Invalid OAuth access token/);
   });
 });
 
