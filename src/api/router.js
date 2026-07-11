@@ -39,6 +39,8 @@ const attributionRouter      = require('./routes/attribution');
 const intelligenceRouter     = require('./routes/intelligence');
 // Phase 21 — Creative Intelligence Engine
 const creativeIntelligence21Router = require('./routes/creativeIntelligence21');
+// Phase 24 — Budget Intelligence & Attribution
+const budgetRouter = require('./routes/budget');
 
 router.get('/health', (req, res) => {
   res.json({ status: 'ok', timestamp: new Date().toISOString(), version: '6.1.0', phase: 'Phase 6C — Full Integration' });
@@ -76,6 +78,8 @@ router.use('/attribution', attributionRouter);
 router.use('/intelligence', intelligenceRouter);
 // Phase 21 — Creative Intelligence Engine
 router.use('/creative', creativeIntelligence21Router);
+// Phase 24 — Budget Intelligence & Attribution
+router.use('/budget', budgetRouter);
 
 router.use((req, res) => {
   res.status(404).json({ error: 'Not found', path: req.path });
