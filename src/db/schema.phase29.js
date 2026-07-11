@@ -30,7 +30,7 @@
  */
 
 const db = require('./database');
-const { ensureMigrationsTable, markMigrationApplied } = require('./migrationTracker');
+const { ensureMigrationsTable, isMigrationApplied, markMigrationApplied } = require('./migrationTracker');
 
 const MIGRATION_NAME = 'phase29_enterprise_saas_platform';
 
@@ -493,15 +493,19 @@ CREATE INDEX IF NOT EXISTS idx_background_jobs_scheduled
 
 function runPhase29Migrations() {
   try {
+    // Ensure migration registry exists
     ensureMigrationsTable();
-    if (process.env.SKIP_MIGRATIONS) return;
-    const migrationApplied = db.get(
-      'SELECT 1 FROM migrations WHERE migration_name = ?',
-      [MIGRATION_NAME]
-    );
-    if (migrationApplied) return;
 
+    // Skip if env var set
+    if (process.env.SKIP_MIGRATIONS) return;
+
+    // Check if migration already applied (idempotent)
+    if (isMigrationApplied(MIGRATION_NAME)) return;
+
+    // Run migration
     db.run(SCHEMA_SQL);
+
+    // Mark as applied
     markMigrationApplied(MIGRATION_NAME);
     console.log('✓ Phase 29 (Enterprise SaaS Platform) migrations applied');
   } catch (e) {

@@ -23,7 +23,7 @@
  */
 
 const db = require('./database');
-const { ensureMigrationsTable, markMigrationApplied } = require('./migrationTracker');
+const { ensureMigrationsTable, isMigrationApplied, markMigrationApplied } = require('./migrationTracker');
 
 const MIGRATION_NAME = 'phase28_agency_os_collaboration';
 
@@ -468,15 +468,19 @@ CREATE INDEX IF NOT EXISTS idx_knowledge_base_archived
 
 function runPhase28Migrations() {
   try {
+    // Ensure migration registry exists
     ensureMigrationsTable();
-    if (process.env.SKIP_MIGRATIONS) return;
-    const migrationApplied = db.get(
-      'SELECT 1 FROM migrations WHERE migration_name = ?',
-      [MIGRATION_NAME]
-    );
-    if (migrationApplied) return;
 
+    // Skip if env var set
+    if (process.env.SKIP_MIGRATIONS) return;
+
+    // Check if migration already applied (idempotent)
+    if (isMigrationApplied(MIGRATION_NAME)) return;
+
+    // Run migration
     db.run(SCHEMA_SQL);
+
+    // Mark as applied
     markMigrationApplied(MIGRATION_NAME);
     console.log('✓ Phase 28 (Agency OS & Collaboration) migrations applied');
   } catch (e) {
