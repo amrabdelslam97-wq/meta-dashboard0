@@ -35,6 +35,8 @@ const analyticsRouter       = require('./routes/analytics');
 const creativeIntelligenceRouter = require('./routes/creativeIntelligence');
 // Phase 8 — Attribution & Customer Journey Intelligence
 const attributionRouter      = require('./routes/attribution');
+// Phase 20 — Audience, Placement, Device & Publisher Platform Intelligence
+const intelligenceRouter     = require('./routes/intelligence');
 
 router.get('/health', (req, res) => {
   res.json({ status: 'ok', timestamp: new Date().toISOString(), version: '6.1.0', phase: 'Phase 6C — Full Integration' });
@@ -68,6 +70,8 @@ router.use('/analytics', analyticsRouter);
 router.use('/creative-intelligence', creativeIntelligenceRouter);
 // Phase 8 — Attribution & Customer Journey Intelligence
 router.use('/attribution', attributionRouter);
+// Phase 20 — Audience, Placement, Device & Publisher Platform Intelligence
+router.use('/intelligence', intelligenceRouter);
 
 router.use((req, res) => {
   res.status(404).json({ error: 'Not found', path: req.path });
