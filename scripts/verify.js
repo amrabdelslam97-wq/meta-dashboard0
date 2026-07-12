@@ -146,7 +146,7 @@ async function runTests() {
 
   const { mapObjective } = require('../src/services/objectiveMapper');
 
-  ok('MESSAGES → messaging', mapObjective('MESSAGES') === 'messaging');
+  ok('MESSAGES → engagement', mapObjective('MESSAGES') === 'engagement');
   ok('LEAD_GENERATION → leads', mapObjective('LEAD_GENERATION') === 'leads');
   ok('CONVERSIONS → sales', mapObjective('CONVERSIONS') === 'sales');
   ok('LINK_CLICKS → traffic', mapObjective('LINK_CLICKS') === 'traffic');
@@ -159,7 +159,7 @@ async function runTests() {
   section('5. Data Integrity');
 
   const campaigns = db.all('SELECT * FROM campaigns');
-  const validObjectives = ['messaging', 'leads', 'sales', 'traffic', 'awareness', 'unknown'];
+  const validObjectives = ['engagement', 'leads', 'sales', 'traffic', 'awareness', 'app_promotion', 'unknown'];
   const validStatuses = ['active', 'paused', 'archived', 'deleted'];
 
   const allObjectivesValid = campaigns.every(c => validObjectives.includes(c.objective));
@@ -265,9 +265,9 @@ async function runTests() {
     const res3 = await httpGet('/api/v1/campaigns?status=invalid_status');
     ok('Invalid status filter returns 400', res3.status === 400);
 
-    // GET /campaigns?objective=messaging
-    const res4 = await httpGet('/api/v1/campaigns?objective=messaging');
-    ok('GET /campaigns?objective=messaging returns 200', res4.status === 200);
+    // GET /campaigns?objective=engagement
+    const res4 = await httpGet('/api/v1/campaigns?objective=engagement');
+    ok('GET /campaigns?objective=engagement returns 200', res4.status === 200);
 
     // GET /campaigns?limit=2&offset=0
     const res5 = await httpGet('/api/v1/campaigns?limit=2&offset=0');
