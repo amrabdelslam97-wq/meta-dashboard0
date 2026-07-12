@@ -51,6 +51,14 @@ describe('autoSyncScheduler.runDueAccounts', () => {
     });
 
     nock(BASE).get(`/${VERSION}/${overdue.meta_account_id}/campaigns`).query(true).reply(200, { data: [] });
+    // syncService.syncAccount() also fetches custom audiences once per
+    // account whenever the ad-sets tier is due (for audience-type
+    // classification) -- unmocked, this became a real, unmocked HTTP call
+    // that nock's interceptor router surfaced as an "Unhandled error"
+    // independent of the app's own (already-correct) non-fatal try/catch
+    // around that call, causing intermittent test-suite failures unrelated
+    // to any application bug.
+    nock(BASE).get(`/${VERSION}/${overdue.meta_account_id}/customaudiences`).query(true).reply(200, { data: [] });
     // smartSyncEngine's metadata tier (account info refresh) is also due for
     // a never-before-synced account (no sync_entity_state row yet).
     nock(BASE).get(`/${VERSION}/${overdue.meta_account_id}`).query(true)
@@ -99,6 +107,7 @@ describe('autoSyncScheduler.runDueAccounts', () => {
     });
 
     nock(BASE).get(`/${VERSION}/${neverSynced.meta_account_id}/campaigns`).query(true).reply(200, { data: [] });
+    nock(BASE).get(`/${VERSION}/${neverSynced.meta_account_id}/customaudiences`).query(true).reply(200, { data: [] });
     nock(BASE).get(`/${VERSION}/${neverSynced.meta_account_id}`).query(true)
       .reply(200, { id: neverSynced.meta_account_id, name: 'Auto Sync Test', currency: 'USD', timezone_name: 'UTC' });
 
@@ -123,6 +132,7 @@ describe('autoSyncScheduler.runDueAccounts', () => {
       // scheduler's setInterval loop is already running in the background.
       const justAdded = insertAccount(testDb, { auto_sync_enabled: true, auto_sync_interval_minutes: 60, last_sync_completed_at: null });
       nock(BASE).get(`/${VERSION}/${justAdded.meta_account_id}/campaigns`).query(true).reply(200, { data: [] });
+      nock(BASE).get(`/${VERSION}/${justAdded.meta_account_id}/customaudiences`).query(true).reply(200, { data: [] });
       nock(BASE).get(`/${VERSION}/${justAdded.meta_account_id}`).query(true)
         .reply(200, { id: justAdded.meta_account_id, name: 'Auto Sync Test', currency: 'USD', timezone_name: 'UTC' });
 
@@ -135,6 +145,7 @@ describe('autoSyncScheduler.runDueAccounts', () => {
     test('a disconnected account is excluded starting the very next tick, and resumes once reconnected', async () => {
       const account = insertAccount(testDb, { auto_sync_enabled: true, auto_sync_interval_minutes: 5, last_sync_completed_at: null });
       nock(BASE).get(`/${VERSION}/${account.meta_account_id}/campaigns`).query(true).reply(200, { data: [] });
+      nock(BASE).get(`/${VERSION}/${account.meta_account_id}/customaudiences`).query(true).reply(200, { data: [] });
       nock(BASE).get(`/${VERSION}/${account.meta_account_id}`).query(true)
         .reply(200, { id: account.meta_account_id, name: 'Auto Sync Test', currency: 'USD', timezone_name: 'UTC' });
       await runDueAccounts();
@@ -151,6 +162,7 @@ describe('autoSyncScheduler.runDueAccounts', () => {
       // "Reconnected" -- flip status back to active.
       testDb.db.run(`UPDATE ad_accounts SET status = 'active' WHERE id = ?`, [account.id]);
       nock(BASE).get(`/${VERSION}/${account.meta_account_id}/campaigns`).query(true).reply(200, { data: [] });
+      nock(BASE).get(`/${VERSION}/${account.meta_account_id}/customaudiences`).query(true).reply(200, { data: [] });
       nock(BASE).get(`/${VERSION}/${account.meta_account_id}`).query(true)
         .reply(200, { id: account.meta_account_id, name: 'Auto Sync Test', currency: 'USD', timezone_name: 'UTC' });
 
@@ -202,6 +214,7 @@ describe('autoSyncScheduler.runDueAccounts', () => {
           expect(row.current_sync_tier).toBe('campaigns');
           return [200, { data: [] }];
         });
+      nock(BASE).get(`/${VERSION}/${account.meta_account_id}/customaudiences`).query(true).reply(200, { data: [] });
       nock(BASE).get(`/${VERSION}/${account.meta_account_id}`).query(true)
         .reply(200, { id: account.meta_account_id, name: 'Auto Sync Test', currency: 'USD', timezone_name: 'UTC' });
 

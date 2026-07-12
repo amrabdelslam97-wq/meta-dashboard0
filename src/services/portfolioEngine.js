@@ -134,7 +134,12 @@ function getAccountRankings(dateRange) {
   // Alert/campaign counts are grouped across ALL accounts in 2 queries
   // total instead of 2 queries PER account.
   const alertCountsByAccount = new Map();
-  for (const row of db.all("SELECT ad_account_id, COUNT(*) as c FROM active_alerts WHERE status='active' GROUP BY ad_account_id")) {
+  // Phase 38 -- must match dashboard.js's/alerts.js's own "currently active"
+  // definition, which also excludes alerts a user has snoozed. Without this
+  // clause, a snoozed alert still counted here, so the Portfolio page's
+  // per-account alert count could exceed the Dashboard's for the same
+  // account the moment anyone used the existing Snooze action.
+  for (const row of db.all("SELECT ad_account_id, COUNT(*) as c FROM active_alerts WHERE status='active' AND (snoozed_until IS NULL OR snoozed_until < datetime('now')) GROUP BY ad_account_id")) {
     alertCountsByAccount.set(row.ad_account_id, row.c);
   }
   const campCountsByAccount = new Map();

@@ -52,11 +52,30 @@ function resolveDateRange(query = {}) {
     const presets = {
       today:       { since: today(),          until: today()          },
       yesterday:   { since: yesterday(),       until: yesterday()       },
+      // The dashboard's "3D" button (public/index.html) sends
+      // preset=last_3_days -- this key didn't exist here, so it fell
+      // through to defaultRange() (7 days) silently, i.e. clicking "3D"
+      // actually returned 7 days of data with no indication anything was
+      // wrong. Confirmed live: GET /dashboard?preset=last_3_days returned
+      // the identical date_range as preset=last_7_days before this fix.
+      last_3_days: { since: daysAgo(3),        until: yesterday()       },
       last_7_days: { since: daysAgo(7),        until: yesterday()       },
       last_7:      { since: daysAgo(7),        until: yesterday()       },
       last_14:     { since: daysAgo(14),       until: yesterday()       },
       last_30_days:{ since: daysAgo(30),       until: yesterday()       },
       last_30:     { since: daysAgo(30),       until: yesterday()       },
+      // Phase 39 -- same silent-fallback bug as last_3_days above: these
+      // two were in the platform's own QA checklist (expected to resolve
+      // correctly) but had no entry here, so both fell through to the
+      // 7-day default with no error. Confirmed live before this fix:
+      // GET /dashboard?preset=last_90_days and ?preset=lifetime both
+      // returned the identical 7-day date_range as no preset at all.
+      // "lifetime" uses a fixed far-past date rather than a per-account
+      // creation date -- Meta's Insights API simply returns whatever data
+      // exists in the requested window, so an over-wide `since` is safe
+      // and requires no new lookup.
+      last_90_days:{ since: daysAgo(90),       until: yesterday()       },
+      lifetime:    { since: '2000-01-01',      until: yesterday()       },
       this_month:  { since: startOfMonth(),    until: yesterday()       },
       last_month:  { since: startOfLastMonth(),until: endOfLastMonth()  },
       custom:      since && until ? { since, until } : defaultRange(),

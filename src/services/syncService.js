@@ -14,7 +14,7 @@
 
 const { v4: uuidv4 } = require('uuid');
 const db = require('../db/database');
-const { fetchCampaigns, fetchAdSets, fetchAds, fetchCustomAudiences } = require('./metaApiClient');
+const { fetchCampaigns, fetchAdSets, fetchAds, fetchCustomAudiences, isRateLimitError } = require('./metaApiClient');
 const { mapObjective } = require('./objectiveMapper');
 const { decryptToken } = require('./tokenCrypto');
 const { classifyAudienceType } = require('./audienceAttributionEngine');
@@ -342,6 +342,26 @@ async function syncAccount(adAccount, options = {}) {
     }
   }
 
+  // Guard against overlapping syncs for the same account -- e.g. a manual
+  // "Force Sync" (POST /sync) racing the scheduler's own due-check, or two
+  // manual triggers in a row. Nothing previously checked last_sync_status
+  // before starting another sync (confirmed via code read); this closes
+  // that race window. Mirrors recoverInterruptedSyncs()'s own 30-minute
+  // default timeout so a genuinely stuck 'running' row from a crashed
+  // process doesn't permanently block new syncs for this account.
+  const inFlight = db.get(
+    `SELECT last_sync_status, last_sync_started_at FROM ad_accounts WHERE id = ?`,
+    [adAccount.id]
+  );
+  if (inFlight && inFlight.last_sync_status === 'running' && inFlight.last_sync_started_at) {
+    const ageMinutes = (Date.now() - new Date(inFlight.last_sync_started_at).getTime()) / 60000;
+    if (ageMinutes < DEFAULT_SYNC_RECOVERY_TIMEOUT_MINUTES) {
+      summary.errors.push({ level: 'account', message: `Sync already in progress for this account (started ${inFlight.last_sync_started_at}).` });
+      summary.completedAt = new Date().toISOString();
+      return summary;
+    }
+  }
+
   console.log(`[Sync] Starting sync for account: ${adAccount.meta_account_id}`);
 
   const accessToken = decryptToken(adAccount.access_token_encrypted);
@@ -392,31 +412,52 @@ async function syncAccount(adAccount, options = {}) {
 
   db.run(`UPDATE ad_accounts SET sync_progress_phase = ? WHERE id = ?`, ['fetching_adsets_and_ads', adAccount.id]);
 
+  // Once Meta reports an account-level rate limit (e.g. "User request limit
+  // reached"), that throttle applies to every subsequent call for this same
+  // account/token for the rest of this run -- retrying it per campaign only
+  // guarantees the same failure while burning metaGet()'s full 3-attempt
+  // backoff (up to ~35s) each time. Confirmed in production: a 37- and a
+  // 99-campaign account each spent 23-60+ minutes making guaranteed-to-fail
+  // calls this way. Once set, remaining nodes are marked with the same error
+  // without any further network call -- everything else about per-node error
+  // isolation/reporting stays exactly as it was.
+  let rateLimitBreaker = null;
+
   for (const metaCampaign of metaCampaigns) {
     const node = { metaCampaign, adSets: [], fetchError: null };
 
     if (syncAdSets) {
-      try {
-        const metaAdSets = await fetchAdSets(metaCampaign.id, accessToken);
-        noteIfIncomplete('adsets', metaAdSets, metaCampaign.id);
+      if (rateLimitBreaker) {
+        node.fetchError = rateLimitBreaker;
+      } else {
+        try {
+          const metaAdSets = await fetchAdSets(metaCampaign.id, accessToken);
+          noteIfIncomplete('adsets', metaAdSets, metaCampaign.id);
 
-        for (const metaAdSet of metaAdSets) {
-          const adSetNode = { metaAdSet, ads: [], fetchError: null };
+          for (const metaAdSet of metaAdSets) {
+            const adSetNode = { metaAdSet, ads: [], fetchError: null };
 
-          if (syncAds) {
-            try {
-              const metaAds = await fetchAds(metaAdSet.id, accessToken);
-              noteIfIncomplete('ads', metaAds, metaAdSet.id);
-              adSetNode.ads = metaAds;
-            } catch (err) {
-              adSetNode.fetchError = err.message;
+            if (syncAds) {
+              if (rateLimitBreaker) {
+                adSetNode.fetchError = rateLimitBreaker;
+              } else {
+                try {
+                  const metaAds = await fetchAds(metaAdSet.id, accessToken);
+                  noteIfIncomplete('ads', metaAds, metaAdSet.id);
+                  adSetNode.ads = metaAds;
+                } catch (err) {
+                  adSetNode.fetchError = err.message;
+                  if (isRateLimitError(err)) rateLimitBreaker = err.message;
+                }
+              }
             }
-          }
 
-          node.adSets.push(adSetNode);
+            node.adSets.push(adSetNode);
+          }
+        } catch (err) {
+          node.fetchError = err.message;
+          if (isRateLimitError(err)) rateLimitBreaker = err.message;
         }
-      } catch (err) {
-        node.fetchError = err.message;
       }
     }
 

@@ -27,6 +27,27 @@ describe('dateRangeHelper.resolveDateRange', () => {
     expect(range.until).toBe(yesterday());
   });
 
+  test('preset "last_3_days" (dashboard\'s "3D" button) spans 3 days back from yesterday, distinct from the 7-day default', () => {
+    const range = resolveDateRange({ preset: 'last_3_days' });
+    expect(range.since).toBe(daysAgo(3));
+    expect(range.until).toBe(yesterday());
+    expect(range).not.toEqual(defaultRange());
+  });
+
+  test('preset "last_90_days" (dashboard\'s "90D" button) spans 90 days back from yesterday, distinct from the 7-day default', () => {
+    const range = resolveDateRange({ preset: 'last_90_days' });
+    expect(range.since).toBe(daysAgo(90));
+    expect(range.until).toBe(yesterday());
+    expect(range).not.toEqual(defaultRange());
+  });
+
+  test('preset "lifetime" spans from a fixed far-past date to yesterday, distinct from the 7-day default', () => {
+    const range = resolveDateRange({ preset: 'lifetime' });
+    expect(range.since).toBe('2000-01-01');
+    expect(range.until).toBe(yesterday());
+    expect(range).not.toEqual(defaultRange());
+  });
+
   test('unknown preset falls back to default range', () => {
     const range = resolveDateRange({ preset: 'not_a_real_preset' });
     expect(range).toEqual(defaultRange());

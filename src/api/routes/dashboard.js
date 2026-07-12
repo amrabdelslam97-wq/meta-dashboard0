@@ -16,6 +16,7 @@ const express = require('express');
 const router = express.Router();
 const db = require('../../db/database');
 const { resolveDateRange } = require('../../services/dateRangeHelper');
+const { buildFreshness, buildPortfolioFreshness } = require('../../services/freshnessHelper');
 const { asyncHandler } = require('../../middleware/errorHandler');
 
 router.get('/', asyncHandler(async (req, res) => {
@@ -168,6 +169,15 @@ router.get('/', asyncHandler(async (req, res) => {
     [...dateParams, ...(account_id ? [account_id] : [])]
   );
 
+  // Phase 38 -- additive only, nothing above this point changes shape.
+  // "freshness" reports how old the SQLite data this response was built
+  // from actually is (from ad_accounts' existing sync-tracking columns --
+  // no new Meta calls), so the dashboard can show "Updated N ago" instead
+  // of presenting synced data as if it were live.
+  const freshness = account_id
+    ? buildFreshness(db.get('SELECT last_successful_sync_at, last_sync_completed_at FROM ad_accounts WHERE id = ?', [account_id]))
+    : buildPortfolioFreshness(db.all("SELECT last_successful_sync_at, last_sync_completed_at FROM ad_accounts WHERE status = 'active'"));
+
   return res.json({
     summary: {
       accounts:    { total: accountCounts.total || 0, active: accountCounts.active || 0 },
@@ -181,6 +191,7 @@ router.get('/', asyncHandler(async (req, res) => {
     date_range:        dateRange,
     account_filter:    account_id || null,
     generated_at:      new Date().toISOString(),
+    freshness,
   });
 }));
 

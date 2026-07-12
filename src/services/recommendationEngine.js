@@ -64,13 +64,17 @@ function resolveRecommendation(ruleCode, entityMetaId) {
 function upsertRecommendation(rule, campaign, adAccountId, metrics, healthScore, entityType = 'campaign') {
   const now = new Date().toISOString();
 
-  // Check if an existing (non-dismissed) recommendation exists for this rule+entity
+  // Look up by the SAME grain as idx_recommendation_log_dedup (rule_code,
+  // entity_meta_id, date(generated_at)) -- not just "non-dismissed" -- so a
+  // rule re-firing after being dismissed earlier the same day updates that
+  // row in place instead of attempting a second INSERT for the same day,
+  // which violated the unique index and crashed the insights endpoint.
   const existing = db.get(
     `SELECT id FROM recommendation_log
      WHERE rule_code = ?
        AND entity_meta_id = ?
-       AND dismissed_at IS NULL`,
-    [rule.rule_code, campaign.meta_campaign_id]
+       AND date(generated_at) = date(?)`,
+    [rule.rule_code, campaign.meta_campaign_id, now]
   );
 
   if (existing) {

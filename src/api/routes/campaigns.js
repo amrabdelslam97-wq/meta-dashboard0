@@ -12,6 +12,7 @@ const router = express.Router();
 const db = require('../../db/database');
 const { formatScoreBreakdown } = require('../../services/scoreBreakdownService');
 const { VALID_OBJECTIVES } = require('../../services/kpiProfileResolver');
+const { buildFreshness, buildPortfolioFreshness } = require('../../services/freshnessHelper');
 const { asyncHandler } = require('../../middleware/errorHandler');
 
 /**
@@ -116,6 +117,14 @@ router.get(
       [...params, limit, offset]
     );
 
+    // Phase 38 -- additive only; every field above is unchanged. Reports how
+    // old the synced data backing this list is (from ad_accounts' existing
+    // sync-tracking columns, no new Meta calls) so the dashboard can show
+    // "Updated N ago" instead of presenting it as live.
+    const freshness = account_id
+      ? buildFreshness(db.get('SELECT last_successful_sync_at, last_sync_completed_at FROM ad_accounts WHERE id = ?', [account_id]))
+      : buildPortfolioFreshness(db.all("SELECT last_successful_sync_at, last_sync_completed_at FROM ad_accounts WHERE status = 'active'"));
+
     return res.json({
       data: campaigns,
       meta: {
@@ -129,6 +138,7 @@ router.get(
           objective: objective || null,
         },
       },
+      freshness,
     });
   })
 );

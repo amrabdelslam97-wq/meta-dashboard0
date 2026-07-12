@@ -361,10 +361,13 @@ textarea.form-input{resize:vertical;min-height:80px}
   </div>
   <div id="date-bar" class="date-bar">
   <button class="date-btn" onclick="setPreset('today')">Today</button>
+  <button class="date-btn" onclick="setPreset('yesterday')">Yesterday</button>
   <button class="date-btn" onclick="setPreset('last_3_days')">3D</button>
   <button class="date-btn active" id="dbtn-last_7_days" onclick="setPreset('last_7_days')">7D</button>
   <button class="date-btn" onclick="setPreset('last_14')">14D</button>
   <button class="date-btn" onclick="setPreset('last_30_days')">30D</button>
+  <button class="date-btn" onclick="setPreset('last_90_days')">90D</button>
+  <button class="date-btn" onclick="setPreset('lifetime')">Lifetime</button>
   <button class="date-btn" onclick="setPreset('this_month')">Month</button>
   <button class="date-btn" onclick="setPreset('last_month')">Last Month</button>
   <span style="color:var(--muted);font-size:11px;margin-left:4px">Custom:</span>
@@ -444,9 +447,33 @@ function refreshData() {
   // all -- they always fetch fresh -- so re-navigating to the current page
   // (which now also passes window._accountId on every one of those calls)
   // is sufficient to reload them for the newly selected account.
-  fetch(API + '/sync/cache/flush', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({}) })
+  //
+  // Phase 38 -- the backend route already supports a scoped, per-account
+  // flush (POST /sync/cache/flush with {account_id}, see sync.js), but this
+  // call always sent an empty body, so EVERY refresh (including a plain
+  // date-range change on a single selected account) flushed the entire
+  // cache for every account. Passing window._accountId (when a specific
+  // account is selected) now uses that existing scoped path instead;
+  // "All Accounts" (empty _accountId) still does a full flush, which is
+  // correct for that view -- no backend change needed, no behavior change
+  // for the "All Accounts" case.
+  fetch(API + '/sync/cache/flush', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(window._accountId ? { account_id: window._accountId } : {}) })
     .catch(() => {})
     .finally(() => navigate(currentPage));
+}
+
+// ─── Phase 38: sync-freshness label ─────────────────────────────
+// Turns the additive `freshness` field (dashboard.js/campaigns.js) into a
+// human string, e.g. "Updated 5m ago" or "Updated 2h ago (stale)". Falls
+// back to "just now" only when sync_age_minutes is genuinely near-zero --
+// never used to fake freshness for data that's actually old.
+function freshnessLabel(freshness) {
+  if (!freshness || freshness.sync_age_minutes === null || freshness.sync_age_minutes === undefined) {
+    return 'Updated —';
+  }
+  const m = freshness.sync_age_minutes;
+  const span = m < 1 ? 'just now' : m < 60 ? `${m}m ago` : `${Math.round(m / 60)}h ago`;
+  return `Updated ${span}` + (freshness.stale ? ' <span class="text-orange">(stale)</span>' : '');
 }
 
 // ─── Helpers ───────────────────────────────────────────────────
@@ -777,7 +804,12 @@ async function updateBadges() {
 async function loadDashboard() {
   const d = await apiDate('/dashboard');
   dashboardData = d;
-  document.getElementById('last-updated').textContent = 'Updated ' + new Date().toLocaleTimeString();
+  // Phase 38 -- was the client's page-load time (always looked "fresh"
+  // regardless of how old the underlying synced data actually was). Now
+  // reflects the real sync age reported by the API's additive `freshness`
+  // field, so a portfolio that hasn't synced in hours shows that honestly
+  // instead of a reassuring current timestamp.
+  document.getElementById('last-updated').innerHTML = freshnessLabel(d.freshness);
   updateBadges();
 
   const s = d.summary;
@@ -3523,7 +3555,23 @@ async function loadAccountSelector() {
 }
 
 function setAccount(id) {
+  const changed = window._accountId !== id;
   window._accountId = id;
+  // The Intelligence Center's selected campaign/ad set almost certainly
+  // belongs to the OLD account and does not exist in the new account's
+  // campaign list -- previously nothing cleared it, so switching accounts
+  // left a stale, wrong-account campaign "selected" (confirmed via code
+  // trace: loadCampaigns() only defaults selectedCampaign when it's falsy,
+  // so a leftover value from the prior account was never replaced),
+  // producing widgets/insights for a campaign that doesn't belong to the
+  // newly selected account. Only reset on an actual account change --
+  // date-range-only refreshes (setPreset/setCustomRange also call
+  // refreshData()) must keep the user's current campaign selection.
+  if (changed && window.ic) {
+    window.ic.selectedCampaign = null;
+    window.ic.selectedAdSet    = null;
+    window.ic.level            = 'campaign';
+  }
   refreshData();
 }
 
@@ -3784,6 +3832,19 @@ function toggleBreakdown(entityId, entityType) {
 // ─── Boot ──────────────────────────────────────────────────────
 loadAccountSelector();
 navigate('dashboard');
+// Meta has no data beyond today; the custom range inputs previously had no
+// upper bound, so a user could silently pick a future date and get an
+// unexplained empty "No Data" result (confirmed live: GET /dashboard with a
+// future since/until returns 200 with no validation error). This only
+// disables picking a later date in the native picker -- it does not change
+// any request/response behavior.
+(function capCustomDateInputs() {
+  const max = new Date().toISOString().slice(0, 10);
+  const since = document.getElementById('custom-since');
+  const until = document.getElementById('custom-until');
+  if (since) since.max = max;
+  if (until) until.max = max;
+})();
 </script>
 </body>
 </html>

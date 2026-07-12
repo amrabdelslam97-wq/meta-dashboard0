@@ -87,9 +87,32 @@ function clearCooldown(accountId) {
   cooldownFailCount.delete(accountId);
 }
 
+let cycleRunning = false;
+
 async function runDueAccounts() {
   if (state.status === 'paused') return;
 
+  // Guard against overlapping ticks: setInterval fires every
+  // CHECK_INTERVAL_MS regardless of whether the previous runDueAccounts()
+  // call has resolved. Confirmed in production that a single account's
+  // sync can take 60+ minutes when rate-limited (sync_execution_log),
+  // which is far longer than the 2-minute tick -- without this guard, a
+  // second cycle would start scanning/syncing the same due accounts
+  // concurrently with the first.
+  if (cycleRunning) {
+    console.warn('[AutoSync] Previous cycle still running -- skipping this tick.');
+    return;
+  }
+  cycleRunning = true;
+
+  try {
+    await runDueAccountsCycle();
+  } finally {
+    cycleRunning = false;
+  }
+}
+
+async function runDueAccountsCycle() {
   const accounts = db.all(
     `SELECT * FROM ad_accounts
      WHERE auto_sync_enabled = 1 AND status = 'active' AND token_is_valid = 1

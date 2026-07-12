@@ -84,6 +84,23 @@ describe('portfolioEngine', () => {
     expect(b.total_campaigns).toBe(1);
   });
 
+  test('getAccountRankings excludes snoozed alerts from active_alerts, matching dashboard.js/alerts.js', () => {
+    // Phase 38 -- this query previously counted status='active' alone, so a
+    // snoozed alert (still status='active', just temporarily silenced)
+    // inflated this count relative to the Dashboard's own alert count for
+    // the same account, which already excluded snoozed alerts.
+    testDb.db.run(
+      `INSERT INTO active_alerts
+         (id, ad_account_id, alert_code, entity_type, entity_meta_id, entity_label, severity, alert_message, snoozed_until)
+       VALUES (?, ?, 'LOW_CTR', 'campaign', 'camp_pf_b1', 'B1', 'warning', 'CTR low', datetime('now', '+1 day'))`,
+      [uuidv4(), accountB]
+    );
+
+    const rankings = getAccountRankings();
+    const b = rankings.find(r => r.meta_account_id === 'act_portfolio_b');
+    expect(b.active_alerts).toBe(1); // still 1, not 2 -- the snoozed alert must not count
+  });
+
   test('getPortfolioSummary aggregates health distribution and top/worst campaigns across accounts', () => {
     const summary = getPortfolioSummary();
     expect(summary.campaigns.total).toBe(2);

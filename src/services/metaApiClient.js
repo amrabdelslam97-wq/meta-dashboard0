@@ -205,53 +205,69 @@ async function fetchCampaigns(metaAccountId, accessToken) {
 }
 
 /**
+ * Extract the field name Meta's "(#100) Tried accessing nonexisting field
+ * (X)" error refers to, if present. Returns null for any other error shape.
+ */
+function extractNonexistingField(message) {
+  const match = /Tried accessing nonexisting field \(([^)]+)\)/.exec(message || '');
+  return match ? match[1] : null;
+}
+
+/**
  * Fetch all ad sets for a given Meta campaign.
+ *
+ * targeting{...} sub-fields are requested speculatively (Attribution &
+ * Customer Journey Intelligence's audience-type classification, Step 9).
+ * Meta API versions/accounts can reject an individual sub-field with
+ * "(#100) Tried accessing nonexisting field (X)" -- this used to fail the
+ * ENTIRE ad sets fetch (and therefore the entire account's sync) over one
+ * unsupported sub-field. Since the failure names the exact offending field,
+ * it's stripped and the request retried rather than aborting the sync.
  *
  * @param {string} metaCampaignId
  * @param {string} accessToken
  * @returns {Array} Raw ad set objects from Meta
  */
 async function fetchAdSets(metaCampaignId, accessToken) {
-  const adSets = await metaGetAll(
-    `${metaCampaignId}/adsets`,
-    {
-      // optimization_goal powers the Video Views KPI sub-profile
-      // (kpiProfileResolver.resolveProfile) and the Optimization Goal
-      // filter -- no separate API call needed, this endpoint already
-      // returns it once requested in `fields`. effective_status: see
-      // fetchCampaigns()'s comment -- an ad set can be status=ACTIVE while
-      // effective_status=CAMPAIGN_PAUSED (its parent campaign is paused).
-      // targeting{...} -- real Meta AdSet targeting fields, added to this
-      // SAME existing call (zero new Meta requests). Sub-fields requested as
-      // PLAIN names within targeting{}, never further nested -- confirmed
-      // via a real production bug (metaApiClient.js's fetchAdCreativeDetail()
-      // asset_feed_spec{id} request) that guessing a *second* level of `{}`
-      // sub-field expansion on a JSON-blob-shaped field reliably 400s with
-      // "(#100) Tried accessing nonexisting field"; only `targeting{locales}`
-      // (one level) was ever confirmed against a real account, so every new
-      // field below stays at that same one level and is parsed defensively
-      // (extractAudienceSignals() in syncService.js never assumes a shape
-      // Meta didn't actually return):
-      //   locales -- Language Analytics' configuration view (Phase 17).
-      //   custom_audiences / excluded_custom_audiences / lookalike_spec /
-      //     flexible_spec / geo_locations / targeting_automation --
-      //     Attribution & Customer Journey Intelligence's audience-type
-      //     classification (Step 9). custom_audiences' referenced audience
-      //     IDs are resolved to their real subtype (CUSTOM/WEBSITE/
-      //     ENGAGEMENT/APP/LOOKALIKE) via a separate, ACCOUNT-level (not
-      //     per-ad-set) fetchCustomAudiences() call, cached and joined by id
-      //     -- that subtype is NOT a property of the ad set's own targeting.
-      //   targeting_automation.advantage_audience -- real Meta field marking
-      //     Advantage+ Audience; without it, an Advantage+ ad set would be
-      //     indistinguishable from a broad one.
-      fields: 'id,name,status,effective_status,daily_budget,lifetime_budget,created_time,updated_time,optimization_goal,' +
-              'targeting{locales,custom_audiences,excluded_custom_audiences,lookalike_spec,flexible_spec,geo_locations,targeting_automation}',
-      limit: 100,
-    },
-    accessToken
-  );
+  const baseFields = 'id,name,status,effective_status,daily_budget,lifetime_budget,created_time,updated_time,optimization_goal';
+  // locales -- Language Analytics' configuration view (Phase 17).
+  // custom_audiences / excluded_custom_audiences / lookalike_spec /
+  //   flexible_spec / geo_locations / targeting_automation --
+  //   Attribution & Customer Journey Intelligence's audience-type
+  //   classification (Step 9). custom_audiences' referenced audience
+  //   IDs are resolved to their real subtype (CUSTOM/WEBSITE/
+  //   ENGAGEMENT/APP/LOOKALIKE) via a separate, ACCOUNT-level (not
+  //   per-ad-set) fetchCustomAudiences() call, cached and joined by id
+  //   -- that subtype is NOT a property of the ad set's own targeting.
+  // targeting_automation.advantage_audience -- real Meta field marking
+  //   Advantage+ Audience; without it, an Advantage+ ad set would be
+  //   indistinguishable from a broad one.
+  let targetingFields = ['locales', 'custom_audiences', 'excluded_custom_audiences', 'lookalike_spec', 'flexible_spec', 'geo_locations', 'targeting_automation'];
 
-  return adSets;
+  // Sub-fields requested as PLAIN names within targeting{}, never further
+  // nested -- confirmed via a real production bug (fetchAdCreativeDetail()'s
+  // asset_feed_spec{id} request) that guessing a *second* level of `{}`
+  // sub-field expansion on a JSON-blob-shaped field reliably 400s.
+  for (let attempt = 0; attempt <= targetingFields.length; attempt++) {
+    const fields = targetingFields.length
+      ? `${baseFields},targeting{${targetingFields.join(',')}}`
+      : baseFields;
+
+    try {
+      return await metaGetAll(`${metaCampaignId}/adsets`, { fields, limit: 100 }, accessToken);
+    } catch (err) {
+      const badField = extractNonexistingField(err.message);
+      if (badField && targetingFields.includes(badField)) {
+        console.warn(`[Meta API] targeting.${badField} unsupported for this account/API version -- retrying ad sets fetch without it`);
+        targetingFields = targetingFields.filter(f => f !== badField);
+        continue;
+      }
+      throw err;
+    }
+  }
+
+  // All targeting sub-fields were rejected -- fall back to base fields only.
+  return metaGetAll(`${metaCampaignId}/adsets`, { fields: baseFields, limit: 100 }, accessToken);
 }
 
 /**

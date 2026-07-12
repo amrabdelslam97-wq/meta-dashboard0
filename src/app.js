@@ -216,13 +216,29 @@ async function start() {
 
   startAutoSyncScheduler();
 
-  app.listen(PORT, () => {
+  const server = app.listen(PORT, () => {
     displayBanner({
       port: PORT,
       environment: process.env.NODE_ENV || 'development',
       dbPath: DB_PATH,
       startTime: new Date(),
     });
+  });
+
+  // Phase 35 — without this, a port already held by another process (e.g. a
+  // still-running previous instance) can make Node print the full "Platform
+  // Ready" banner and then exit silently a few seconds later with no error
+  // at all (observed on Windows: the 'listening' callback above fires
+  // optimistically before the OS-level bind conflict surfaces). Surfacing
+  // the 'error' event explicitly turns that silent, misleading exit into a
+  // clear, actionable message.
+  server.on('error', (err) => {
+    if (err.code === 'EADDRINUSE') {
+      console.error(`[Fatal] Port ${PORT} is already in use — another instance of this server may still be running. Stop it first, or set PORT to a different value.`);
+    } else {
+      console.error('[Fatal] Server error:', err);
+    }
+    process.exit(1);
   });
 }
 
