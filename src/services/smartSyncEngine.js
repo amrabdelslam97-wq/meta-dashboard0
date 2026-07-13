@@ -37,11 +37,12 @@
 const { v4: uuidv4 } = require('uuid');
 const db = require('../db/database');
 const { syncAccount } = require('./syncService');
-const { metaGet } = require('./metaApiClient');
+const { metaGet, isRateLimitError } = require('./metaApiClient');
 const { decryptToken } = require('./tokenCrypto');
 const { fetchCampaignMetrics } = require('./metricsFetcher');
-const { defaultRange } = require('./dateRangeHelper');
+const { defaultRange, daysAgo, today } = require('./dateRangeHelper');
 const { DEFAULT_INTERVALS } = require('../db/schema.phase16');
+const syncLock = require('./syncLock');
 const analyticsEngine = require('./analyticsEngine');
 const creativeAnalytics = require('./creativeAnalytics');
 const budgetDistributionAnalytics = require('./budgetDistributionAnalytics');
@@ -58,17 +59,11 @@ const ENTITY_TYPES = ['insights', 'campaigns', 'adsets', 'ads', 'creatives', 'me
 // original tiers, which don't cover this newer entity_type.
 const ANALYTICS_TIER_FALLBACK_INTERVAL = 360;
 
-// Meta's standard rate-limit/throttling error codes (mirrors metaApiClient.js
-// -- duplicated as a small constant, not re-implemented, since metaApiClient
-// deliberately keeps this private and already retries internally).
-const RATE_LIMIT_CODES = new Set([4, 17, 32, 613]);
-
-function isRateLimitError(err) {
-  if (!err) return false;
-  if (err.isRateLimit) return true;
-  if (err.isMetaError && RATE_LIMIT_CODES.has(err.code)) return true;
-  return false;
-}
+// isRateLimitError now comes directly from metaApiClient.js (the module that
+// actually tags errors with .isRateLimit/.isMetaError/.code in the first
+// place) instead of a locally-duplicated copy of its RATE_LIMIT_ERROR_CODES
+// set, which had drifted out of sync-risk since Phase 16 first added this
+// file (both copies happened to still agree, but nothing enforced that).
 
 // ─────────────────────────────────────────────
 // Schedule config (Settings-configurable intervals)
@@ -188,20 +183,64 @@ function recordExecution(adAccountId, entityType, source, result) {
 // Per-entity-type sync execution
 // ─────────────────────────────────────────────
 
+/**
+ * Detect the latest date this account's Insights were successfully warmed
+ * (Incremental Synchronization, requirement 3) and request only the missing
+ * window since then, capped to defaultRange()'s existing 7-day span so a
+ * long-neglected account doesn't suddenly issue an unbounded catch-up
+ * request. Always includes yesterday+today: Meta's own Insights data for
+ * "today" is still accruing and "yesterday" can still be settling within
+ * the account's attribution window, so both are re-requested every cycle
+ * even when nothing else changed ("request today's updates, request
+ * yesterday if incomplete").
+ */
+function incrementalInsightsRange(account) {
+  const state = db.get(
+    `SELECT last_success_at FROM sync_entity_state WHERE ad_account_id = ? AND entity_type = 'insights'`,
+    [account.id]
+  );
+  if (!state?.last_success_at) return defaultRange(); // never synced -- existing default window, not full history
+
+  const lastSyncedDate = state.last_success_at.slice(0, 10);
+  const floor = daysAgo(7);
+  const since = lastSyncedDate < floor ? floor : lastSyncedDate;
+  return { since, until: today() };
+}
+
+/**
+ * Campaign Priority (requirement 12): ACTIVE campaigns first, then most
+ * recently updated -- "spending today" isn't knowable before Insights are
+ * fetched (this tier IS the fetch), so recency-of-metadata-update is the
+ * best available proxy within this tier's own data.
+ */
+function orderByPriority(campaigns) {
+  return campaigns.slice().sort((a, b) => {
+    const aActive = a.status === 'active' ? 0 : 1;
+    const bActive = b.status === 'active' ? 0 : 1;
+    if (aActive !== bActive) return aActive - bActive;
+    return new Date(b.meta_updated_time || 0) - new Date(a.meta_updated_time || 0);
+  });
+}
+
 /** Tier 1: warm the existing Insights cache for this account's known campaigns. */
 async function runInsightsTier(account, accessToken, source) {
   const startedAt = new Date().toISOString();
-  const campaigns = db.all(
-    "SELECT meta_campaign_id FROM campaigns WHERE ad_account_id = ? AND status != 'archived'",
+  const campaigns = orderByPriority(db.all(
+    "SELECT meta_campaign_id, status, meta_updated_time FROM campaigns WHERE ad_account_id = ? AND status != 'archived'",
     [account.id]
-  );
+  ));
+
+  // Incremental for the scheduler's routine cadence; a Force Sync (full or
+  // active-only) still warms the same default() 7-day window it always has,
+  // so a manually-triggered refresh always shows a full, familiar range.
+  const range = source === 'scheduler' ? incrementalInsightsRange(account) : defaultRange();
 
   let apiCalls = 0, updated = 0, failed = 0, retries = 0, rateLimited = false, lastError = null;
 
   for (const c of campaigns) {
     try {
       apiCalls++;
-      await fetchCampaignMetrics(c.meta_campaign_id, accessToken, defaultRange(), account.attribution_window_days);
+      await fetchCampaignMetrics(c.meta_campaign_id, accessToken, range, account.attribution_window_days);
       updated++;
     } catch (err) {
       failed++;
@@ -319,14 +358,15 @@ async function runAnalyticsTier(account, source) {
  * checkpointed/logged separately per tier so freshness/cadence stays
  * independent even though the underlying Meta fetch was shared.
  */
-async function runCampaignTreeTiers(account, dueTiers, source) {
+async function runCampaignTreeTiers(account, dueTiers, source, options = {}) {
+  const { activeOnly = false } = options;
   const syncAdSets = dueTiers.adsets || dueTiers.ads || dueTiers.creatives;
   const syncAds = dueTiers.ads || dueTiers.creatives;
   const startedAt = new Date().toISOString();
 
   let summary, status = 'success', errorMessage = null, rateLimited = false;
   try {
-    summary = await syncAccount(account, { syncAdSets, syncAds });
+    summary = await syncAccount(account, { syncAdSets, syncAds, activeOnly });
     if (summary.errors && summary.errors.length > 0) {
       // A 'account'-level error means fetchCampaigns itself failed (see
       // syncService.js's early-return path) -- nothing at all was synced,
@@ -422,86 +462,143 @@ function markLifecycleBackfillCompleteIfDone(accountId) {
  * already-recorded stays recorded, and un-run tiers simply remain "due" for
  * the next cycle, which is exactly the resume-from-failed-point behavior.
  *
+ * This is the ONE entry point every sync trigger funnels through (the
+ * background Scheduler, Force Sync, Refresh Active Data, Full Rebuild), so
+ * it's wrapped in syncLock (requirement 16, Prevent Concurrent Sync) --
+ * whichever trigger gets here first for a given account wins, and every
+ * other concurrent trigger for that same account returns immediately with
+ * `skipped: true` instead of racing it.
+ *
  * @param {object} account - ad_accounts row
- * @param {'scheduler'|'force'} source
+ * @param {'scheduler'|'force'|'force_active'} source - 'force' is a Full
+ *   Sync/Full Rebuild (every tier, every status, bypasses cadence); 'force_active'
+ *   is Refresh Active Data (every tier, ACTIVE-only, bypasses cadence);
+ *   'scheduler' is the routine incremental cadence (ACTIVE-only, respects
+ *   each tier's due-check) -- the only mode the background Scheduler is ever
+ *   allowed to use (requirement 5, Daily Scheduled Sync = incremental only).
  * @param {function} [onEntityStart] - optional (entityType) => void, for live status
  */
 async function runDueForAccount(account, source = 'scheduler', onEntityStart = () => {}) {
-  const config = getScheduleConfig();
-  const states = getEntityStates(account.id);
-
-  const due = {};
-  for (const type of ENTITY_TYPES) {
-    due[type] = source === 'force' ? true : isDue(states[type], config[type]);
+  if (!syncLock.acquire(account.id)) {
+    return { ranAny: false, skipped: true, reason: 'sync_already_in_progress_for_account' };
   }
 
-  // Task 3 — escalate the metadata tree to run (campaigns+adsets+ads, exactly
-  // what a normal sync already fetches) whenever this account still has
-  // unbackfilled effective_status and hasn't been marked complete yet, even
-  // if none of those tiers were otherwise due on their own interval.
-  const backfillPending = !account.lifecycle_backfill_completed_at && needsLifecycleBackfill(account.id);
-  if (backfillPending) {
-    due.campaigns = true;
-    due.adsets = true;
-    due.ads = true;
-  }
+  try {
+    const config = getScheduleConfig();
+    const states = getEntityStates(account.id);
+    const isForce = source === 'force' || source === 'force_active';
 
-  if (!due.insights && !due.campaigns && !due.adsets && !due.ads && !due.creatives && !due.metadata && !due.analytics) {
-    return { ranAny: false };
-  }
-
-  const accessToken = decryptToken(account.access_token_encrypted);
-  const ranTiers = [];
-  let treeSummary = null;
-
-  // Tier 1 — Insights (highest frequency, no tree dependency)
-  if (due.insights) {
-    onEntityStart('insights');
-    await runInsightsTier(account, accessToken, source);
-    ranTiers.push('insights');
-  }
-
-  // Tiers 2–5 — campaign/adset/ad/creative tree, one shared fetch pass
-  if (due.campaigns || due.adsets || due.ads || due.creatives) {
-    onEntityStart('campaigns');
-    treeSummary = await runCampaignTreeTiers(account, due, source);
-    ranTiers.push(...['campaigns', 'adsets', 'ads', 'creatives'].filter(t => due[t]));
-
-    // Task 3 — mark complete the moment nothing is left NULL, so this
-    // account is never metadata-force-synced again after today.
-    if (!account.lifecycle_backfill_completed_at) {
-      markLifecycleBackfillCompleteIfDone(account.id);
+    const due = {};
+    for (const type of ENTITY_TYPES) {
+      due[type] = isForce ? true : isDue(states[type], config[type]);
     }
-  }
 
-  // Tier 6 — account metadata (lowest frequency)
-  if (due.metadata) {
-    onEntityStart('metadata');
-    await runMetadataTier(account, accessToken, source);
-    ranTiers.push('metadata');
-  }
+    // Task 3 — escalate the metadata tree to run (campaigns+adsets+ads, exactly
+    // what a normal sync already fetches) whenever this account still has
+    // unbackfilled effective_status and hasn't been marked complete yet, even
+    // if none of those tiers were otherwise due on their own interval.
+    const backfillPending = !account.lifecycle_backfill_completed_at && needsLifecycleBackfill(account.id);
+    if (backfillPending) {
+      due.campaigns = true;
+      due.adsets = true;
+      due.ads = true;
+    }
 
-  // Tier 7 — Executive Marketing Analytics Layer (audience/geographic/
-  // placement/device/creative/budget). Heaviest, least time-sensitive tier,
-  // so it runs last.
-  if (due.analytics) {
-    onEntityStart('analytics');
-    await runAnalyticsTier(account, source);
-    ranTiers.push('analytics');
-  }
+    if (!due.insights && !due.campaigns && !due.adsets && !due.ads && !due.creatives && !due.metadata && !due.analytics) {
+      return { ranAny: false };
+    }
 
-  return { ranAny: ranTiers.length > 0, ranTiers, summary: treeSummary, backfillPending };
+    // Active-Only Sync (requirements 1, 4, 6): 'force' (Full Sync/Full
+    // Rebuild) is the ONLY mode that ever reloads paused/archived/deleted
+    // objects -- 'scheduler' and 'force_active' both stay ACTIVE-only.
+    // A pending legacy backfill needs one genuinely full pass to populate
+    // effective_status on every row, including non-active ones, so it
+    // temporarily overrides activeOnly regardless of source; once complete
+    // (markLifecycleBackfillCompleteIfDone below) this never applies again.
+    const activeOnly = source === 'force' ? false : !backfillPending;
+
+    const accessToken = decryptToken(account.access_token_encrypted);
+    const ranTiers = [];
+    let treeSummary = null;
+
+    // Tier 1 — Insights (highest frequency, no tree dependency)
+    if (due.insights) {
+      onEntityStart('insights');
+      await runInsightsTier(account, accessToken, source);
+      ranTiers.push('insights');
+    }
+
+    // Tiers 2–5 — campaign/adset/ad/creative tree, one shared fetch pass
+    if (due.campaigns || due.adsets || due.ads || due.creatives) {
+      onEntityStart('campaigns');
+      treeSummary = await runCampaignTreeTiers(account, due, source, { activeOnly });
+      ranTiers.push(...['campaigns', 'adsets', 'ads', 'creatives'].filter(t => due[t]));
+
+      // Task 3 — mark complete the moment nothing is left NULL, so this
+      // account is never metadata-force-synced again after today.
+      if (!account.lifecycle_backfill_completed_at) {
+        markLifecycleBackfillCompleteIfDone(account.id);
+      }
+    }
+
+    // Tier 6 — account metadata (lowest frequency)
+    if (due.metadata) {
+      onEntityStart('metadata');
+      await runMetadataTier(account, accessToken, source);
+      ranTiers.push('metadata');
+    }
+
+    // Tier 7 — Executive Marketing Analytics Layer (audience/geographic/
+    // placement/device/creative/budget). Heaviest, least time-sensitive tier,
+    // so it runs last.
+    if (due.analytics) {
+      onEntityStart('analytics');
+      await runAnalyticsTier(account, source);
+      ranTiers.push('analytics');
+    }
+
+    // Full Sync Mode (requirement 4): record when this account was last
+    // genuinely reloaded end-to-end, distinct from last_sync_completed_at
+    // (which every mode, including routine incremental cycles, updates).
+    if (source === 'force' && ranTiers.length > 0) {
+      db.run(`UPDATE ad_accounts SET last_full_sync_at = ? WHERE id = ?`, [new Date().toISOString(), account.id]);
+    }
+
+    return { ranAny: ranTiers.length > 0, ranTiers, summary: treeSummary, backfillPending, activeOnly };
+  } finally {
+    syncLock.release(account.id);
+  }
 }
 
 /**
- * Force Sync — runs every tier immediately for one account regardless of
- * cadence, without touching the scheduler's queue/cooldown state. Used by
- * POST /sync when account_id is given ("Force Sync" button). Returns the
- * same summary shape syncService.syncAccount() returns (campaigns/adSets/ads
+ * Force Sync / Full Rebuild / Full Sync mode — runs every tier immediately
+ * for one account regardless of cadence, reloading ALL statuses (paused/
+ * archived included), without touching the scheduler's queue/cooldown
+ * state. This is the ONLY path that ever does a full reload -- never called
+ * automatically by the scheduler (requirement 4/5). Used by POST /sync (no
+ * explicit status filter, existing behavior, unchanged) and POST /sync/full
+ * ("Full Rebuild" / "Full Sync mode", requirement 4/6B). Returns the same
+ * summary shape syncService.syncAccount() returns (campaigns/adSets/ads
  * synced+errors counts) so callers don't need to sync a second time to get it.
  */
 async function forceSyncAccount(account) {
   const result = await runDueForAccount(account, 'force');
+  return result.summary || {
+    accountId: account.id, metaAccountId: account.meta_account_id,
+    campaigns: { synced: 0, errors: 0 }, adSets: { synced: 0, errors: 0 }, ads: { synced: 0, errors: 0 },
+    errors: [], warnings: [],
+  };
+}
+
+/**
+ * Refresh Active Data (requirement 6A) — runs every tier immediately for one
+ * account, bypassing cadence exactly like forceSyncAccount(), but stays
+ * ACTIVE-only: only ACTIVE campaigns/ad sets/ads are re-requested from Meta.
+ * Historical/paused/archived data already in SQLite is untouched, not
+ * deleted. Used by POST /sync/refresh-active.
+ */
+async function forceSyncActiveAccount(account) {
+  const result = await runDueForAccount(account, 'force_active');
   return result.summary || {
     accountId: account.id, metaAccountId: account.meta_account_id,
     campaigns: { synced: 0, errors: 0 }, adSets: { synced: 0, errors: 0 }, ads: { synced: 0, errors: 0 },
@@ -546,6 +643,7 @@ module.exports = {
   setScheduleInterval,
   runDueForAccount,
   forceSyncAccount,
+  forceSyncActiveAccount,
   runAnalyticsTier,
   getSyncHistory,
   getEntityFreshness,

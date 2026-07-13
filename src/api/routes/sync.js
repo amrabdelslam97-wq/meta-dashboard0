@@ -77,6 +77,80 @@ router.post(
 );
 
 /**
+ * POST /sync/refresh-active — Phase 39, "Refresh Active Data"
+ *
+ * Force Refresh (A): immediately re-syncs every tier for the given
+ * account(s), bypassing cadence like Force Sync always has, but stays
+ * ACTIVE-only -- only ACTIVE campaigns/ad sets/ads are re-requested from
+ * Meta. Historical/paused/archived data already in SQLite is never touched
+ * or deleted. This is the cheap, fast, safe-to-click-often refresh; for a
+ * full historical reload use POST /sync/full ("Full Rebuild") instead.
+ *
+ * Optional body: { account_id: "uuid" } — omit to refresh every active,
+ * token-valid account (sequentially, same queue discipline as the scheduler).
+ */
+router.post('/refresh-active', asyncHandler(async (req, res) => {
+  const { account_id } = req.body || {};
+
+  if (account_id) {
+    const account = db.get(
+      "SELECT * FROM ad_accounts WHERE id = ? AND status = 'active' AND token_is_valid = 1",
+      [account_id]
+    );
+    if (!account) {
+      return res.status(404).json({ error: 'Account not found or not active', account_id });
+    }
+    const result = await smartSyncEngine.forceSyncActiveAccount(account);
+    return res.json({ success: true, mode: 'refresh_active', results: [result] });
+  }
+
+  const accounts = db.all("SELECT * FROM ad_accounts WHERE status = 'active' AND token_is_valid = 1");
+  const results = [];
+  for (const account of accounts) {
+    results.push(await smartSyncEngine.forceSyncActiveAccount(account));
+  }
+  return res.json({ success: true, mode: 'refresh_active', accounts_synced: results.length, results });
+}));
+
+/**
+ * POST /sync/full — Phase 39, "Full Sync mode" / Force Refresh (B) "Full Rebuild"
+ *
+ * The ONLY sync path that ever reloads historical data -- paused/archived
+ * campaigns/ad sets/ads included, not just ACTIVE. Never triggered
+ * automatically by the background scheduler (which only ever runs
+ * incremental, active-only cycles); this is a manual, explicit action only.
+ * Equivalent to the existing POST /sync (account_id, default tiers) path --
+ * exposed under its own name so the dashboard can offer it as a distinct,
+ * clearly-labeled "Full Rebuild" action separate from the cheaper
+ * /sync/refresh-active.
+ *
+ * Optional body: { account_id: "uuid" } — omit to full-rebuild every active,
+ * token-valid account (sequentially).
+ */
+router.post('/full', asyncHandler(async (req, res) => {
+  const { account_id } = req.body || {};
+
+  if (account_id) {
+    const account = db.get(
+      "SELECT * FROM ad_accounts WHERE id = ? AND status = 'active' AND token_is_valid = 1",
+      [account_id]
+    );
+    if (!account) {
+      return res.status(404).json({ error: 'Account not found or not active', account_id });
+    }
+    const result = await smartSyncEngine.forceSyncAccount(account);
+    return res.json({ success: true, mode: 'full_sync', results: [result] });
+  }
+
+  const accounts = db.all("SELECT * FROM ad_accounts WHERE status = 'active' AND token_is_valid = 1");
+  const results = [];
+  for (const account of accounts) {
+    results.push(await smartSyncEngine.forceSyncAccount(account));
+  }
+  return res.json({ success: true, mode: 'full_sync', accounts_synced: results.length, results });
+}));
+
+/**
  * GET /sync/scheduler-status
  * Executive Sync Status feed for the Dashboard: scheduler running/paused,
  * current account/entity/progress, accounts connected/waiting/syncing/

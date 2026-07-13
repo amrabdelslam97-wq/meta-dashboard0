@@ -317,7 +317,14 @@ function upsertAd(adAccountId, campaignId, adSetId, metaAd, dbHandle = db) {
  * @returns {object} Summary of what was synced
  */
 async function syncAccount(adAccount, options = {}) {
-  const { syncAdSets = true, syncAds = true } = options;
+  // activeOnly (Phase 39, requirement 1/6) -- when true, only ACTIVE
+  // campaigns/ad sets/ads are requested from Meta at all (server-side
+  // filtering, see metaApiClient.buildEffectiveStatusFilter). Historical
+  // paused/archived/deleted rows already in SQLite are never touched or
+  // deleted by this -- they simply aren't re-fetched. Full Sync (explicit,
+  // manual only -- see smartSyncEngine.forceSyncAccount) passes false to
+  // reload everything, exactly like this function always behaved before.
+  const { syncAdSets = true, syncAds = true, activeOnly = false } = options;
 
   const summary = {
     accountId: adAccount.id,
@@ -362,9 +369,22 @@ async function syncAccount(adAccount, options = {}) {
     }
   }
 
-  console.log(`[Sync] Starting sync for account: ${adAccount.meta_account_id}`);
+  console.log(`[Sync] Starting sync for account: ${adAccount.meta_account_id}${activeOnly ? ' (active-only, incremental)' : ' (full)'}`);
 
-  const accessToken = decryptToken(adAccount.access_token_encrypted);
+  // Automatic Recovery (requirement 15): a corrupted/missing encryption key
+  // or malformed stored token must fail just THIS account, not throw out of
+  // syncAccount() entirely -- syncAllAccounts()'s loop has no other guard
+  // against an uncaught throw here, and a single bad account previously
+  // could have aborted every account queued after it in the same run.
+  let accessToken;
+  try {
+    accessToken = decryptToken(adAccount.access_token_encrypted);
+  } catch (err) {
+    summary.errors.push({ level: 'account', message: `Token decryption failed: ${err.message}` });
+    console.error(`[Sync] Could not decrypt access token for ${adAccount.meta_account_id}:`, err.message);
+    markSyncFailed(adAccount.id, summary);
+    return summary;
+  }
 
   const startedAt = new Date().toISOString();
   db.run(
@@ -380,11 +400,34 @@ async function syncAccount(adAccount, options = {}) {
   // ══════════════════════════════════════════════════════════════
   let metaCampaigns;
   try {
-    metaCampaigns = await fetchCampaigns(adAccount.meta_account_id, accessToken);
+    metaCampaigns = await fetchCampaigns(adAccount.meta_account_id, accessToken, { activeOnly });
     noteIfIncomplete('campaigns', metaCampaigns, adAccount.meta_account_id);
+
+    // Campaign Priority (requirement 12): ACTIVE campaigns first, then most
+    // recently updated (the closest available proxy for "spending today" /
+    // "updated today" without a chicken-and-egg dependency on Insights data
+    // this same pass hasn't fetched yet) -- so if a rate limit trips
+    // mid-account, the campaigns most likely to matter were already synced.
+    // Sorted IN PLACE (not via [...spread]) so metaGetAll's incomplete/
+    // incompleteReason properties on the array survive the sort.
+    metaCampaigns.sort((a, b) => {
+      const aActive = a.effective_status === 'ACTIVE' ? 0 : 1;
+      const bActive = b.effective_status === 'ACTIVE' ? 0 : 1;
+      if (aActive !== bActive) return aActive - bActive;
+      return new Date(b.updated_time || 0) - new Date(a.updated_time || 0);
+    });
   } catch (err) {
     summary.errors.push({ level: 'account', message: err.message });
     console.error(`[Sync] Failed to fetch campaigns for ${adAccount.meta_account_id}:`, err.message);
+    // Error Classification (requirement 14): an expired/invalid token will
+    // never succeed on retry -- mark it invalid now so syncAllAccounts()'s
+    // WHERE token_is_valid = 1 (and the scheduler's identical filter) stop
+    // repeatedly re-attempting a doomed sync every cycle until the user
+    // reconnects the account (accounts.js's existing reconnect flow already
+    // clears this flag once a fresh token is provided).
+    if (err.isAuthError) {
+      db.run(`UPDATE ad_accounts SET token_is_valid = 0 WHERE id = ?`, [adAccount.id]);
+    }
     markSyncFailed(adAccount.id, summary);
     return summary;
   }
@@ -431,7 +474,7 @@ async function syncAccount(adAccount, options = {}) {
         node.fetchError = rateLimitBreaker;
       } else {
         try {
-          const metaAdSets = await fetchAdSets(metaCampaign.id, accessToken);
+          const metaAdSets = await fetchAdSets(metaCampaign.id, accessToken, { activeOnly });
           noteIfIncomplete('adsets', metaAdSets, metaCampaign.id);
 
           for (const metaAdSet of metaAdSets) {
@@ -442,7 +485,7 @@ async function syncAccount(adAccount, options = {}) {
                 adSetNode.fetchError = rateLimitBreaker;
               } else {
                 try {
-                  const metaAds = await fetchAds(metaAdSet.id, accessToken);
+                  const metaAds = await fetchAds(metaAdSet.id, accessToken, { activeOnly });
                   noteIfIncomplete('ads', metaAds, metaAdSet.id);
                   adSetNode.ads = metaAds;
                 } catch (err) {
@@ -646,8 +689,27 @@ async function syncAllAccounts(options = {}) {
 
   const results = [];
   for (const account of accounts) {
-    const result = await syncAccount(account, options);
-    results.push(result);
+    // Automatic Recovery (requirement 15): syncAccount() already catches
+    // everything it knows how to internally and always returns a summary
+    // rather than throwing -- this is a last-resort safety net so that even
+    // a genuinely unexpected exception in one account (e.g. a DB error)
+    // pauses only that account instead of aborting every account still
+    // queued behind it in this same run.
+    try {
+      const result = await syncAccount(account, options);
+      results.push(result);
+    } catch (err) {
+      console.error(`[Sync] Unexpected error syncing account ${account.meta_account_id}, continuing with remaining accounts:`, err.message);
+      results.push({
+        accountId: account.id,
+        metaAccountId: account.meta_account_id,
+        campaigns: { synced: 0, errors: 1 },
+        adSets: { synced: 0, errors: 0 },
+        ads: { synced: 0, errors: 0 },
+        errors: [{ level: 'account', message: err.message }],
+        warnings: [],
+      });
+    }
   }
 
   return results;

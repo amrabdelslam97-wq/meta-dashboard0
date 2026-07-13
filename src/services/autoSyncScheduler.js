@@ -34,9 +34,10 @@
 
 const db = require('../db/database');
 const smartSyncEngine = require('./smartSyncEngine');
+const rateLimitMemory = require('./rateLimitMemory');
 
 const CHECK_INTERVAL_MS = 2 * 60 * 1000; // re-check every 2 minutes
-const MAX_COOLDOWN_MS = 60 * 60 * 1000; // cap account backoff at 60 minutes
+const MAX_COOLDOWN_MS = rateLimitMemory.MAX_BACKOFF_MS; // cap account backoff at 60 minutes
 
 let intervalHandle = null;
 
@@ -59,32 +60,16 @@ const state = {
   completedThisCycle: [],
 };
 
-// accountId -> epoch ms when its cool-down expires
-const cooldownUntil = new Map();
-// accountId -> consecutive rate-limit failure count (drives backoff growth)
-const cooldownFailCount = new Map();
+// Backoff Memory (Phase 39, requirement 9): cooldown state now lives on
+// ad_accounts.rate_limit_backoff_until/rate_limit_fail_count (see
+// rateLimitMemory.js), not an in-memory Map -- it survives a process
+// restart (a Railway redeploy, a crash) instead of being silently forgotten,
+// which previously meant an account throttled right before a restart got
+// hammered again immediately once the process came back up.
 
 function minutesSince(isoString) {
   if (!isoString) return Infinity;
   return (Date.now() - new Date(isoString).getTime()) / 60000;
-}
-
-function isCoolingDown(accountId) {
-  const until = cooldownUntil.get(accountId);
-  return typeof until === 'number' && until > Date.now();
-}
-
-function applyCooldown(accountId) {
-  const failCount = cooldownFailCount.get(accountId) || 0;
-  const backoffMs = Math.min(60_000 * Math.pow(2, failCount), MAX_COOLDOWN_MS);
-  cooldownUntil.set(accountId, Date.now() + backoffMs);
-  cooldownFailCount.set(accountId, failCount + 1);
-  return backoffMs;
-}
-
-function clearCooldown(accountId) {
-  cooldownUntil.delete(accountId);
-  cooldownFailCount.delete(accountId);
 }
 
 let cycleRunning = false;
@@ -113,10 +98,23 @@ async function runDueAccounts() {
 }
 
 async function runDueAccountsCycle() {
+  // Scheduler Priority (Phase 39, requirement 10):
+  //   1. Accounts never synchronized              (last_sync_completed_at IS NULL)
+  //   2 + 3. Accounts with active campaigns, oldest-synced (stalest) first
+  //   4. Remaining accounts, oldest-synced first
+  // A single ORDER BY tuple encodes all four: the never-synced tier sorts
+  // first outright, then within "has synced before" accounts with at least
+  // one ACTIVE campaign sort ahead of accounts with none, and staleness
+  // (last_sync_completed_at ASC) is the tiebreaker in every tier -- so
+  // "stale data" (tier 2) is naturally folded into whichever tier an
+  // account already falls into rather than needing a separate pass.
   const accounts = db.all(
     `SELECT * FROM ad_accounts
      WHERE auto_sync_enabled = 1 AND status = 'active' AND token_is_valid = 1
-     ORDER BY last_sync_completed_at IS NOT NULL, last_sync_completed_at ASC`
+     ORDER BY
+       last_sync_completed_at IS NOT NULL,
+       (SELECT COUNT(*) FROM campaigns c WHERE c.ad_account_id = ad_accounts.id AND c.status = 'active') = 0,
+       last_sync_completed_at ASC`
   );
 
   state.queue = accounts.map(a => a.id);
@@ -133,20 +131,23 @@ async function runDueAccountsCycle() {
     const dueAt = account.last_sync_completed_at || account.last_sync_started_at;
     if (minutesSince(dueAt) < interval) { state.completedThisCycle.push(account.id); continue; }
 
-    if (isCoolingDown(account.id)) { state.completedThisCycle.push(account.id); continue; }
+    // Backoff Memory (requirement 9): read straight from the row this cycle
+    // already fetched (rate_limit_backoff_until, persisted -- see
+    // rateLimitMemory.js) instead of an in-memory-only cooldown map.
+    if (rateLimitMemory.isInBackoff(account)) { state.completedThisCycle.push(account.id); continue; }
 
     try {
       await smartSyncEngine.runDueForAccount(account, 'scheduler', (entityType) => {
         state.currentEntityType = entityType;
       });
-      clearCooldown(account.id);
+      rateLimitMemory.clearBackoff(account.id);
     } catch (err) {
       state.lastError = err.message;
       state.lastErrorAt = new Date().toISOString();
       if (smartSyncEngine.isRateLimitError(err)) {
         state.retryCounter++;
-        const backoffMs = applyCooldown(account.id);
-        console.warn(`[AutoSync] Rate limited on account ${account.id} — cooling down ${Math.round(backoffMs / 1000)}s`);
+        const { backoffMs } = rateLimitMemory.recordRateLimitHit(account.id);
+        console.warn(`[AutoSync] Rate limited on account ${account.id} — cooling down ${Math.round(backoffMs / 1000)}s (Automatic Recovery: remaining accounts continue this cycle)`);
       } else {
         console.error(`[AutoSync] Sync failed for account ${account.id}:`, err.message);
       }
@@ -200,15 +201,15 @@ function getPerAccountStatus() {
   const accounts = db.all(
     `SELECT id, account_name, status, auto_sync_enabled, auto_sync_interval_minutes,
             last_sync_completed_at, last_sync_started_at, last_successful_sync_at,
-            last_failed_sync_at, last_sync_status, last_sync_error
+            last_failed_sync_at, last_sync_status, last_sync_error,
+            last_full_sync_at, rate_limit_backoff_until
      FROM ad_accounts
      ORDER BY account_name ASC`
   );
 
   return accounts.map(a => {
     const enabled = Boolean(a.auto_sync_enabled);
-    const cooldownUntilMs = cooldownUntil.get(a.id);
-    const inCooldown = typeof cooldownUntilMs === 'number' && cooldownUntilMs > Date.now();
+    const inCooldown = rateLimitMemory.isInBackoff(a);
     const queueIndex = state.queue.indexOf(a.id);
     const isCurrent = state.currentAccountId === a.id;
 
@@ -232,13 +233,14 @@ function getPerAccountStatus() {
       scheduler_state: schedulerState,
       last_successful_sync_at: a.last_successful_sync_at || null,
       last_failed_sync_at: a.last_failed_sync_at || null,
+      last_full_sync_at: a.last_full_sync_at || null,
       last_sync_status: a.last_sync_status || 'idle',
       last_sync_error: a.last_sync_error || null,
       next_scheduled_sync_at: nextScheduledAt,
       queue_position: queueIndex !== -1 ? queueIndex + 1 : null,
       queue_size: state.queue.length || null,
       current_sync_tier: isCurrent ? state.currentEntityType : null,
-      cooldown_resumes_at: inCooldown ? new Date(cooldownUntilMs).toISOString() : null,
+      cooldown_resumes_at: inCooldown ? a.rate_limit_backoff_until : null,
       freshness: smartSyncEngine.getEntityFreshness(a.id),
     };
   });
@@ -266,6 +268,17 @@ function getSchedulerStatus() {
     ? db.get('SELECT id, account_name FROM ad_accounts WHERE id = ?', [state.currentAccountId])
     : null;
 
+  // Backoff Memory (requirement 9): read the persisted per-account
+  // cooldowns straight from ad_accounts instead of an in-memory Map, so
+  // this snapshot is accurate even immediately after a process restart.
+  // Filtered in JS, not SQL -- rate_limit_backoff_until is a JS
+  // toISOString() string ("...T...Z") while SQLite's datetime('now') uses
+  // a different format ("... ..."), so a raw SQL string comparison between
+  // them is not reliably chronological.
+  const accountsInCooldown = db.all(
+    `SELECT id, rate_limit_backoff_until FROM ad_accounts WHERE rate_limit_backoff_until IS NOT NULL`
+  ).filter(a => new Date(a.rate_limit_backoff_until).getTime() > Date.now());
+
   const queueSize = state.queue.length;
   const queuePosition = state.currentIndex >= 0 ? state.currentIndex + 1 : 0;
   const completed = state.completedThisCycle.length;
@@ -292,11 +305,8 @@ function getSchedulerStatus() {
     last_failed_sync_at: lastFailed.t || null,
     average_sync_duration_ms: avgDuration.avg_ms ? Math.round(avgDuration.avg_ms) : null,
     meta_api: {
-      rate_limit_status: cooldownUntil.size > 0 && Array.from(cooldownUntil.values()).some(t => t > Date.now())
-        ? 'limited' : 'ok',
-      accounts_in_cooldown: Array.from(cooldownUntil.entries())
-        .filter(([, until]) => until > Date.now())
-        .map(([accountId, until]) => ({ account_id: accountId, resumes_at: new Date(until).toISOString() })),
+      rate_limit_status: accountsInCooldown.length > 0 ? 'limited' : 'ok',
+      accounts_in_cooldown: accountsInCooldown.map(a => ({ account_id: a.id, resumes_at: a.rate_limit_backoff_until })),
       retry_counter: state.retryCounter,
     },
     totals: {

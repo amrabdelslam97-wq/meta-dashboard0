@@ -25,6 +25,7 @@ const { runPhase19Migrations } = require('../../src/db/schema.phase19');
 const { runPhase20Migrations } = require('../../src/db/schema.phase20');
 const { runPhase21Migrations } = require('../../src/db/schema.phase21');
 const { runPhase22Migrations } = require('../../src/db/schema.phase22');
+const { runPhase31Migrations } = require('../../src/db/schema.phase31');
 const { seedIntelligenceConfig } = require('../../src/db/seedIntelligence');
 
 /**
@@ -61,6 +62,7 @@ async function createTestDb() {
   runPhase20Migrations();
   runPhase21Migrations();
   runPhase22Migrations();
+  runPhase31Migrations();
   seedIntelligenceConfig();
 
   return {
