@@ -563,10 +563,23 @@ async function fetchAdCreativeDetail(metaAdId, accessToken) {
       // Analytics Layer follow-on): Meta's real AdCreative field
       // identifying the underlying media asset, used to detect the same
       // creative reused across multiple ads (dedup for the Creative
-      // Library, Step 11/12) without a second Meta call. link_data.link /
-      // video_data.call_to_action.value.link are the real fields carrying
-      // the ad's destination URL -- neither is part of object_story_spec's
-      // top level, both must be requested explicitly like any nested field.
+      // Library, Step 11/12) without a second Meta call.
+      //
+      // body/title/link_url/call_to_action_type/object_story_id/
+      // effective_object_story_id -- Phase 40 fix: these are Meta's own
+      // FLAT, top-level AdCreative fields carrying primary text/headline/
+      // destination/CTA. Confirmed via live Graph API verification (real
+      // production ad accounts) that the majority of real-world creatives
+      // are boosted Page posts (object_type STATUS/PHOTO/SHARE) built from
+      // an existing Page post via object_story_id, NOT from an explicit
+      // object_story_spec -- for those, object_story_spec.link_data/
+      // video_data are absent entirely and Meta only ever returns the
+      // content on these flat fields. The previous version of this request
+      // never asked for them, so headline/primary_text/CTA/destination came
+      // back null for effectively every real creative, regardless of what
+      // Meta actually had. object_story_spec is still requested below as a
+      // secondary source for the (rarer) creatives that do carry an
+      // explicit spec, and to detect carousel (child_attachments).
       // asset_feed_spec is requested only to detect its PRESENCE -- Dynamic
       // Creative / Advantage+ creatives use asset_feed_spec instead of a
       // single object_story_spec. Requested as a plain field, not
@@ -576,8 +589,10 @@ async function fetchAdCreativeDetail(metaAdId, accessToken) {
       // plain field already returns its full object when present, or is
       // simply absent from the response otherwise -- exactly the
       // presence/absence signal this needs, no extra request shape required.
-      fields: 'creative{id,name,object_type,video_id,image_url,image_hash,thumbnail_url,' +
-              'object_story_spec{link_data{link,call_to_action{type,value}},video_data{call_to_action{type,value}}},' +
+      fields: 'creative{id,name,status,object_type,video_id,image_url,image_hash,thumbnail_url,' +
+              'body,title,link_url,call_to_action_type,object_story_id,effective_object_story_id,' +
+              'object_story_spec{link_data{link,message,name,description,picture,call_to_action{type,value},child_attachments{link,name,description,image_hash}},' +
+              'video_data{message,title,link_description,image_url,call_to_action{type,value}}},' +
               'asset_feed_spec}',
     },
     accessToken

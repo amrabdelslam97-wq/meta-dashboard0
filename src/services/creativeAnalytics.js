@@ -37,7 +37,18 @@ function pct(numerator, denominator) {
   return round((numerator / denominator) * 100, 2);
 }
 
-/** Extracts headline/body/description/CTA/destination/media-hash from either a link-based or video-based object_story_spec. Never fabricates a value Meta didn't actually return. */
+/**
+ * Extracts headline/body/description/CTA/destination/media-hash.
+ *
+ * Meta's flat, top-level AdCreative fields (body/title/link_url/
+ * call_to_action_type) are the PRIMARY source -- confirmed via live Graph
+ * API verification that most real creatives are boosted Page posts
+ * (object_type STATUS/PHOTO/SHARE, built from object_story_id) which never
+ * populate object_story_spec at all; Meta only ever returns their content on
+ * these flat fields. object_story_spec.link_data/video_data is checked as a
+ * fallback for creatives that do carry an explicit spec. Never fabricates a
+ * value Meta didn't actually return.
+ */
 function extractCreativeContent(creative) {
   const spec = creative?.object_story_spec || {};
   const linkData = spec.link_data;
@@ -50,17 +61,17 @@ function extractCreativeContent(creative) {
   else if (creative?.object_type) creativeType = String(creative.object_type).toLowerCase();
 
   const source = videoData || linkData || {};
-  const cta = source.call_to_action?.type || null;
-  // The destination URL lives under the CTA's `value.link` for a video ad,
-  // or directly on link_data.link for a link/image ad -- both real Meta
-  // AdCreative fields, never the same shape.
-  const destinationUrl = linkData?.link || source.call_to_action?.value?.link || null;
+  const cta = creative?.call_to_action_type || source.call_to_action?.type || null;
+  // The destination URL lives on the flat link_url field, under the CTA's
+  // `value.link` for a video ad, or directly on link_data.link for a
+  // link/image ad -- none of these are the same shape.
+  const destinationUrl = creative?.link_url || linkData?.link || source.call_to_action?.value?.link || null;
 
   return {
     creative_type: creativeType,
-    headline: linkData?.name || videoData?.title || null,
-    primary_text: linkData?.message || videoData?.message || null,
-    description: linkData?.description || null,
+    headline: creative?.title || linkData?.name || videoData?.title || null,
+    primary_text: creative?.body || linkData?.message || videoData?.message || null,
+    description: linkData?.description || videoData?.link_description || null,
     cta_type: cta,
     image_url: creative?.image_url || linkData?.picture || null,
     video_id: creative?.video_id || null,

@@ -251,22 +251,29 @@ function generateRecommendations(scored, fatigue, comparisonRole = {}) {
   const recs = [];
   const text = scored.text_analysis;
 
-  if (scored.score_hook < WEAK_THRESHOLD) {
+  // label === 'missing' means the underlying text field (primary_text/
+  // headline/cta_type) was never set/synced at all -- not that it performed
+  // poorly. A creative Meta never gave us a headline for (or that hasn't
+  // synced yet) must never be told to "rewrite" text that doesn't exist.
+  if (text.hook.label !== 'missing' && scored.score_hook < WEAK_THRESHOLD) {
     recs.push({ action: 'Rewrite Hook', reason: text.hook.evidence, priority: scored.score_hook < 25 ? 'high' : 'medium' });
   }
-  if (scored.score_headline < WEAK_THRESHOLD) {
+  if (text.headline.label !== 'missing' && scored.score_headline < WEAK_THRESHOLD) {
     recs.push({ action: text.headline.evidence.includes('too long') ? 'Shorten Copy' : 'Rewrite Hook', reason: text.headline.evidence, priority: 'medium' });
   }
   if (text.copy.length_category === 'long') {
     recs.push({ action: 'Shorten Copy', reason: text.copy.evidence, priority: 'medium' });
   }
-  if (scored.score_cta < WEAK_THRESHOLD) {
+  if (text.cta.label !== 'missing' && scored.score_cta < WEAK_THRESHOLD) {
     recs.push({ action: 'Improve CTA', reason: text.cta.evidence, priority: 'medium' });
   }
-  if (scored.score_trust < 40) {
+  // text.offer.label is 'missing' exactly when headline+primary_text+
+  // description are ALL empty -- the same "no text at all" condition that
+  // makes a trust-language search meaningless too.
+  if (text.offer.label !== 'missing' && scored.score_trust < 40) {
     recs.push({ action: 'Add Social Proof', reason: 'No trust or social-proof language detected in the copy.', priority: 'low' });
   }
-  if (scored.score_offer < WEAK_THRESHOLD) {
+  if (text.offer.label !== 'missing' && scored.score_offer < WEAK_THRESHOLD) {
     recs.push({ action: 'Use Better Offer', reason: text.offer.evidence, priority: 'medium' });
   }
   if (scored.score_visual < WEAK_THRESHOLD) {

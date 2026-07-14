@@ -3408,7 +3408,7 @@ function ciRenderDetails(d) {
     ['Retention', 'score_retention'], ['Brand', 'score_brand'], ['Fatigue', 'score_fatigue'],
   ];
 
-  const aiSections = ['hook', 'headline', 'copy', 'cta', 'offer', 'trust', 'psychology', 'mobile_friendliness', 'visual']
+  const aiSections = ['hook', 'headline', 'copy', 'cta', 'offer', 'trust', 'psychology', 'mobile_friendliness', 'visual', 'brand_consistency']
     .filter(k => ai[k])
     .map(k => `
       <div style="padding:10px 0;border-bottom:1px solid var(--border)">
@@ -3427,7 +3427,7 @@ function ciRenderDetails(d) {
       ? `<img src="${s.thumbnail_url}" style="width:80px;height:80px;border-radius:10px;object-fit:cover;flex-shrink:0">`
       : `<div style="width:80px;height:80px;border-radius:10px;background:var(--bg3);display:flex;align-items:center;justify-content:center;font-size:32px;flex-shrink:0">${ciCreativeTypeIcon(s.creative_type)}</div>`}
     <div style="flex:1;min-width:0">
-      <div style="font-size:18px;font-weight:700">${s.headline || 'Untitled creative'}</div>
+      <div style="font-size:18px;font-weight:700">${s.headline || s.ad_name || 'Untitled creative'}</div>
       <div style="font-size:12px;color:var(--muted);margin-top:4px">${s.primary_text || ''}</div>
       <div style="display:flex;gap:8px;margin-top:8px;flex-wrap:wrap">
         ${ciRoleBadge(isWinner ? 'winner' : (isWorst ? 'loser' : null))}
@@ -3436,10 +3436,10 @@ function ciRenderDetails(d) {
         <span class="chip ${s.creative_type || 'unknown'}">${s.creative_type || 'unknown'}</span>
       </div>
     </div>
-    ${scoreCircle(scores.score_overall)}
+    <div style="text-align:center">${scoreCircle(scores.score_overall)}<div style="font-size:10px;color:var(--muted);margin-top:4px">Creative Score</div></div>
   </div>
 
-  ${d.executive_summary ? `<div class="card" style="margin-bottom:20px"><div class="section-title" style="margin-bottom:8px">Executive Summary</div><div style="font-size:13px">${d.executive_summary}</div></div>` : ''}
+  ${d.executive_summary ? `<div class="card" style="margin-bottom:20px"><div class="section-title" style="margin-bottom:8px">Executive Summary</div><div style="font-size:13px">${d.executive_summary}</div><div style="font-size:11px;color:var(--muted);margin-top:6px">This score is the ad's overall Health Score (spend/CTR/CPA-based, from Ad Intelligence) -- a different metric from the Creative Score above (text/CTA/copy-based). See Rule Engine &amp; Governance below for the Health Score breakdown.</div></div>` : ''}
 
   <div class="grid grid-2" style="margin-bottom:20px">
     <div class="card">
@@ -3456,7 +3456,7 @@ function ciRenderDetails(d) {
     <div class="card">
       <div class="section-title" style="margin-bottom:8px">AI Analysis</div>
       ${aiSections || '<div class="empty">No AI analysis available.</div>'}
-      ${(ai.not_analyzed || []).length ? `<div style="font-size:11px;color:var(--muted);margin-top:8px">Not analyzed (no real data source for this system): ${ai.not_analyzed.join(', ')}</div>` : ''}
+      ${(ai.not_analyzed || []).length ? `<div style="font-size:11px;color:var(--muted);margin-top:8px">Not analyzed (no real data source for this system): ${ai.not_analyzed.map(n => n.dimension || n).join(', ')}</div>` : ''}
     </div>
   </div>
 
@@ -3505,7 +3505,7 @@ function ciRenderDetails(d) {
   ${intel && intel.analyzed !== false ? `
   <div class="card">
     <div class="section-title" style="margin-bottom:12px">Rule Engine &amp; Governance (reused from Ad Intelligence)</div>
-    <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px">${scoreCircle(intel.health_score, true)}<span class="badge ${intel.health_status || 'none'}">${fmtHealthStatus(intel.health_status)}</span></div>
+    <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px">${scoreCircle(intel.health_score, true)}<div><div style="font-size:10px;color:var(--muted)">Ad Health Score</div><span class="badge ${intel.health_status || 'none'}">${fmtHealthStatus(intel.health_status)}</span></div></div>
     ${(intel.framework_recommendations || []).length
       ? intel.framework_recommendations.map(f => `<div style="font-size:12px;padding:8px 0;border-bottom:1px solid var(--border)"><strong>${f.rule_name}</strong> (${f.rule_id}) — ${f.reason}</div>`).join('')
       : '<div class="empty">No Rule Engine findings fired for this ad right now.</div>'}

@@ -235,7 +235,7 @@ function getAdSetComparison(metaAdsetId, dateRange = defaultRange()) {
 async function getCreativeDetails(adIdOrMetaAdId, options = {}) {
   const { useMock = false } = options;
 
-  const ad = db.get(`SELECT id, meta_ad_id FROM ads WHERE id = ? OR meta_ad_id = ?`, [adIdOrMetaAdId, adIdOrMetaAdId]);
+  const ad = db.get(`SELECT id, meta_ad_id, name FROM ads WHERE id = ? OR meta_ad_id = ?`, [adIdOrMetaAdId, adIdOrMetaAdId]);
   if (!ad) return null;
 
   const latest = db.get(
@@ -311,7 +311,12 @@ async function getCreativeDetails(adIdOrMetaAdId, options = {}) {
   return {
     meta_ad_id: ad.meta_ad_id,
     analyzed: true,
-    snapshot: latest,
+    // ad_name is the ad's own Meta name (always set) -- a fallback for
+    // creatives where headline is genuinely absent (e.g. a boosted Page
+    // post has no headline field in Meta at all), matching the same
+    // headline-or-ad_name fallback the Creative Library card view already
+    // uses (searchCreativeLibrary's ads join).
+    snapshot: { ...latest, ad_name: ad.name },
     ai_analysis: aiAnalysis,
     scores,
     fatigue,
