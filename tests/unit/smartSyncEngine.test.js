@@ -305,12 +305,16 @@ describe('smartSyncEngine', () => {
         );
       }
 
-      // analyticsEngine's age_gender/country/region/placement/impression_device
-      // breakdown calls, plus fetchCampaignMetrics (budget distribution) --
-      // all return empty data; only proving the tier actually fires and
-      // completes cleanly, not exercising each domain's own parsing (already
-      // covered by analyticsEngine.test.js/budgetDistributionAnalytics.test.js).
-      nock(BASE).get(`/${VERSION}/camp_tier_analytics_1/insights`).query(true).times(20).reply(200, { data: [] });
+      // analyticsEngine's age_gender/country/region/comscore_market/placement/
+      // impression_device/device_platform breakdown calls (current+prior),
+      // budget distribution's fetchCampaignMetrics, and (Phase 40) customer
+      // journey's + attribution window comparison's own real
+      // fetchCampaignMetrics calls (2 + 6, current+prior each) -- all return
+      // empty data; only proving the tier actually fires and completes
+      // cleanly, not exercising each domain's own parsing (already covered
+      // by analyticsEngine.test.js/budgetDistributionAnalytics.test.js/
+      // customerJourneyEngine.test.js/attributionWindowEngine.test.js).
+      nock(BASE).get(`/${VERSION}/camp_tier_analytics_1/insights`).query(true).times(40).reply(200, { data: [] });
 
       const fullAccount = testDb.db.get('SELECT * FROM ad_accounts WHERE id = ?', [account.id]);
       const result = await smartSyncEngine.runDueForAccount(fullAccount, 'scheduler');

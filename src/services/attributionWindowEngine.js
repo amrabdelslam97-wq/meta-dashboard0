@@ -61,40 +61,34 @@ async function syncAccountAttributionWindows(account, dateRange = defaultRange()
   const now = new Date().toISOString();
 
   for (const campaign of campaigns) {
-    db.transaction(tx => {
-      for (const window of ATTRIBUTION_WINDOWS) {
-        try {
-          summary.apiCalls++;
-          // In production, this would call:
-          // const metrics = await fetchCampaignMetrics(campaign.meta_campaign_id, accessToken, dateRange.since, dateRange.until, window);
-          // For now, stub with db read.
+    for (const window of ATTRIBUTION_WINDOWS) {
+      try {
+        summary.apiCalls++;
+        // fetchCampaignMetrics's 4th param (attributionWindowDays) accepts
+        // this window's literal string directly -- see
+        // metricsFetcher.attributionWindowParams()'s Phase 40 extension.
+        const result = await fetchCampaignMetrics(campaign.meta_campaign_id, accessToken, dateRange, window);
+        const metrics = result.current;
 
-          const metrics = db.get(
-            `SELECT spend, results, purchase_value FROM campaign_metrics_cache
-             WHERE meta_campaign_id = ? LIMIT 1`,
-            [campaign.meta_campaign_id]
-          );
+        if (!metrics || !metrics.spend) continue;
 
-          if (!metrics || !metrics.spend) continue;
+        const cpa = metrics.results > 0 ? round(metrics.spend / metrics.results, 2) : null;
+        const roas = metrics.spend > 0 && metrics.purchase_value > 0 ? round(metrics.purchase_value / metrics.spend, 2) : null;
 
-          const cpa = metrics.results > 0 ? round(metrics.spend / metrics.results, 2) : null;
-          const roas = metrics.spend > 0 && metrics.purchase_value > 0 ? round(metrics.purchase_value / metrics.spend, 2) : null;
+        db.transaction(tx => tx.run(
+          `INSERT INTO attribution_window_comparison (id, ad_account_id, meta_campaign_id, attribution_window, date_since, date_until, spend, results, cpa, roas, calculated_at)
+           VALUES (?,?,?,?,?,?,?,?,?,?,?)
+           ON CONFLICT(ad_account_id, meta_campaign_id, attribution_window, date_since, date_until) DO UPDATE SET
+             spend = excluded.spend, results = excluded.results, cpa = excluded.cpa, roas = excluded.roas, calculated_at = excluded.calculated_at`,
+          [uuidv4(), account.id, campaign.meta_campaign_id, window, dateRange.since, dateRange.until, round(metrics.spend), round(metrics.results), cpa, roas, now]
+        ));
 
-          tx.run(
-            `INSERT INTO attribution_window_comparison (id, ad_account_id, meta_campaign_id, attribution_window, date_since, date_until, spend, results, cpa, roas, calculated_at)
-             VALUES (?,?,?,?,?,?,?,?,?,?,?)
-             ON CONFLICT(ad_account_id, meta_campaign_id, attribution_window, date_since, date_until) DO UPDATE SET
-               spend = excluded.spend, results = excluded.results, cpa = excluded.cpa, roas = excluded.roas, calculated_at = excluded.calculated_at`,
-            [uuidv4(), account.id, campaign.meta_campaign_id, window, dateRange.since, dateRange.until, round(metrics.spend), round(metrics.results), cpa, roas, now]
-          );
-
-          summary.campaignsProcessed++;
-        } catch (err) {
-          summary.errors.push({ campaign: campaign.meta_campaign_id, window, message: err.message });
-          if (isRateLimitError(err)) throw err;
-        }
+        summary.campaignsProcessed++;
+      } catch (err) {
+        summary.errors.push({ campaign: campaign.meta_campaign_id, window, message: err.message });
+        if (isRateLimitError(err)) throw err;
       }
-    });
+    }
   }
 
   return summary;

@@ -4,7 +4,7 @@
  * Journey Intelligence (Step 11)
  *
  * Meta's Insights API has NO language performance breakdown (confirmed --
- * `breakdowns` supports age/gender/region/country/dma/publisher_platform/
+ * `breakdowns` supports age/gender/region/country/comscore_market/publisher_platform/
  * platform_position/impression_device/device_platform, never language).
  * getLanguageTargeting() (below, untouched) exposes the honest fallback:
  * each ad set's configured target locales alongside that ad set's own

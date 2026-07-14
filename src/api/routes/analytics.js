@@ -54,7 +54,7 @@ router.get('/audience/:campaignId', asyncHandler(async (req, res) => {
 router.get('/geographic/:campaignId', asyncHandler(async (req, res) => {
   const metaCampaignId = loadCampaignMetaId(req.params.campaignId);
   if (!metaCampaignId) return res.status(404).json({ error: 'Campaign not found' });
-  const dimension = ['country', 'region', 'dma'].includes(req.query.dimension) ? req.query.dimension : 'country';
+  const dimension = ['country', 'region', 'comscore_market'].includes(req.query.dimension) ? req.query.dimension : 'country';
   const dateRange = resolveDateRange(req.query);
   return res.json({ data: analyticsEngine.getBreakdownAnalytics(metaCampaignId, dimension, dateRange) });
 }));

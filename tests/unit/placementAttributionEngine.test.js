@@ -71,7 +71,7 @@ describe('placementAttributionEngine', () => {
       expect(result.not_available_reason).toMatch(/city\/district\/neighborhood\/zip/);
     });
 
-    test('supports region and dma, falling back to country for an unrecognized level', () => {
+    test('supports region and comscore_market, falling back to country for an unrecognized level', () => {
       insertRow('region', 'Cairo Governorate', 50, 5);
       const region = engine.getGeographicAttribution('camp_place_1', 'region', range);
       expect(region.level).toBe('region');

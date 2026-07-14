@@ -40,10 +40,10 @@ function pctChange(current, prior) {
 
 /**
  * Get audience breakdown for a campaign across a specific dimension.
- * Dimensions: age, gender, age_gender, country, region, dma, placement, impression_device, device_platform
+ * Dimensions: age, gender, age_gender, country, region, comscore_market, placement, impression_device, device_platform
  */
 function getAudienceBreakdown(metaCampaignId, dimension = 'age_gender', dateRange = defaultRange()) {
-  const validDimensions = ['age', 'gender', 'age_gender', 'country', 'region', 'dma', 'placement', 'impression_device', 'device_platform'];
+  const validDimensions = ['age', 'gender', 'age_gender', 'country', 'region', 'comscore_market', 'placement', 'impression_device', 'device_platform'];
   const resolvedDimension = validDimensions.includes(dimension) ? dimension : 'age_gender';
 
   const rows = db.all(

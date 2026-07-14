@@ -18,7 +18,7 @@
  *
  * New tables:
  *   analytics_breakdown_history   — Audience/Geographic/Placement/Device
- *     analytics (age, gender, age_gender, country, region, dma,
+ *     analytics (age, gender, age_gender, country, region, comscore_market,
  *     publisher_platform, platform_position, placement, impression_device,
  *     device_platform). One row per (account, campaign, breakdown_type,
  *     breakdown_value, date range).

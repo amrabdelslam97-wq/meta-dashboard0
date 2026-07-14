@@ -27,8 +27,10 @@
  *                Meta call -- see deriveSingleDimension() below -- so
  *                Audience Analytics costs exactly 1 Meta call per period,
  *                not 2)
- *   Geographic:  country, region (2 Meta calls per period; dma omitted by
- *                default -- US-only, most accounts get zero rows for it)
+ *   Geographic:  country, region, comscore_market (3 Meta calls per period;
+ *                comscore_market is US-only, most accounts get zero rows
+ *                for it, but it's still requested rather than silently
+ *                capping geographic depth at country/region)
  *   Placement:   publisher_platform × platform_position combined (1 Meta
  *                call per period covers every Facebook/Instagram/Messenger/
  *                Audience Network × Feed/Stories/Reels/etc. combination
@@ -55,12 +57,15 @@ const MAX_CAMPAIGNS_PER_CYCLE = 10;
 const DOMAIN_META_BREAKDOWNS = {
   // audience's 'age' and 'gender' entries are DERIVED client-side from one
   // combined 'age_gender' Meta call -- see syncCampaignAnalytics().
-  // 'dma' added for Attribution & Customer Journey Intelligence's
+  // 'comscore_market' added for Attribution & Customer Journey Intelligence's
   // Geographic Attribution (Step 8) -- US-only, most accounts get zero rows,
   // but it's a real Meta breakdown already fully supported end-to-end
   // (breakdownsFetcher.VALID_BREAKDOWNS), so it's honest to include rather
-  // than silently cap geographic depth at country/region.
-  geographic: ['country', 'region', 'dma'],
+  // than silently cap geographic depth at country/region. Replaces the
+  // deprecated 'dma' breakdown -- Meta now rejects `dma` outright with
+  // "(#100) dma breakdown is no longer supported; ... use comscore_market
+  // breakdown", confirmed via a real production error response (Phase 40).
+  geographic: ['country', 'region', 'comscore_market'],
   placement: ['placement'],
   device: ['impression_device', 'device_platform'],
 };

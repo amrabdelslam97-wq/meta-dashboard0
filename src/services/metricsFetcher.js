@@ -487,10 +487,20 @@ function computeDeltas(current, prior) {
 // for the ad account, regardless of what was configured here. Matches the
 // same JSON-array-as-string convention Meta's API already uses for
 // time_range in this file.
+//
+// Accepts either a bare number of days (existing behavior -- resolves to
+// Meta's `Nd_click` window) or one of Meta's own literal window strings
+// (e.g. 'Nd_view'), for callers that need a specific window Meta itself
+// names rather than a click-window day count -- attributionWindowEngine.js's
+// Attribution Window Comparison (Step 5) needs '1d_view' specifically,
+// which no day-count can express.
 // ─────────────────────────────────────────────
 function attributionWindowParams(attributionWindowDays) {
   if (!attributionWindowDays) return {};
-  return { action_attribution_windows: JSON.stringify([`${attributionWindowDays}d_click`]) };
+  const window = /_click$|_view$/.test(String(attributionWindowDays))
+    ? attributionWindowDays
+    : `${attributionWindowDays}d_click`;
+  return { action_attribution_windows: JSON.stringify([window]) };
 }
 
 // ─────────────────────────────────────────────
@@ -533,7 +543,7 @@ async function fetchCampaignMetrics(metaCampaignId, accessToken, dateRange, attr
   // the genuinely-different case of Meta returning 200 with zero rows --
   // which normalizeInsights() already turns into `null` on its own,
   // without needing a catch block, so nothing is lost by removing this one.
-  const currentKey = cache.keyInsights(metaCampaignId, since, until);
+  const currentKey = cache.keyInsights(metaCampaignId, since, until, attributionWindowDays);
   let currentMetrics = cache.get(currentKey);
 
   if (!currentMetrics) {
@@ -543,7 +553,7 @@ async function fetchCampaignMetrics(metaCampaignId, accessToken, dateRange, attr
   }
 
   // ── Prior period ──
-  const priorKey = cache.keyPrior(metaCampaignId, prior.since, prior.until);
+  const priorKey = cache.keyPrior(metaCampaignId, prior.since, prior.until, attributionWindowDays);
   let priorMetrics = cache.get(priorKey);
 
   if (!priorMetrics) {

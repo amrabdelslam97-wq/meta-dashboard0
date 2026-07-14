@@ -11,14 +11,20 @@
  * answers "what happened at each stage" by fetching the real funnel metrics
  * from the same Insights data everything else uses.
  *
- * Funnel steps (where data comes from):
+ * Funnel steps (where data comes from -- all via metricsFetcher.fetchCampaignMetrics(),
+ * whose normalizeRow()/parseActions() already resolve each of these as
+ * independent buckets from one Insights call, no separate fetch per stage):
  *   1. Impressions (Meta.insights.impressions)
  *   2. Reach (Meta.insights.reach)
  *   3. Clicks (Meta.insights.clicks)
  *   4. Landing Page Views (Meta.insights.landing_page_views)
- *   5. Conversations (Meta.insights.results for messaging destinations)
- *   6. Purchases (Meta.insights.results for offsite_conversions.purchase)
- *   7. Revenue (Meta.insights.purchase_value or action_values.purchase)
+ *   5. Conversations (the campaign's resolved "results" bucket -- its real
+ *      optimization_goal's own action_type, e.g. actual conversation counts
+ *      for a Conversations-objective campaign)
+ *   6. Purchases (the separately-resolved "purchases" bucket -- Meta's
+ *      offsite_conversions.purchase-family action_types, independent of
+ *      whatever "results" resolved to)
+ *   7. Revenue (Meta.insights.purchase_value from action_values.purchase)
  */
 
 const { v4: uuidv4 } = require('uuid');
@@ -51,47 +57,45 @@ async function syncAccountCustomerJourney(account, dateRange = defaultRange()) {
 
   const now = new Date().toISOString();
 
-  db.transaction(tx => {
-    for (const campaign of campaigns) {
-      try {
-        summary.apiCalls++;
-        // Fetch campaign-level metrics (impressions, reach, clicks, landing_page_views, results, purchase_value)
-        const metrics = db.get(
-          `SELECT spend, impressions, reach, clicks, landing_page_views, results, purchase_value
-           FROM campaign_metrics_cache
-           WHERE meta_campaign_id = ? AND date_range = ?
-           ORDER BY cached_at DESC LIMIT 1`,
-          [campaign.meta_campaign_id, `${dateRange.since}_${dateRange.until}`]
-        );
+  for (const campaign of campaigns) {
+    try {
+      summary.apiCalls++;
+      // Real campaign-level metrics (impressions, reach, clicks,
+      // landing_page_views, results, purchases, purchase_value) -- the
+      // same fetchCampaignMetrics() every other engine in this codebase
+      // uses, not a second Meta call shape.
+      const result = await fetchCampaignMetrics(campaign.meta_campaign_id, accessToken, dateRange, account.attribution_window_days);
+      const metrics = result.current;
 
-        if (!metrics) continue;
+      if (!metrics) continue;
 
-        // Stub: in production, this would call metricsFetcher.fetchCampaignMetrics()
-        // and calculate real funnel stages per campaign per date range.
-        // For now, store the raw metrics as best-effort funnel.
+      // Conversations = the campaign's real resolved "results" bucket
+      // (matches this campaign's own optimization_goal -- e.g. actual
+      // conversation counts for a Conversations-objective campaign, per
+      // metricsFetcher.parseActions()'s goal-aware resolution). Purchases
+      // is a genuinely separate, independently-resolved bucket from the
+      // same Meta response, not a duplicate of results.
+      db.transaction(tx => tx.run(
+        `INSERT INTO customer_journey_funnel (id, ad_account_id, meta_campaign_id, date_since, date_until, impressions, reach, clicks, landing_page_views, conversations, purchases, revenue, calculated_at)
+         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
+         ON CONFLICT(ad_account_id, meta_campaign_id, date_since, date_until) DO UPDATE SET
+           impressions = excluded.impressions, reach = excluded.reach, clicks = excluded.clicks,
+           landing_page_views = excluded.landing_page_views, conversations = excluded.conversations,
+           purchases = excluded.purchases, revenue = excluded.revenue, calculated_at = excluded.calculated_at`,
+        [
+          uuidv4(), account.id, campaign.meta_campaign_id, dateRange.since, dateRange.until,
+          round(metrics.impressions), round(metrics.reach), round(metrics.clicks),
+          round(metrics.landing_page_views), round(metrics.results), round(metrics.purchases),
+          round(metrics.purchase_value), now
+        ]
+      ));
 
-        tx.run(
-          `INSERT INTO customer_journey_funnel (id, ad_account_id, meta_campaign_id, date_since, date_until, impressions, reach, clicks, landing_page_views, conversations, purchases, revenue, calculated_at)
-           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
-           ON CONFLICT(ad_account_id, meta_campaign_id, date_since, date_until) DO UPDATE SET
-             impressions = excluded.impressions, reach = excluded.reach, clicks = excluded.clicks,
-             landing_page_views = excluded.landing_page_views, conversations = excluded.conversations,
-             purchases = excluded.purchases, revenue = excluded.revenue, calculated_at = excluded.calculated_at`,
-          [
-            uuidv4(), account.id, campaign.meta_campaign_id, dateRange.since, dateRange.until,
-            round(metrics.impressions), round(metrics.reach), round(metrics.clicks),
-            round(metrics.landing_page_views), round(metrics.results), round(metrics.results),
-            round(metrics.purchase_value), now
-          ]
-        );
-
-        summary.campaignsProcessed++;
-      } catch (err) {
-        summary.errors.push({ campaign: campaign.meta_campaign_id, message: err.message });
-        if (isRateLimitError(err)) throw err;
-      }
+      summary.campaignsProcessed++;
+    } catch (err) {
+      summary.errors.push({ campaign: campaign.meta_campaign_id, message: err.message });
+      if (isRateLimitError(err)) throw err;
     }
-  });
+  }
 
   return summary;
 }

@@ -13,7 +13,11 @@
  *   gender             → male, female, unknown
  *   region             → state/governorate-level region name
  *   country            → ISO country code
- *   dma                → US Designated Market Area (US accounts only)
+ *   comscore_market    → US comScore market (replaces the deprecated `dma`
+ *                        breakdown -- Meta's Insights API now rejects `dma`
+ *                        outright with "(#100) dma breakdown is no longer
+ *                        supported; ... use comscore_market breakdown",
+ *                        confirmed via a real production error response)
  *   publisher_platform → facebook, instagram, messenger, audience_network
  *   platform_position  → feed, story, reels, video_feed, marketplace,
  *                         instream_video, right_hand_column, search, ... --
@@ -62,7 +66,7 @@ const BREAKDOWN_PARAM_MAP = {
   gender: 'gender',
   region: 'region',
   country: 'country',
-  dma: 'dma',
+  comscore_market: 'comscore_market',
   publisher_platform: 'publisher_platform',
   platform_position: 'platform_position',
   impression_device: 'impression_device',

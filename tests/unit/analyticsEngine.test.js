@@ -71,7 +71,7 @@ describe('analyticsEngine', () => {
   });
 
   describe('syncCampaignAnalyticsForRange', () => {
-    test('fetches age_gender (deriving age+gender), country, region, dma, placement, impression_device, and device_platform -- 7 Meta calls total, all persisted', async () => {
+    test('fetches age_gender (deriving age+gender), country, region, comscore_market, placement, impression_device, and device_platform -- 7 Meta calls total, all persisted', async () => {
       const account = insertAccount(testDb);
       insertCampaign(testDb, account.id, 'camp_analytics_1');
 
@@ -81,8 +81,8 @@ describe('analyticsEngine', () => {
         .reply(200, { data: [{ country: 'US', spend: '80', impressions: '800', reach: '400', clicks: '8', ctr: '1', cpm: '10', cpc: '1', frequency: '2' }] });
       nock(BASE).get(`/${VERSION}/camp_analytics_1/insights`).query(q => q.breakdowns === 'region')
         .reply(200, { data: [{ region: 'California', spend: '40', impressions: '400', reach: '200', clicks: '4', ctr: '1', cpm: '10', cpc: '1', frequency: '2' }] });
-      nock(BASE).get(`/${VERSION}/camp_analytics_1/insights`).query(q => q.breakdowns === 'dma')
-        .reply(200, { data: [{ dma: 'New York', spend: '15', impressions: '150', reach: '75', clicks: '2', ctr: '1', cpm: '10', cpc: '1', frequency: '2' }] });
+      nock(BASE).get(`/${VERSION}/camp_analytics_1/insights`).query(q => q.breakdowns === 'comscore_market')
+        .reply(200, { data: [{ comscore_market: 'New York', spend: '15', impressions: '150', reach: '75', clicks: '2', ctr: '1', cpm: '10', cpc: '1', frequency: '2' }] });
       nock(BASE).get(`/${VERSION}/camp_analytics_1/insights`).query(q => q.breakdowns === 'publisher_platform,platform_position')
         .reply(200, { data: [{ publisher_platform: 'facebook', platform_position: 'feed', spend: '60', impressions: '600', reach: '300', clicks: '6', ctr: '1', cpm: '10', cpc: '1', frequency: '2' }] });
       nock(BASE).get(`/${VERSION}/camp_analytics_1/insights`).query(q => q.breakdowns === 'impression_device')
@@ -100,7 +100,7 @@ describe('analyticsEngine', () => {
         `SELECT DISTINCT breakdown_type FROM analytics_breakdown_history WHERE entity_meta_id = ? ORDER BY breakdown_type`,
         ['camp_analytics_1']
       ).map(r => r.breakdown_type);
-      expect(types.sort()).toEqual(['age', 'age_gender', 'country', 'device_platform', 'dma', 'gender', 'impression_device', 'placement', 'region']);
+      expect(types.sort()).toEqual(['age', 'age_gender', 'comscore_market', 'country', 'device_platform', 'gender', 'impression_device', 'placement', 'region']);
 
       const country = testDb.db.get(
         `SELECT * FROM analytics_breakdown_history WHERE entity_meta_id = ? AND breakdown_type = 'country'`,

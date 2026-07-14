@@ -5,8 +5,8 @@
  * Thin read-side wrapper over analyticsEngine.getBreakdownAnalytics() --
  * reuses the exact same persisted analytics_breakdown_history rows (no new
  * Meta calls, no new sync mechanism) for the 'placement', 'country',
- * 'region', 'dma', 'impression_device', and 'device_platform' breakdown
- * types, adding the attribution-specific fields these three steps need on
+ * 'region', 'comscore_market', 'impression_device', and 'device_platform'
+ * breakdown types, adding the attribution-specific fields these three steps need on
  * top: ROAS (decoded from the row's own actions_json -- see
  * breakdownsFetcher.js's action_values/purchase_roas fields, added
  * alongside this module), Quality Score (a relative cost-efficiency proxy,
@@ -18,8 +18,8 @@
  * two different metrics), and a deterministic Recommendation.
  *
  * Coverage note (never fabricate what Meta doesn't expose): Geographic
- * Attribution stops at country/region/dma -- Meta's Insights `breakdowns`
- * param has no city/district/neighborhood/zip dimension (confirmed in
+ * Attribution stops at country/region/comscore_market -- Meta's Insights
+ * `breakdowns` param has no city/district/neighborhood/zip dimension (confirmed in
  * breakdownsFetcher.js's own header). Placement Attribution covers every
  * publisher_platform × platform_position combination Meta actually reports
  * for this account (Facebook Feed/Stories/Reels, Instagram Feed/Stories/
@@ -103,11 +103,11 @@ function getPlacementAttribution(metaCampaignId, dateRange = defaultRange()) {
 
 /**
  * @param {string} metaCampaignId
- * @param {string} [level] - 'country'|'region'|'dma', default 'country'
+ * @param {string} [level] - 'country'|'region'|'comscore_market', default 'country'
  * @param {{since,until}} [dateRange]
  */
 function getGeographicAttribution(metaCampaignId, level = 'country', dateRange = defaultRange()) {
-  const validLevels = ['country', 'region', 'dma'];
+  const validLevels = ['country', 'region', 'comscore_market'];
   const resolvedLevel = validLevels.includes(level) ? level : 'country';
   const result = getBreakdownAnalytics(metaCampaignId, resolvedLevel, dateRange);
   return {
@@ -115,7 +115,7 @@ function getGeographicAttribution(metaCampaignId, level = 'country', dateRange =
     current: enrichForAttribution(result.current),
     level: resolvedLevel,
     not_available_levels: ['city', 'district', 'neighborhood', 'zip'],
-    not_available_reason: 'Meta\'s Ads Insights API exposes no city/district/neighborhood/zip breakdown for any entity grain -- country, region, and dma (US-only) are the deepest real geographic breakdowns it supports.',
+    not_available_reason: 'Meta\'s Ads Insights API exposes no city/district/neighborhood/zip breakdown for any entity grain -- country, region, and comscore_market (US-only) are the deepest real geographic breakdowns it supports.',
   };
 }
 

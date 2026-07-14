@@ -100,12 +100,19 @@ function flush() {
 // Key builders — ensures consistent key format
 // ─────────────────────────────────────────────
 
-function keyInsights(metaCampaignId, since, until) {
-  return `${metaCampaignId}:insights:${since}:${until}`;
+// attributionWindow is optional -- appended only when the caller passes one,
+// so every existing call site (single attribution window per process
+// lifetime) keeps its exact prior key shape. Needed once a caller fetches
+// the SAME campaign/date range under MULTIPLE different attribution windows
+// in the same cache TTL (attributionWindowEngine.js's Attribution Window
+// Comparison, Phase 40) -- without this, the second and third windows would
+// silently return the first window's cached result instead of their own.
+function keyInsights(metaCampaignId, since, until, attributionWindow) {
+  return `${metaCampaignId}:insights:${since}:${until}${attributionWindow ? `:${attributionWindow}` : ''}`;
 }
 
-function keyPrior(metaCampaignId, since, until) {
-  return `${metaCampaignId}:prior:${since}:${until}`;
+function keyPrior(metaCampaignId, since, until, attributionWindow) {
+  return `${metaCampaignId}:prior:${since}:${until}${attributionWindow ? `:${attributionWindow}` : ''}`;
 }
 
 function keyTrend(metaCampaignId, since, until) {
