@@ -114,13 +114,32 @@ function computeCreativeScore(creative, fatigueResult = null) {
  *   with real spend to detect a trend; fewer returns status:'insufficient_data'.
  */
 function detectFatigue(historyRows) {
-  const eligible = (historyRows || []).filter(r => (r.spend || 0) >= MIN_SPEND_FOR_FATIGUE);
+  const rows = historyRows || [];
+  const eligible = rows.filter(r => (r.spend || 0) >= MIN_SPEND_FOR_FATIGUE);
   if (eligible.length < 2) {
+    // Phase 41 — never hide *why* it's insufficient behind a generic label:
+    // show each real snapshot's actual spend against the real threshold
+    // that gates it, and which real signals (frequency/CTR/CPC/CPM/
+    // conversion-rate/reach trend) will be evaluated once there's enough
+    // history -- the exact same signals detectFatigue() itself checks
+    // below, not an invented separate threshold set.
+    const shortfall = MIN_SPEND_FOR_FATIGUE * 2 - eligible.reduce((s, r) => s + (r.spend || 0), 0);
+    const snapshotDetail = rows.length
+      ? rows.map(r => `${r.date_since || '?'}: $${round(r.spend || 0)} spend${(r.spend || 0) >= MIN_SPEND_FOR_FATIGUE ? ' (counts)' : ` (below $${MIN_SPEND_FOR_FATIGUE} threshold)`}`).join('; ')
+      : 'No snapshots synced yet for this ad.';
     return {
       status: 'insufficient_data',
       recommendation: null,
       signals: [],
-      evidence: `Only ${eligible.length} snapshot(s) with >= ${MIN_SPEND_FOR_FATIGUE} spend -- need at least 2 to detect a trend.`,
+      evidence: `Need at least 2 snapshots with >= $${MIN_SPEND_FOR_FATIGUE} spend each to detect a trend -- currently have ${eligible.length}. Snapshots so far: ${snapshotDetail}.`,
+      requirements: {
+        min_qualifying_snapshots: 2,
+        min_spend_per_snapshot: MIN_SPEND_FOR_FATIGUE,
+        qualifying_snapshots_so_far: eligible.length,
+        total_snapshots_so_far: rows.length,
+        spend_still_needed: eligible.length >= 2 ? 0 : round(Math.max(0, shortfall)),
+        signals_evaluated_once_eligible: ['frequency (rising)', 'CTR (declining)', 'CPC (rising)', 'CPM (rising)', 'conversion rate (declining)', 'reach vs. frequency (audience saturation)'],
+      },
     };
   }
 
@@ -241,6 +260,35 @@ function compareCreativesInAdSet(creatives) {
 
 const WEAK_THRESHOLD = 50;
 
+// Phase 41, Step 12 — Recommendation Quality: maps each of analyzeHook()'s
+// `missing` signal keys to a short, concrete phrase usable in a specific,
+// actionable sentence (e.g. "Start with a question or a clear customer
+// benefit...") instead of the bare action label "Rewrite Hook". Priority
+// order (most persuasive-impact first, per general direct-response
+// copywriting practice) decides which 1-2 missing signals get named when
+// several are absent at once -- naming all 10+ possible categories would
+// be noise, not guidance.
+const HOOK_GUIDANCE_PRIORITY = [
+  ['question', 'a question'],
+  ['curiosity', 'a curiosity trigger (e.g. a surprising fact, or "تخيل"/"imagine")'],
+  ['benefit', 'a clear customer benefit'],
+  ['pain_point', 'the specific problem the reader feels'],
+  ['emotional_opening', 'an emotional opening statement'],
+  ['urgency', 'a sense of urgency'],
+  ['emoji', 'a scroll-stopping emoji'],
+  ['number', 'a number or statistic'],
+  ['offer', 'the concrete offer'],
+];
+
+/** Builds one specific, actionable sentence from analyzeHook()'s `missing` list -- falls back to the plain evidence sentence if `missing` isn't available (e.g. an older persisted snapshot from before this field existed). */
+function buildHookGuidance(hookAnalysis) {
+  if (!Array.isArray(hookAnalysis.missing) || hookAnalysis.missing.length === 0) return hookAnalysis.evidence;
+  const missingKeys = new Set(hookAnalysis.missing.map(m => m.key));
+  const suggestions = HOOK_GUIDANCE_PRIORITY.filter(([key]) => missingKeys.has(key)).slice(0, 2).map(([, phrase]) => phrase);
+  if (suggestions.length === 0) return hookAnalysis.evidence;
+  return `Start with ${suggestions.join(' or ')} in the opening line to increase curiosity and stop the scroll.`;
+}
+
 /**
  * @param {object} scored - computeCreativeScore() output
  * @param {object} fatigue - detectFatigue() output
@@ -256,25 +304,32 @@ function generateRecommendations(scored, fatigue, comparisonRole = {}) {
   // poorly. A creative Meta never gave us a headline for (or that hasn't
   // synced yet) must never be told to "rewrite" text that doesn't exist.
   if (text.hook.label !== 'missing' && scored.score_hook < WEAK_THRESHOLD) {
-    recs.push({ action: 'Rewrite Hook', reason: text.hook.evidence, priority: scored.score_hook < 25 ? 'high' : 'medium' });
+    recs.push({ action: 'Rewrite Hook', reason: buildHookGuidance(text.hook), priority: scored.score_hook < 25 ? 'high' : 'medium' });
   }
   if (text.headline.label !== 'missing' && scored.score_headline < WEAK_THRESHOLD) {
-    recs.push({ action: text.headline.evidence.includes('too long') ? 'Shorten Copy' : 'Rewrite Hook', reason: text.headline.evidence, priority: 'medium' });
+    const isTooLong = text.headline.evidence.includes('too long');
+    recs.push({
+      action: isTooLong ? 'Shorten Copy' : 'Rewrite Hook',
+      reason: isTooLong
+        ? `Trim the headline to 3-8 words -- ${text.headline.evidence}`
+        : `Rework the headline to 3-8 words with a concrete offer or benefit -- ${text.headline.evidence}`,
+      priority: 'medium',
+    });
   }
   if (text.copy.length_category === 'long') {
     recs.push({ action: 'Shorten Copy', reason: text.copy.evidence, priority: 'medium' });
   }
   if (text.cta.label !== 'missing' && scored.score_cta < WEAK_THRESHOLD) {
-    recs.push({ action: 'Improve CTA', reason: text.cta.evidence, priority: 'medium' });
+    recs.push({ action: 'Improve CTA', reason: `Use a specific, committing call-to-action (e.g. "Order Now"/"اطلب الآن", "Book Now"/"احجز الآن") instead of a vague one -- ${text.cta.evidence}`, priority: 'medium' });
   }
   // text.offer.label is 'missing' exactly when headline+primary_text+
   // description are ALL empty -- the same "no text at all" condition that
   // makes a trust-language search meaningless too.
   if (text.offer.label !== 'missing' && scored.score_trust < 40) {
-    recs.push({ action: 'Add Social Proof', reason: 'No trust or social-proof language detected in the copy.', priority: 'low' });
+    recs.push({ action: 'Add Social Proof', reason: 'Add a real customer review, testimonial count, or guarantee ("ضمان"/"guarantee") -- no trust or social-proof language was detected in the copy.', priority: 'low' });
   }
   if (text.offer.label !== 'missing' && scored.score_offer < WEAK_THRESHOLD) {
-    recs.push({ action: 'Use Better Offer', reason: text.offer.evidence, priority: 'medium' });
+    recs.push({ action: 'Use Better Offer', reason: `State a concrete price, discount, or free-value offer (e.g. "خصم 20%"/"20% off") -- ${text.offer.evidence}`, priority: 'medium' });
   }
   if (scored.score_visual < WEAK_THRESHOLD) {
     recs.push({ action: 'Replace Thumbnail', reason: `${text.visual.evidence} (metadata-based signal, not a pixel-content judgment)`, priority: 'low' });
@@ -297,7 +352,18 @@ function generateRecommendations(scored, fatigue, comparisonRole = {}) {
     recs.push({ action: 'Duplicate Winner', reason: 'This creative is the top performer in its ad set -- duplicate it to test new variations while it is still working.', priority: 'medium' });
   }
   if (comparisonRole.isWorst) {
-    recs.push({ action: 'Pause Loser', reason: 'This creative is the weakest performer in its ad set.', priority: 'medium' });
+    // Phase 41, Step 11 (consistency): "worst in its ad set" is a RELATIVE
+    // comparison, while "Scale" above is an ABSOLUTE verdict on this same
+    // creative's own health. An ad can be both -- the weakest of three
+    // strong performers -- in which case flatly recommending "Pause Loser"
+    // would directly contradict "Scale" for the same ad in the same
+    // response. Reword rather than silently drop either signal.
+    const healthyEnoughToScale = fatigue && fatigue.status === 'none' && scored.score_overall >= 70;
+    if (healthyEnoughToScale) {
+      recs.push({ action: 'Reallocate Budget', reason: 'This creative is the weakest performer in its ad set, but is independently healthy (no fatigue signals, strong creative score) -- consider shifting incremental budget toward its stronger sibling rather than pausing it outright.', priority: 'low' });
+    } else {
+      recs.push({ action: 'Pause Loser', reason: 'This creative is the weakest performer in its ad set.', priority: 'medium' });
+    }
   }
 
   if ((scored.raw_spend ?? 0) < MIN_SPEND_FOR_FATIGUE) {

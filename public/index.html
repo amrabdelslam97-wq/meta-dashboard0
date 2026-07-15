@@ -3408,6 +3408,28 @@ function ciRenderDetails(d) {
     ['Retention', 'score_retention'], ['Brand', 'score_brand'], ['Fatigue', 'score_fatigue'],
   ];
 
+  // Phase 41 — Explainability: every score explains itself as a detected/
+  // missing checklist (✔/✖) instead of an opaque number, wherever the
+  // analyzer returns structured signal data (hook/headline's own detected/
+  // missing arrays, or psychology's dimensions object) -- falls back to the
+  // plain evidence sentence for dimensions that only ever return one
+  // (cta/offer/trust/copy/mobile_friendliness/visual/brand_consistency),
+  // never fabricating a checklist those dimensions don't actually have.
+  function ciChecklist(dim) {
+    if (Array.isArray(dim.detected) && Array.isArray(dim.missing) && (dim.detected.length || dim.missing.length)) {
+      const yes = dim.detected.map(d => `<div style="color:var(--good,#2e7d32)">✔ ${d.label}</div>`).join('');
+      const no = dim.missing.map(m => `<div style="color:var(--muted)">✖ ${m.label}</div>`).join('');
+      return `<div style="font-size:12px;margin-top:4px;display:grid;grid-template-columns:1fr 1fr;gap:2px 12px">${yes}${no}</div>`;
+    }
+    if (dim.dimensions && typeof dim.dimensions === 'object') {
+      const items = Object.entries(dim.dimensions).map(([key, active]) =>
+        `<div style="color:${active ? 'var(--good,#2e7d32)' : 'var(--muted)'}">${active ? '✔' : '✖'} ${key.replace(/_/g, ' ')}</div>`
+      ).join('');
+      return `<div style="font-size:12px;margin-top:4px;display:grid;grid-template-columns:1fr 1fr;gap:2px 12px">${items}</div>`;
+    }
+    return `<div style="font-size:12px;color:var(--muted);margin-top:4px">${dim.evidence || dim.label || '—'}</div>`;
+  }
+
   const aiSections = ['hook', 'headline', 'copy', 'cta', 'offer', 'trust', 'psychology', 'mobile_friendliness', 'visual', 'brand_consistency']
     .filter(k => ai[k])
     .map(k => `
@@ -3416,7 +3438,7 @@ function ciRenderDetails(d) {
           <div style="font-size:12px;font-weight:600;text-transform:capitalize">${k.replace(/_/g, ' ')}</div>
           ${ai[k].score != null ? `<span class="badge ${scoreClass(ai[k].score)}">${ai[k].score}</span>` : ''}
         </div>
-        <div style="font-size:12px;color:var(--muted);margin-top:4px">${ai[k].evidence || ai[k].label || '—'}</div>
+        ${ciChecklist(ai[k])}
       </div>`).join('');
 
   return `
@@ -3435,6 +3457,8 @@ function ciRenderDetails(d) {
         ${fatigue.recommendation ? `<span class="badge info">Suggested: ${fatigue.recommendation}</span>` : ''}
         <span class="chip ${s.creative_type || 'unknown'}">${s.creative_type || 'unknown'}</span>
       </div>
+      ${fatigue.evidence ? `<div style="font-size:11px;color:var(--muted);margin-top:6px">${fatigue.evidence}</div>` : ''}
+      ${fatigue.requirements ? `<div style="font-size:11px;color:var(--muted);margin-top:4px">Will evaluate once eligible: ${fatigue.requirements.signals_evaluated_once_eligible.join(', ')}.</div>` : ''}
     </div>
     <div style="text-align:center">${scoreCircle(scores.score_overall)}<div style="font-size:10px;color:var(--muted);margin-top:4px">Creative Score</div></div>
   </div>
@@ -3446,8 +3470,13 @@ function ciRenderDetails(d) {
       <div class="section-title" style="margin-bottom:16px">Creative Score Breakdown</div>
       ${scoreDims.map(([label, key]) => {
         const v = scores[key];
+        // Brand has no data source anywhere in this system (no brand
+        // guideline reference data to compare against) -- an honest,
+        // permanent "not configured" state, not a failed/missing
+        // measurement, so it reads differently from a plain "N/A".
+        const valueText = v != null ? v : (key === 'score_brand' ? '<span title="No brand guideline data (approved colors/fonts/logo usage) is configured for this account, so a Brand score can\'t be computed -- this is not a data or sync error." style="cursor:help;border-bottom:1px dotted var(--muted)">Brand Guidelines Not Configured</span>' : 'N/A');
         return `<div style="margin-bottom:10px">
-          <div style="display:flex;justify-content:space-between;font-size:11px;color:var(--muted);margin-bottom:3px"><span>${label}</span><span>${v != null ? v : 'N/A'}</span></div>
+          <div style="display:flex;justify-content:space-between;font-size:11px;color:var(--muted);margin-bottom:3px"><span>${label}</span><span>${valueText}</span></div>
           <div style="height:6px;background:var(--bg3);border-radius:3px;overflow:hidden"><div style="height:100%;width:${v != null ? v : 0}%;background:var(--accent2)"></div></div>
         </div>`;
       }).join('')}
@@ -3456,7 +3485,7 @@ function ciRenderDetails(d) {
     <div class="card">
       <div class="section-title" style="margin-bottom:8px">AI Analysis</div>
       ${aiSections || '<div class="empty">No AI analysis available.</div>'}
-      ${(ai.not_analyzed || []).length ? `<div style="font-size:11px;color:var(--muted);margin-top:8px">Not analyzed (no real data source for this system): ${ai.not_analyzed.map(n => n.dimension || n).join(', ')}</div>` : ''}
+      ${(ai.not_analyzed || []).length ? `<div style="font-size:11px;color:var(--muted);margin-top:8px" title="${(ai.not_analyzed[0] && ai.not_analyzed[0].reason) || ''}">Requires Image Analysis Engine (not available in this system): ${ai.not_analyzed.map(n => n.dimension || n).join(', ')}</div>` : ''}
     </div>
   </div>
 

@@ -171,4 +171,90 @@ describe('creativeTextAnalysis', () => {
       expect(result.headline.label).toBe('missing');
     });
   });
+
+  // Phase 41 — Arabic NLP. Real production creatives are overwhelmingly
+  // Arabic-language (confirmed via Phase 40/41 runtime audit against real
+  // ad accounts); before this phase every one of them scored 0/absent on
+  // trust and psychology and "no hook signals detected" regardless of
+  // actual content. These lock in representative Arabic phrases from each
+  // category so a future refactor can't silently regress back to that.
+  describe('Arabic detection (Phase 41)', () => {
+    test('analyzeHook detects an Arabic question, emoji-led opening, and curiosity trigger', () => {
+      const result = cta.analyzeHook('🎉 مستمرين بدعمكم .. آراء عملائنا بعد تجربة منتجاتنا!');
+      expect(result.detected.some(d => d.key === 'emoji')).toBe(true);
+      expect(result.score).toBeGreaterThan(0);
+
+      const question = cta.analyzeHook('ليه بنعمل حجامة؟');
+      expect(question.detected.some(d => d.key === 'question')).toBe(true);
+      expect(question.detected.some(d => d.key === 'hook_trigger')).toBe(true);
+    });
+
+    test('analyzeTrust detects real Arabic trust and social-proof vocabulary', () => {
+      const result = cta.analyzeTrust('منتجاتنا مضمونة 100% وموثقة، وهذا رأي آراء عملائنا بعد التجربة');
+      expect(result.label).toBe('present');
+      expect(result.social_proof).toBe(true);
+    });
+
+    test('analyzeTrust stays absent for ordinary Arabic copy with no trust language', () => {
+      const result = cta.analyzeTrust('عندنا بيتزا ايطالي وكريبات وحواوشي في مكان واحد');
+      expect(result.label).toBe('absent');
+    });
+
+    test('analyzeOffer detects Arabic offer signals (خصم/مجاناً/عرض)', () => {
+      expect(cta.analyzeOffer('خصم 20% على كل المنتجات', null, null).label).toBe('clear');
+      expect(cta.analyzeOffer('احصل على استشارة مجاناً اليوم', null, null).label).toBe('clear');
+    });
+
+    test('analyzePsychology detects urgency, curiosity, and pain-point in Arabic', () => {
+      const result = cta.analyzePsychology('لا تفوتوا الفرصة! ليه طفلك تعاني من التعب؟ فوائد كتير هتستفيد منها');
+      expect(result.dimensions.urgency).toBe(true);
+      expect(result.dimensions.curiosity).toBe(true);
+      expect(result.dimensions.pain_point).toBe(true);
+      expect(result.dimensions.benefit).toBe(true);
+      expect(result.score).toBeGreaterThan(40);
+    });
+
+    test('analyzePsychology detects scarcity, authority, and guarantee -- dimensions the pre-Phase-41 system never had', () => {
+      const result = cta.analyzePsychology('الأماكن محدودة، مع دكتور متخصص، وضمان استرجاع الأموال');
+      expect(result.dimensions.scarcity).toBe(true);
+      expect(result.dimensions.authority).toBe(true);
+      expect(result.dimensions.guarantee).toBe(true);
+    });
+
+    test('analyzeCta differentiates embedded Arabic CTA phrase strength (Phase 6)', () => {
+      const weak = cta.analyzeCta(null, 'للاستفسار راسلنا');
+      const medium = cta.analyzeCta(null, 'احجز موعدك');
+      const strong = cta.analyzeCta(null, 'اطلب الآن قبل نفاد الكمية');
+      expect(weak.score).toBeLessThan(medium.score);
+      expect(medium.score).toBeLessThan(strong.score);
+    });
+
+    test('analyzeCta classifies Meta messaging CTA types (WhatsApp/Messenger) as real, action-oriented CTAs, not generic/unclassified', () => {
+      const whatsapp = cta.analyzeCta('WHATSAPP_MESSAGE');
+      expect(whatsapp.label).not.toBe('missing');
+      expect(whatsapp.score).toBeGreaterThanOrEqual(60);
+
+      const withStrongCopy = cta.analyzeCta('WHATSAPP_MESSAGE', 'اطلب الآن عبر واتساب');
+      expect(withStrongCopy.label).toBe('strong');
+    });
+
+    test('spelling variants (diacritics, alef/teh-marbuta forms) still match via normalization', () => {
+      // "مجاناً" (with tanween diacritic) vs "مجانا" (plain) -- same word, real
+      // casual-Arabic spelling variance that must not defeat matching.
+      expect(cta.analyzeOffer('احصل عليه مجاناً', null, null).label).toBe('clear');
+      expect(cta.analyzeOffer('احصل عليه مجانا', null, null).label).toBe('clear');
+    });
+
+    test('a real Arabic creative with genuine signals scores meaningfully higher than the pre-Phase-41 near-zero baseline', () => {
+      const result = cta.analyzeCreative({
+        headline: null,
+        primary_text: '🎉 مستمرين بدعمكم .. آراء عملائنا بعد تجربة منتجاتنا! 🎉\nأفضل المنتجات الطبيعية 100% ومضمونة. لا تفوتوا الفرصة!',
+        description: null,
+        cta_type: 'WHATSAPP_MESSAGE',
+      });
+      expect(result.trust.label).toBe('present');
+      expect(result.psychology.score).toBeGreaterThan(0);
+      expect(result.hook.score).toBeGreaterThan(0);
+    });
+  });
 });
