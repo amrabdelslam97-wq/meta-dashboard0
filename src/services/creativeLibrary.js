@@ -14,7 +14,7 @@
 
 const db = require('../db/database');
 const { defaultRange } = require('./dateRangeHelper');
-const { compareCreativesInAdSet, generateRecommendations } = require('./creativeIntelligenceEngine');
+const { compareCreativesInAdSet, generateRecommendations, detectFatigue } = require('./creativeIntelligenceEngine');
 const { buildExecutiveSummary } = require('./executiveSummaryEngine');
 const { runAdIntelligence } = require('./adIntelligence');
 
@@ -281,7 +281,16 @@ async function getCreativeDetails(adIdOrMetaAdId, options = {}) {
     score_retention: latest.score_retention, score_brand: latest.score_brand,
     score_fatigue: latest.score_fatigue, score_overall: latest.score_overall,
   };
-  const fatigue = { status: latest.fatigue_status, recommendation: latest.fatigue_recommendation };
+  // Phase 41 (Step 8): recomputed LIVE from this ad's real snapshot history
+  // (timeline.snapshots, already fetched above -- no extra query) rather
+  // than trusting the two bare fatigue_status/fatigue_recommendation DB
+  // columns. Those columns never carried the real evidence/requirements
+  // detectFatigue() computes -- it was calculated once at sync time and
+  // silently discarded, so "insufficient_data" always read as an
+  // unexplained label with no way to show what's actually missing.
+  // Recomputing live also means older, already-persisted snapshots get the
+  // richer explanation immediately, without waiting for a re-sync.
+  const fatigue = detectFatigue(timeline.snapshots || []);
   // generateRecommendations() reads scored.text_analysis (computeCreativeScore()'s
   // own output shape) -- ai_analysis_json IS that exact object, persisted
   // verbatim by creativeAnalytics.js at sync time. A snapshot synced before

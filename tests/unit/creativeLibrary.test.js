@@ -190,14 +190,37 @@ describe('creativeLibrary', () => {
 
     test('merges snapshot, scores, fatigue, timeline, comparison, recommendations, and the reused ad-grain intelligence pipeline', async () => {
       const adId = insertAd('ad_details_full', 'Details Ad');
-      insertScoredSnapshot({ metaAdId: 'ad_details_full', since: '2026-03-01', until: '2026-03-07', fatigueStatus: 'severe', fatigueRecommendation: 'pause' });
+      // Phase 41: fatigue is now recomputed LIVE from real historical
+      // snapshots (creativeLibrary.js's getCreativeDetails()), not trusted
+      // from a hand-set fatigue_status/fatigue_recommendation column pair --
+      // a genuine "severe" verdict requires two real snapshots showing a
+      // real worsening trend (>=4 of: rising frequency, falling CTR, rising
+      // CPC/CPM, falling conversion rate), the same signals
+      // creativeIntelligenceEngine.detectFatigue() itself checks, so the
+      // fixture provides real prior + latest rows rather than an
+      // unreachable-in-production hand-set label.
+      testDb.db.run(
+        `INSERT INTO creative_analytics
+           (id, ad_account_id, meta_ad_id, meta_adset_id, meta_campaign_id, creative_type, headline, cta_type,
+            date_since, date_until, spend, results, ctr, cpc, cpm, frequency, reach, conversion_rate, cpa, score_overall, calculated_at)
+         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,datetime('now'))`,
+        [uuidv4(), accountId, 'ad_details_full', 'adset_lib_1', 'camp_lib_1', 'image', 'Shop Now', 'SHOP_NOW',
+          '2026-02-22', '2026-02-28', 100, 10, 3, 1, 10, 2, 1000, 5, 10, 60]
+      );
+      insertScoredSnapshot({ metaAdId: 'ad_details_full', since: '2026-03-01', until: '2026-03-07' });
+      testDb.db.run(
+        `UPDATE creative_analytics SET cpc = 1.5, cpm = 15, frequency = 3, reach = 1050, conversion_rate = 2
+         WHERE meta_ad_id = 'ad_details_full' AND date_since = '2026-03-01'`
+      );
 
       const result = await getCreativeDetails(adId, { useMock: true });
       expect(result.analyzed).toBe(true);
       expect(result.snapshot.meta_ad_id).toBe('ad_details_full');
       expect(typeof result.scores.score_overall).toBe('number');
-      expect(result.fatigue).toEqual({ status: 'severe', recommendation: 'pause' });
-      expect(result.timeline.status).toBe('insufficient_data');
+      expect(result.fatigue.status).toBe('severe');
+      expect(result.fatigue.recommendation).toBe('pause');
+      expect(result.fatigue.evidence).toBeTruthy();
+      expect(result.timeline.status).toBe('ok');
       expect(result.recommendations.some(r => r.action === 'Pause')).toBe(true);
       expect(result.intelligence).not.toBeNull();
       expect(typeof result.executive_summary).toBe('string');
