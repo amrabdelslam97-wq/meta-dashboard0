@@ -17,6 +17,63 @@ const { defaultRange } = require('./dateRangeHelper');
 const { compareCreativesInAdSet, generateRecommendations, detectFatigue } = require('./creativeIntelligenceEngine');
 const { buildExecutiveSummary } = require('./executiveSummaryEngine');
 const { runAdIntelligence } = require('./adIntelligence');
+const { buildCreativeAdvisor } = require('./advisorEngine');
+
+function round(n, dp = 2) {
+  if (n === null || n === undefined || Number.isNaN(n)) return null;
+  const f = 10 ** dp;
+  return Math.round(n * f) / f;
+}
+
+// ─────────────────────────────────────────────
+// Phase 42 — real peer-average benchmarks (ad set / campaign / account grain)
+// for the AI Marketing Advisor's benchmarking phase. Excludes the creative
+// itself, restricted to the SAME date range so it's an apples-to-apples
+// comparison, and requires >= $5 spend (matching scoreCreative()'s own
+// reliability floor) -- reports insufficient_data honestly rather than
+// averaging over a near-empty or noisy peer set.
+// ─────────────────────────────────────────────
+const BENCHMARK_MIN_SAMPLE = 2;
+
+function getCreativeBenchmarkAverages(latestRow) {
+  const grains = [
+    { level: 'ad_set', column: 'meta_adset_id', value: latestRow.meta_adset_id },
+    { level: 'campaign', column: 'meta_campaign_id', value: latestRow.meta_campaign_id },
+    { level: 'account', column: 'ad_account_id', value: latestRow.ad_account_id },
+  ];
+
+  const result = {};
+  for (const grain of grains) {
+    if (!grain.value) {
+      result[grain.level] = { status: 'not_applicable', sample_size: 0, reason: `No ${grain.level.replace('_', ' ')} on this creative.` };
+      continue;
+    }
+    const row = db.get(
+      `SELECT AVG(ctr) as avg_ctr, AVG(cpa) as avg_cpa, AVG(cpm) as avg_cpm,
+              AVG(frequency) as avg_frequency, AVG(roas) as avg_roas,
+              AVG(score_overall) as avg_score, COUNT(*) as n
+       FROM creative_analytics
+       WHERE ${grain.column} = ? AND meta_ad_id != ? AND date_since = ? AND date_until = ? AND spend >= 5`,
+      [grain.value, latestRow.meta_ad_id, latestRow.date_since, latestRow.date_until]
+    );
+    if (!row || row.n < BENCHMARK_MIN_SAMPLE) {
+      result[grain.level] = {
+        status: 'insufficient_data', sample_size: row ? row.n : 0,
+        reason: `Fewer than ${BENCHMARK_MIN_SAMPLE} other creatives at the ${grain.level.replace('_', ' ')} grain with >= $5 spend in this date range.`,
+      };
+      continue;
+    }
+    result[grain.level] = {
+      status: 'ok',
+      sample_size: row.n,
+      averages: {
+        ctr: round(row.avg_ctr, 2), cpa: round(row.avg_cpa, 2), cpm: round(row.avg_cpm, 2),
+        frequency: round(row.avg_frequency, 2), roas: round(row.avg_roas, 2), score_overall: round(row.avg_score, 1),
+      },
+    };
+  }
+  return result;
+}
 
 // ─────────────────────────────────────────────
 // Step 8 — Creative Timeline (launch / peak / decline / fatigue / recovery / changes)
@@ -254,12 +311,14 @@ async function getCreativeDetails(adIdOrMetaAdId, options = {}) {
   // Step 6 — comparison against siblings in the same ad set, same date range.
   let comparison = { winner: null, runner_up: null, worst: null, ranking: [], comparisons: [] };
   let role = { isWinner: false, isWorst: false };
+  let shapedSiblings = [];
   if (latest.meta_adset_id) {
     const siblings = db.all(
       `SELECT * FROM creative_analytics WHERE meta_adset_id = ? AND date_since = ? AND date_until = ?`,
       [latest.meta_adset_id, latest.date_since, latest.date_until]
     );
-    comparison = compareCreativesInAdSet(siblings.map(toComparisonShape));
+    shapedSiblings = siblings.map(toComparisonShape);
+    comparison = compareCreativesInAdSet(shapedSiblings);
     role = {
       isWinner: comparison.winner?.meta_ad_id === ad.meta_ad_id,
       isWorst: comparison.worst?.meta_ad_id === ad.meta_ad_id,
@@ -317,6 +376,16 @@ async function getCreativeDetails(adIdOrMetaAdId, options = {}) {
       })
     : null;
 
+  // Phase 42 — AI Marketing Advisor (Decision Intelligence). Pure synthesis
+  // over everything already computed above (scores/fatigue/text analysis/
+  // comparison/timeline) plus real peer-average benchmarks -- no new score,
+  // no rewrite of any existing engine. See advisorEngine.js's own header.
+  const benchmarkAverages = getCreativeBenchmarkAverages(latest);
+  const advisor = buildCreativeAdvisor({
+    scores, fatigue, textAnalysis: aiAnalysis, latestRow: latest, benchmarkAverages,
+    comparison, comparisonRole: role, shapedSiblings, timeline, recommendations,
+  });
+
   return {
     meta_ad_id: ad.meta_ad_id,
     analyzed: true,
@@ -334,6 +403,8 @@ async function getCreativeDetails(adIdOrMetaAdId, options = {}) {
     recommendations,
     intelligence,
     executive_summary: executiveSummary,
+    benchmark_averages: benchmarkAverages,
+    advisor,
   };
 }
 
@@ -342,4 +413,5 @@ module.exports = {
   searchCreativeLibrary,
   getAdSetComparison,
   getCreativeDetails,
+  getCreativeBenchmarkAverages,
 };

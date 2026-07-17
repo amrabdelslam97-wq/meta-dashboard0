@@ -43,6 +43,8 @@ const creativeIntelligence21Router = require('./routes/creativeIntelligence21');
 const budgetRouter = require('./routes/budget');
 // Phase 28 — Agency Operating System & Team Collaboration
 const workspaceRouter = require('./routes/workspaceRoutes');
+// Phase 42 — AI Marketing Advisor (Decision Intelligence)
+const advisorRouter = require('./routes/advisor');
 
 router.get('/health', (req, res) => {
   res.json({ status: 'ok', timestamp: new Date().toISOString(), version: '6.1.0', phase: 'Phase 6C — Full Integration' });
@@ -84,6 +86,8 @@ router.use('/creative', creativeIntelligence21Router);
 router.use('/budget', budgetRouter);
 // Phase 28 — Agency Operating System & Team Collaboration
 router.use('/workspaces', workspaceRouter);
+// Phase 42 — AI Marketing Advisor (Decision Intelligence)
+router.use('/advisor', advisorRouter);
 
 router.use((req, res) => {
   res.status(404).json({ error: 'Not found', path: req.path });

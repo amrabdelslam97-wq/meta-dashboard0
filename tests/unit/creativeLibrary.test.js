@@ -224,6 +224,17 @@ describe('creativeLibrary', () => {
       expect(result.recommendations.some(r => r.action === 'Pause')).toBe(true);
       expect(result.intelligence).not.toBeNull();
       expect(typeof result.executive_summary).toBe('string');
+
+      // Phase 42 — AI Marketing Advisor bundle is additive on this same
+      // response; a severe-fatigue creative must be steered toward pausing,
+      // never toward scaling, across every advisor sub-section.
+      expect(result.benchmark_averages).toBeTruthy();
+      expect(result.advisor).toBeTruthy();
+      expect(result.advisor.pause_advice.action).toBe('Pause');
+      expect(result.advisor.scaling_advice.recommended).toBe(false);
+      expect(result.advisor.strategic_advice.headline).toMatch(/Pause/i);
+      expect(Array.isArray(result.advisor.root_cause.negative_factors)).toBe(true);
+      expect(result.advisor.root_cause.negative_factors.length).toBeGreaterThan(0);
     });
   });
 });
