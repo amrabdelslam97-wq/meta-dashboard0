@@ -47,7 +47,7 @@ beforeAll(() => {
     // Phase 44 — AI Strategic Advisor panel + supporting render helpers.
     'ciAdvisorStatusBadgeClass', 'ciPriorityBadgeClass', 'ciRiskBadgeClass',
     'ciRenderAdvisorPanel', 'ciRenderScoreRelationship', 'ciRenderBusinessImpact',
-    'ciRenderRiskAssessment', 'ciRenderPriorities', 'ciBenchmarkGrainRow', 'ciRenderBenchmark',
+    'ciRenderRiskAssessment', 'ciBulletAlreadyShown', 'ciRenderPriorities', 'ciBenchmarkGrainRow', 'ciRenderBenchmark',
     'ciMergedTimelineRows',
     // Phase 45 — Executive Decision Layer render helpers.
     'ciDecisionColorClass', 'ciDecisionBorderVar', 'ciRenderExecutivePriorityCard', 'ciRenderWhyNot',
@@ -224,6 +224,30 @@ describe('Creative Intelligence frontend render functions', () => {
       expect(html).toContain('New high CTR');
       expect(html).toContain('budget changes');
       expect(() => ciRenderDetails(baseDetail({ advisor: null }))).not.toThrow();
+    });
+
+    // Dashboard Normalization (Phase 46) — a recommendation's evidence bullet
+    // that exactly repeats a fact already stated in the Advisor Panel's
+    // "Reason" list directly above it must be shown once, not twice, while
+    // any genuinely different evidence bullet on the same card is untouched.
+    test('does not repeat an evidence bullet that already appears in the Advisor Panel reason', () => {
+      const html = ciRenderDetails(baseDetail({
+        advisor: {
+          panel: {
+            current_status: 'Scale', confidence: 89, priority: 'HIGH',
+            reason: ['This creative still has room to scale before signs of audience fatigue appear.'],
+            recommended_actions: ['Increase budget 20%'], expected_result: 'x', business_risk: 'LOW', potential_risks: [],
+          },
+          priorities: [{
+            priority: 1, priority_label: 'Highest Priority', tier: 'Immediate Actions', action: 'Duplicate Winner',
+            why: 'x', evidence_used: ['This creative still has room to scale before signs of audience fatigue appear.', 'CTR +18%'],
+            confidence_pct: 92, confidence: 'high', expected_impact: 'x', risk: 'Low risk.',
+          }],
+        },
+      }));
+      const occurrences = (html.match(/still has room to scale/g) || []).length;
+      expect(occurrences).toBe(1);
+      expect(html).toContain('CTR +18%');
     });
 
     // Phase 45 — Executive Decision Layer: the single arbitrated verdict,

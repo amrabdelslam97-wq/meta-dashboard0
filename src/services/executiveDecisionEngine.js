@@ -109,6 +109,33 @@ function crossModuleCandidateDecisions(crossModuleSignals) {
 }
 
 /**
+ * Dashboard Normalization (Phase 46) — real, currently-active DB-rule-driven
+ * recommendations (recommendationEngine.js's recommendation_rules ->
+ * recommendation_log, campaign-grain -- e.g. LOW_ROAS/LOW_CTR/HIGH_FREQUENCY)
+ * were always computed by this system but never fed into the single
+ * arbitrated decision, so this ad's Executive Decision could disagree with
+ * a real, currently-firing rule on its own campaign with no reconciliation.
+ * Same severity-based candidate shape as ruleEngineCandidateDecisions()
+ * above -- critical severity is conservative enough to warrant pausing,
+ * warning severity warrants a general optimization pass. Never invents a
+ * new rule, never changes what recommendationEngine.js itself computes;
+ * this only makes the arbitration aware of an already-real signal.
+ */
+function recommendationLogCandidateDecisions(recommendationLogRows) {
+  const candidates = [];
+  for (const r of recommendationLogRows || []) {
+    const meta = { module: 'Recommendation Rules', id: r.rule_code, name: r.recommendation_title, reason: r.recommendation_body };
+    if (r.severity === 'critical') {
+      candidates.push({ decision: 'PAUSE', ...meta });
+    } else if (r.severity === 'warning') {
+      candidates.push({ decision: 'OPTIMIZE', ...meta });
+    }
+    // 'info'-severity rows never move the decision -- matches the native Rule Engine's own convention (info is context, not a verdict).
+  }
+  return candidates;
+}
+
+/**
  * TASK 1 + TASK 13 — the single arbitration point across every module this
  * platform has a real, already-computed verdict from (the Advisor panel,
  * the Rule Engine, and -- when the caller supplies them -- Budget/Audience
@@ -118,11 +145,12 @@ function crossModuleCandidateDecisions(crossModuleSignals) {
  * override actually happened (Task 13's "automatically determine the root
  * cause" requirement).
  */
-function resolveExecutiveDecision({ panelStatus, healthStatus, fatigue, scores, ruleEngineFindings, crossModuleSignals }) {
+function resolveExecutiveDecision({ panelStatus, healthStatus, fatigue, scores, ruleEngineFindings, crossModuleSignals, recommendationLogRows }) {
   const base = baseDecisionFromPanel(panelStatus, { healthStatus, fatigue, scores });
   const candidates = [
     ...ruleEngineCandidateDecisions(ruleEngineFindings).map(c => ({ ...c, source: 'advisor_vs_rule_engine' })),
     ...crossModuleCandidateDecisions(crossModuleSignals).map(c => ({ ...c, source: 'advisor_vs_cross_module' })),
+    ...recommendationLogCandidateDecisions(recommendationLogRows).map(c => ({ ...c, source: 'advisor_vs_recommendation_rules' })),
   ];
 
   let final = base;
@@ -162,7 +190,7 @@ function resolveExecutiveDecision({ panelStatus, healthStatus, fatigue, scores, 
 const STRONG_SCORE = 65;
 const WEAK_SCORE = 40;
 
-function buildWhyNot(decision, { scores, fatigue, healthStatus, benchmarkVerdict, priorities, crossModuleSignals } = {}) {
+function buildWhyNot(decision, { scores, fatigue, healthStatus, benchmarkVerdict, priorities, crossModuleSignals, recommendationLogRows } = {}) {
   const score = scores?.score_overall;
   const reasons = {};
 
@@ -178,8 +206,11 @@ function buildWhyNot(decision, { scores, fatigue, healthStatus, benchmarkVerdict
             : 'A more conservative signal elsewhere in the system currently outranks scaling.';
   }
   if (decision !== 'PAUSE' && decision !== 'STOP') {
+    // Honest about the real health status either way -- never asserts
+    // "not critical" when it might in fact be critical; only states what
+    // health actually is and that no signal currently escalates it to Pause.
     reasons.PAUSE = healthStatus
-      ? `Health status remains "${healthStatus}", not critical -- no reason to pause delivery yet.`
+      ? `Health status is "${healthStatus}" -- no fatigue or health signal currently escalates this to a Pause.`
       : 'No fatigue or health signal currently justifies pausing.';
   }
   if (decision !== 'STOP') {
@@ -193,13 +224,16 @@ function buildWhyNot(decision, { scores, fatigue, healthStatus, benchmarkVerdict
   if (decision !== 'OPTIMIZE') {
     const budgetWaste = crossModuleSignals?.budget?.waste_detected;
     const audienceSaturation = crossModuleSignals?.audience?.saturation_score;
+    const activeRule = (recommendationLogRows || [])[0];
     reasons.OPTIMIZE = budgetWaste
       ? 'Budget waste was flagged, but a more conservative action already takes priority over a general optimization pass.'
       : (audienceSaturation != null && audienceSaturation >= 70)
         ? `Audience saturation was flagged (score ${audienceSaturation}), but a more conservative action already takes priority.`
-        : (fatigue?.status === 'none' || fatigue?.status == null)
-          ? 'No moderate fatigue, budget-waste, or audience-saturation signal is currently active.'
-          : 'A more urgent or more conservative action already takes priority over a general optimization pass.';
+        : activeRule
+          ? `"${activeRule.recommendation_title}" was flagged, but a more conservative action already takes priority over a general optimization pass.`
+          : (fatigue?.status === 'none' || fatigue?.status == null)
+            ? 'No moderate fatigue, budget-waste, audience-saturation, or rule-based signal is currently active.'
+            : 'A more urgent or more conservative action already takes priority over a general optimization pass.';
   }
   if (decision !== 'MONITOR') {
     reasons.MONITOR = 'A real signal (fatigue, health, score, or a Rule Engine finding) already justifies a more specific action than simply watching.';
@@ -473,10 +507,10 @@ function enrichRecommendationQuality(priority, rootCause, latestRow) {
 function buildExecutiveDecisionLayer({
   panel, priorities, fatigue, scores, healthStatus, ruleEngineFindings,
   benchmarkVerdict, benchmarkComparison, historicalComparison, rootCause, latestRow,
-  crossModuleSignals = null,
+  crossModuleSignals = null, recommendationLogRows = null,
 }) {
   const { decision, base_from_advisor, consistency_audit } = resolveExecutiveDecision({
-    panelStatus: panel?.current_status, healthStatus, fatigue, scores, ruleEngineFindings, crossModuleSignals,
+    panelStatus: panel?.current_status, healthStatus, fatigue, scores, ruleEngineFindings, crossModuleSignals, recommendationLogRows,
   });
 
   const { kept: conflictFreePriorities, dropped: droppedRecommendations } = resolveRecommendationConflicts(priorities);
@@ -490,7 +524,7 @@ function buildExecutiveDecisionLayer({
     base_from_advisor,
     confidence: confidence.confidence_pct,
     confidence_reason: confidence.reason,
-    why_not: buildWhyNot(decision, { scores, fatigue, healthStatus, benchmarkVerdict, priorities: conflictFreePriorities, crossModuleSignals }),
+    why_not: buildWhyNot(decision, { scores, fatigue, healthStatus, benchmarkVerdict, priorities: conflictFreePriorities, crossModuleSignals, recommendationLogRows }),
     consistency_audit,
     priority_card: buildExecutivePriorityCard(enrichedPriorities),
     marketing_director_plan: buildMarketingDirectorPlan({ decision, priorities: enrichedPriorities, latestRow, benchmarkVerdict }),
@@ -506,6 +540,7 @@ module.exports = {
   CONSERVATISM_RANK,
   resolveExecutiveDecision,
   crossModuleCandidateDecisions,
+  recommendationLogCandidateDecisions,
   buildWhyNot,
   buildExecutivePriorityCard,
   buildMarketingDirectorPlan,

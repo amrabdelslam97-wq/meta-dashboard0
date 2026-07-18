@@ -843,10 +843,6 @@ async function loadDashboard() {
     </div>
   </div>
 
-  <div class="card" id="sync-status-card" style="margin-bottom:20px">
-    <div class="loader"><span class="spin">◌</span> Loading sync status...</div>
-  </div>
-
   <div class="grid" style="grid-template-columns:1fr 1fr;gap:16px;margin-bottom:20px">
     <div class="card">
       <div class="stat-label">Recommendations</div>
@@ -858,7 +854,7 @@ async function loadDashboard() {
     </div>
     ${d.needs_attention?.length ? `
     <div class="card">
-      <div class="section-header"><span class="section-title">⚠ Needs Attention</span></div>
+      <div class="section-header"><span class="section-title">⚠ Needs Attention</span><span style="font-size:11px;color:var(--muted);margin-left:8px">(health score below threshold)</span></div>
       ${d.needs_attention.map(c=>`
         <div style="display:flex;align-items:center;justify-content:space-between;padding:6px 0;border-bottom:1px solid var(--border)">
           <div>
@@ -870,6 +866,13 @@ async function loadDashboard() {
       `).join('')}
     </div>
     ` : '<div class="card"><div class="empty">✓ No campaigns need immediate attention</div></div>'}
+  </div>
+
+  <!-- Dashboard Normalization (Phase 46) -- technical sync/ops telemetry
+       moved below the business-facing Needs Attention content, per the
+       "decisions before technical details" hierarchy rule. -->
+  <div class="card" id="sync-status-card" style="margin-bottom:20px">
+    <div class="loader"><span class="spin">◌</span> Loading sync status...</div>
   </div>
 
   <div class="section-header">
@@ -1442,7 +1445,7 @@ function icExecutiveFindingCard(f) {
     </div>
     <div style="margin-top:8px;font-size:12px;padding:8px;background:var(--bg3);border-radius:6px">💡 <strong>Recommendation:</strong> ${f.suggested_action || '—'}</div>
     <div style="margin-top:6px;font-size:11px;color:var(--muted)">📊 <strong>Evidence:</strong> ${evidenceText}</div>
-    <div style="margin-top:6px;font-size:11px;color:var(--muted)">🎯 <strong>Expected Result:</strong> ${f.expected_impact || 'Not yet projected — this finding hasn\'t reached the Decision Center\'s history yet'}</div>
+    <div style="margin-top:6px;font-size:11px;color:var(--muted)">🎯 <strong>Expected Impact:</strong> ${f.expected_impact || 'Not yet projected — this finding hasn\'t reached the Decision Center\'s history yet'}</div>
     ${f.historical_note ? `
     <div style="margin-top:6px;font-size:11px;color:var(--orange)">🧠 <strong>Memory:</strong> ${f.historical_note}</div>
     ` : (f.historical_effectiveness && f.historical_effectiveness.attempts > 0 ? `
@@ -1500,11 +1503,18 @@ async function icLoadDiagnosisView(el) {
 
     ${icExecutiveSummaryCard(dg.executive_summary)}
 
+    <!-- Dashboard Normalization (Phase 46) -- decision-bearing content moved
+         immediately after the Executive Summary, before the raw Root
+         Cause/Evidence/Health Score blocks below, per the "decisions before
+         technical details" hierarchy rule. -->
+    <div class="section-header"><span class="section-title">Decisions &amp; Recommendations (${(dg.findings||[]).length})</span></div>
+    ${icExecutiveDiagnosisFindings(dg.findings)}
+
     <div class="card" style="margin-bottom:16px">
       <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px">
         <div>
           <div class="stat-label">🔍 Root Cause: <span style="text-transform:capitalize">${d.category || 'unexplained'}</span></div>
-          <div class="stat-label" style="margin-top:8px">📈 Business Impact: ${d.primaryLabel || d.primaryKey}</div>
+          <div class="stat-label" style="margin-top:8px">📈 Primary Metric: ${d.primaryLabel || d.primaryKey}</div>
           <div class="stat-value" style="color:${pctCls}">${pd.delta_pct != null ? (pd.delta_pct > 0 ? '▲' : '▼') + Math.abs(pd.delta_pct) + '%' : '—'}</div>
         </div>
         <div style="display:flex;gap:6px;flex-wrap:wrap">
@@ -1533,9 +1543,6 @@ async function icLoadDiagnosisView(el) {
         <span class="badge ${dg.health_status||'none'}">${fmtHealthStatus(dg.health_status)}</span>
       </div>
     </div>
-
-    <div class="section-header"><span class="section-title">Decisions &amp; Recommendations (${(dg.findings||[]).length})</span></div>
-    ${icExecutiveDiagnosisFindings(dg.findings)}
 
     ${icGovernancePanel(dg._governance)}
   `;
@@ -2145,7 +2152,7 @@ function renderAlertsTable(data) {
   if (!data.length) return '<div class="empty" style="padding:40px">No alerts found.</div>';
   return `<table>
     <thead><tr>
-      <th>Severity</th><th>Campaign</th><th>Objective</th><th>Alert</th><th>Message</th>
+      <th>Severity</th><th>Campaign</th><th>Objective</th><th>Message</th><th>Alert</th>
       <th>Occurrences</th><th>First Detected</th><th>Last Detected</th><th>Governance</th><th>Actions</th>
     </tr></thead>
     <tbody>
@@ -2154,8 +2161,8 @@ function renderAlertsTable(data) {
       <td><span class="badge ${a.severity}">${a.severity}</span></td>
       <td class="td-name">${a.campaign_name||a.entity_label||'—'}</td>
       <td>${a.objective ? objChip(a.objective) : '—'}</td>
-      <td><code style="font-size:11px;background:var(--bg3);padding:2px 6px;border-radius:4px">${a.alert_code}</code></td>
       <td class="td-muted" style="max-width:250px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${a.alert_message||'—'}</td>
+      <td><code style="font-size:11px;background:var(--bg3);padding:2px 6px;border-radius:4px">${a.alert_code}</code></td>
       <td>${a.occurrence_count||1}×</td>
       <td class="td-muted">${fmtDate(a.first_detected_at)}</td>
       <td class="td-muted">${fmtDate(a.last_detected_at)}</td>
@@ -2936,7 +2943,7 @@ async function loadDecisions() {
 
     <!-- Right: Winners + Losers + Opportunities -->
     <div>
-      <div class="section-title" style="margin-bottom:10px">🏆 Top Winners</div>
+      <div class="section-title" style="margin-bottom:10px">🏆 Top Winners <span style="font-size:11px;color:var(--muted);font-weight:normal">(ranked by Winner Score, not Health Score)</span></div>
       ${(winners.data||[]).map(w => `
       <div class="winner-card">
         <div>
@@ -2946,11 +2953,11 @@ async function loadDecisions() {
         </div>
         <div style="text-align:center">
           ${scoreCircle(w.health_score, true)}
-          <div style="font-size:10px;color:var(--muted);margin-top:3px">W:${w.winner_score}</div>
+          <div style="font-size:10px;color:var(--muted);margin-top:3px" title="Winner Score: this list's own composite ranking metric, distinct from Health Score">Winner Score: ${w.winner_score}</div>
         </div>
       </div>`).join('') || '<div class="empty">No winners yet — run analysis</div>'}
 
-      <div class="section-title" style="margin:16px 0 10px">🔻 Needs Attention</div>
+      <div class="section-title" style="margin:16px 0 10px">🔻 Needs Attention <span style="font-size:11px;color:var(--muted);font-weight:normal">(lowest-ranked this period, factoring in alerts and trend — a different ranking than the Dashboard's health-only list)</span></div>
       ${(losers.data||[]).map(l => `
       <div class="loser-card">
         <div>
@@ -2971,7 +2978,7 @@ async function loadDecisions() {
         </div>
         <div style="font-size:13px;font-weight:600;cursor:pointer;color:var(--accent2);margin-bottom:4px" onclick="viewCampaign('${o.meta_campaign_id}')">${o.campaign_name}</div>
         <div class="opp-reason">${o.reason}</div>
-        ${o.expected_impact ? '<div style="font-size:11px;color:var(--green);margin-top:4px">→ ' + o.expected_impact + '</div>' : ''}
+        ${o.expected_impact ? '<div style="font-size:11px;color:var(--green);margin-top:4px">Expected Impact: ' + o.expected_impact + '</div>' : ''}
       </div>`).join('') || '<div class="empty">No opportunities detected</div>'}
     </div>
   </div>
@@ -3011,7 +3018,7 @@ function renderDecisionCards(decisions) {
     <div class="decision-actions">
       <button class="btn btn-success btn-sm" onclick="completeDecision('${d.id}','${d.decision_type}','${(d.campaign_name||'').replace(/'/g,"\'")}')">✓ Done</button>
       <button class="btn btn-ghost btn-sm"   onclick="dismissDecision('${d.id}')">Dismiss</button>
-      ${d.expected_impact ? `<span class="text-muted" style="font-size:11px;margin-left:4px;align-self:center">Expected: ${d.expected_impact}</span>` : ''}
+      ${d.expected_impact ? `<span class="text-muted" style="font-size:11px;margin-left:4px;align-self:center">Expected Impact: ${d.expected_impact}</span>` : ''}
     </div>
   </div>`).join('');
 }
@@ -3123,7 +3130,7 @@ async function loadReports() {
   <!-- Top / Worst campaigns -->
   <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:20px">
     <div>
-      <div class="section-title" style="margin-bottom:10px">🏆 Top Campaigns</div>
+      <div class="section-title" style="margin-bottom:10px">🏆 Top Campaigns by Health Score</div>
       ${(summary.top_campaigns||[]).map(c=>`
       <div style="display:flex;align-items:center;justify-content:space-between;padding:8px 0;border-bottom:1px solid var(--border)">
         <div>
@@ -3171,7 +3178,10 @@ async function loadReports() {
   </div>
 
   <!-- Alerts summary -->
-  <div class="section-title" style="margin-bottom:10px">🔔 Alerts (${alerts.total||0})</div>
+  <div class="section-header" style="margin-bottom:10px">
+    <span class="section-title">🔔 Alerts (${alerts.total||0})</span>
+    <button class="btn btn-ghost btn-sm" onclick="navigate('alerts')">View all alerts →</button>
+  </div>
   <div class="table-wrap">
     <table>
       <thead><tr><th>Campaign</th><th>Alert</th><th>Severity</th><th>Occurrences</th><th>Detected</th></tr></thead>
@@ -3265,17 +3275,24 @@ function ciPriorityBadgeClass(p) {
   return p === 'HIGH' ? 'critical' : p === 'MEDIUM' ? 'warning' : p === 'LOW' ? 'good' : 'none';
 }
 function ciRiskBadgeClass(level) {
-  return level === 'HIGH' ? 'critical' : level === 'MEDIUM' ? 'warning' : level === 'LOW' ? 'excellent' : 'none';
+  // Dashboard Normalization (Phase 46) -- normalized to uppercase before
+  // comparing: panel.business_risk is already 'HIGH'/'MEDIUM'/'LOW', but
+  // advisorEngine.buildRiskAssessment()'s per-dimension levels are Title
+  // Case ('High'/'Medium'/'Low') -- without normalizing, every risk-
+  // assessment badge silently fell through to the neutral 'none' class.
+  const norm = String(level || '').toUpperCase();
+  return norm === 'HIGH' ? 'critical' : norm === 'MEDIUM' ? 'warning' : norm === 'LOW' ? 'excellent' : 'none';
 }
 
 function ciRenderAdvisorPanel(panel) {
   if (!panel) return '';
   return `
   <div class="card" style="margin-bottom:20px;border:1px solid rgba(99,102,241,.35)">
-    <div class="section-title" style="margin-bottom:16px">🧭 AI Strategic Advisor</div>
+    <div class="section-title" style="margin-bottom:4px">🧭 AI Strategic Advisor</div>
+    <div style="font-size:11px;color:var(--muted);margin-bottom:12px">Supports the Executive Decision above — this is input to that decision, not a separate verdict.</div>
     <div class="grid grid-3" style="gap:12px;margin-bottom:16px">
       <div class="detail-item">
-        <div class="detail-label">Current Decision</div>
+        <div class="detail-label">Advisor's Read</div>
         <div class="detail-value"><span class="badge ${ciAdvisorStatusBadgeClass(panel.current_status)}">${(panel.current_status || '—').toUpperCase()}</span></div>
       </div>
       <div class="detail-item">
@@ -3366,10 +3383,27 @@ function ciRenderRiskAssessment(ra) {
   </div>`;
 }
 
-function ciRenderPriorities(priorities, fallbackRecommendations) {
+// Dashboard Normalization (Phase 46) -- avoid re-showing a fact already
+// stated in the Advisor Panel's "Reason" bullets directly above this card
+// (Goal 2: show each fact once, never a repeated paragraph). Exact-match
+// plus the one known paraphrase pattern this codebase's own audit found
+// (advisorEngine.js's buildActionEvidence() vs buildAdvisorPanel()
+// independently wording the same benchmark-outperformance fact) -- never a
+// generic fuzzy matcher, so this can't accidentally hide a genuinely new point.
+function ciBulletAlreadyShown(bullet, shownBullets) {
+  const norm = s => (s || '').trim().toLowerCase();
+  if ((shownBullets || []).some(s => norm(s) === norm(bullet))) return true;
+  const outperformPattern = /outperforming its .*(peers|average)/i;
+  if (outperformPattern.test(bullet) && (shownBullets || []).some(s => outperformPattern.test(s))) return true;
+  return false;
+}
+
+function ciRenderPriorities(priorities, fallbackRecommendations, panelReason) {
+  const shownBullets = panelReason || [];
   if (priorities && priorities.length) {
     return priorities.map(p => {
       const pcls = p.priority === 1 ? 'critical' : p.priority === 2 ? 'warning' : 'info';
+      const evidence = (p.evidence_used || []).filter(e => !ciBulletAlreadyShown(e, shownBullets));
       return `
       <div class="rec-card ${pcls}" style="margin-bottom:12px">
         <div style="display:flex;justify-content:space-between;gap:8px;align-items:center">
@@ -3378,10 +3412,10 @@ function ciRenderPriorities(priorities, fallbackRecommendations) {
         </div>
         ${p.problem ? `<div style="font-size:11px;color:var(--muted);margin-bottom:4px"><strong>Problem:</strong> ${p.problem}</div>` : ''}
         <div class="rec-body">${p.why}</div>
-        ${(p.evidence_used || []).length ? `<div style="font-size:12px;margin-bottom:8px"><strong>Evidence</strong>${p.evidence_used.map(e => `<div>• ${e}</div>`).join('')}</div>` : ''}
+        ${evidence.length ? `<div style="font-size:12px;margin-bottom:8px"><strong>Evidence</strong>${evidence.map(e => `<div>• ${e}</div>`).join('')}</div>` : ''}
         <div class="rec-meta" style="margin-bottom:4px">
           <span style="font-size:11px;color:var(--muted)">Confidence: <strong>${p.confidence_pct != null ? p.confidence_pct + '%' : p.confidence}</strong></span>
-          <span style="font-size:11px;color:var(--muted)">Expected impact: ${p.expected_impact}</span>
+          <span style="font-size:11px;color:var(--muted)">Expected Impact: ${p.expected_impact}</span>
         </div>
         <div style="font-size:11px;color:var(--muted)">Risk: ${p.risk}</div>
         ${(p.estimated_time_to_observe || p.implementation_difficulty) ? `<div style="font-size:11px;color:var(--muted);margin-top:4px">Time to observe results: <strong>${p.estimated_time_to_observe || '—'}</strong> · Difficulty: <strong>${p.implementation_difficulty || '—'}</strong></div>` : ''}
@@ -3844,7 +3878,7 @@ function ciRenderDetails(d) {
 
     <div class="card">
       <div class="section-title" style="margin-bottom:12px">Recommendations</div>
-      ${ciRenderPriorities(d.executive_decision?.recommendations || advisor?.priorities, d.recommendations)}
+      ${ciRenderPriorities(d.executive_decision?.recommendations || advisor?.priorities, d.recommendations, advisor?.panel?.reason)}
       ${(d.executive_decision?.dropped_recommendations || []).length ? `<div style="font-size:11px;color:var(--muted);margin-top:8px">Not shown (conflicted with a higher-priority action): ${d.executive_decision.dropped_recommendations.map(x => x.action).join(', ')}.</div>` : ''}
     </div>
   </div>
@@ -4121,7 +4155,10 @@ async function loadPortfolio() {
 
   <!-- Cross-account alerts -->
   ${(overview.data?.cross_account_alerts || []).length > 0 ? `
-  <div class="section-title" style="margin-bottom:10px">🔔 Cross-Account Alerts</div>
+  <div class="section-header" style="margin-bottom:10px">
+    <span class="section-title">🔔 Cross-Account Alerts</span>
+    <button class="btn btn-ghost btn-sm" onclick="navigate('alerts')">View all alerts →</button>
+  </div>
   <div class="table-wrap">
     <table>
       <thead><tr><th>Account</th><th>Alert</th><th>Campaign</th><th>Severity</th><th>Occurrences</th></tr></thead>

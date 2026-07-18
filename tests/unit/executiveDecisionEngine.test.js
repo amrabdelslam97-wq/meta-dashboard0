@@ -13,6 +13,7 @@ const {
   enrichRecommendationQuality,
   buildExecutiveDecisionLayer,
   crossModuleCandidateDecisions,
+  recommendationLogCandidateDecisions,
   ALLOWED_DECISIONS,
 } = require('../../src/services/executiveDecisionEngine');
 
@@ -270,6 +271,68 @@ describe('executiveDecisionEngine', () => {
       });
       expect(result.decision).toBe('OPTIMIZE');
       expect(result.consistency_audit.overrides[0].module).toBe('Budget Intelligence');
+    });
+  });
+
+  // Dashboard Normalization (Phase 46) -- recommendation_log wired into arbitration
+  describe('recommendationLogCandidateDecisions', () => {
+    test('a critical-severity active rule (e.g. LOW_ROAS) produces a PAUSE candidate', () => {
+      const rows = [{ rule_code: 'LOW_ROAS', severity: 'critical', recommendation_title: 'Campaign is losing money', recommendation_body: 'Pause and review.' }];
+      expect(recommendationLogCandidateDecisions(rows)).toEqual([
+        expect.objectContaining({ decision: 'PAUSE', module: 'Recommendation Rules', id: 'LOW_ROAS' }),
+      ]);
+    });
+
+    test('a warning-severity active rule (e.g. LOW_CTR) produces an OPTIMIZE candidate', () => {
+      const rows = [{ rule_code: 'LOW_CTR', severity: 'warning', recommendation_title: 'Creative or targeting issue likely', recommendation_body: 'Refresh the creative.' }];
+      expect(recommendationLogCandidateDecisions(rows)).toEqual([
+        expect.objectContaining({ decision: 'OPTIMIZE', module: 'Recommendation Rules', id: 'LOW_CTR' }),
+      ]);
+    });
+
+    test('no active rows, null, or an info-severity row never produce a candidate', () => {
+      expect(recommendationLogCandidateDecisions([])).toEqual([]);
+      expect(recommendationLogCandidateDecisions(null)).toEqual([]);
+      expect(recommendationLogCandidateDecisions([{ rule_code: 'X', severity: 'info', recommendation_title: 'x', recommendation_body: 'x' }])).toEqual([]);
+    });
+  });
+
+  describe('resolveExecutiveDecision with recommendation_log signals', () => {
+    test('a real, currently-active critical rule (LOW_ROAS) overrides an optimistic Scale verdict to PAUSE, and is recorded in the audit', () => {
+      const result = resolveExecutiveDecision({
+        panelStatus: 'Scale', healthStatus: 'excellent', fatigue: { status: 'none' }, scores: { score_overall: 80 },
+        ruleEngineFindings: [],
+        recommendationLogRows: [{ rule_code: 'LOW_ROAS', severity: 'critical', recommendation_title: 'Campaign is losing money', recommendation_body: 'Your ROAS is below 1.0. Pause and review.' }],
+      });
+      expect(result.decision).toBe('PAUSE');
+      expect(result.consistency_audit.signals_disagreed).toBe(true);
+      expect(result.consistency_audit.overrides[0].module).toBe('Recommendation Rules');
+      expect(result.consistency_audit.overrides[0].because).toMatch(/Campaign is losing money/);
+    });
+
+    test('no active recommendation_log rows changes nothing (unanimous agreement preserved)', () => {
+      const result = resolveExecutiveDecision({
+        panelStatus: 'Monitor', healthStatus: 'good', fatigue: { status: 'none' }, scores: { score_overall: 50 },
+        ruleEngineFindings: [], recommendationLogRows: [],
+      });
+      expect(result.decision).toBe('MONITOR');
+      expect(result.consistency_audit.agreement).toBe('unanimous');
+    });
+  });
+
+  describe('buildWhyNot with recommendation_log signals', () => {
+    test('the PAUSE reason is honest about the real health status and never claims "not critical"', () => {
+      const reasons = buildWhyNot('SCALE', { scores: { score_overall: 80 }, fatigue: { status: 'none' }, healthStatus: 'critical' });
+      expect(reasons.PAUSE).not.toMatch(/not critical/);
+      expect(reasons.PAUSE).toMatch(/critical/);
+    });
+
+    test('the OPTIMIZE reason cites a real active rule when one exists instead of claiming nothing is active', () => {
+      const reasons = buildWhyNot('MONITOR', {
+        scores: { score_overall: 50 }, fatigue: { status: 'none' },
+        recommendationLogRows: [{ rule_code: 'LOW_CTR', recommendation_title: 'Creative or targeting issue likely' }],
+      });
+      expect(reasons.OPTIMIZE).toMatch(/Creative or targeting issue likely/);
     });
   });
 });

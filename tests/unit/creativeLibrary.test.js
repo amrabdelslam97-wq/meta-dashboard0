@@ -253,6 +253,73 @@ describe('creativeLibrary', () => {
       expect(result.executive_decision.why_not.MONITOR).toBeTruthy();
       expect(result.executive_decision.consistency_audit).toBeTruthy();
     });
+
+    // Dashboard Normalization (Phase 46) -- a real, currently-active
+    // recommendation_log row (the DB-rule-driven system, e.g. LOW_ROAS) on
+    // this ad's own campaign must now be visible to the Executive Decision
+    // arbitration, not silently ignored -- a dedicated campaign/ad pair is
+    // used here so this doesn't affect the shared camp_lib_1 fixture other
+    // tests in this file rely on.
+    test('a real, currently-active critical recommendation_log rule on this ad\'s campaign overrides an optimistic panel status (Phase 46)', async () => {
+      const campId = uuidv4();
+      testDb.db.run(
+        `INSERT INTO campaigns (id, ad_account_id, meta_campaign_id, name, objective, status, created_at, updated_at)
+         VALUES (?, ?, 'camp_p46_1', 'Phase46 Test Campaign', 'sales', 'active', datetime('now'), datetime('now'))`,
+        [campId, accountId]
+      );
+      const p46AdSetId = uuidv4();
+      testDb.db.run(
+        `INSERT INTO ad_sets (id, campaign_id, ad_account_id, meta_adset_id, name, status, created_at, updated_at)
+         VALUES (?, ?, ?, 'adset_p46_1', 'Phase46 Test Ad Set', 'active', datetime('now'), datetime('now'))`,
+        [p46AdSetId, campId, accountId]
+      );
+      const adId = uuidv4();
+      testDb.db.run(
+        `INSERT INTO ads (id, ad_set_id, campaign_id, ad_account_id, meta_ad_id, name, status, created_at, updated_at)
+         VALUES (?, ?, ?, ?, 'ad_p46_low_roas', 'Phase46 Ad', 'active', datetime('now'), datetime('now'))`,
+        [adId, p46AdSetId, campId, accountId]
+      );
+      // A strong, healthy-looking snapshot (would otherwise be steered
+      // toward Scale/Monitor) -- the recommendation_log override is the
+      // only thing that should push this toward a more conservative decision.
+      const creative = {
+        headline: 'Best Offer Ever', primary_text: 'Limited time only. Trusted by thousands. Order now.',
+        description: 'Free shipping.', cta_type: 'SHOP_NOW', media_type: 'image',
+        spend: 100, results: 10, ctr: 3, cost_per_result: 8,
+      };
+      const scored = computeCreativeScore(creative, { status: 'none' });
+      testDb.db.run(
+        `INSERT INTO creative_analytics
+           (id, ad_account_id, meta_ad_id, meta_adset_id, meta_campaign_id, creative_type, headline, cta_type,
+            date_since, date_until, spend, results, ctr, cpa,
+            score_hook, score_headline, score_copy, score_visual, score_cta, score_offer, score_trust, score_psychology,
+            score_conversion_potential, score_scroll_stop, score_retention, score_brand, score_fatigue, score_overall,
+            ai_analysis_json, fatigue_status, fatigue_recommendation, calculated_at)
+         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,datetime('now'))`,
+        [uuidv4(), accountId, 'ad_p46_low_roas', 'adset_p46_1', 'camp_p46_1', 'image', creative.headline, creative.cta_type,
+          '2026-04-01', '2026-04-07', creative.spend, creative.results, creative.ctr, creative.cost_per_result,
+          scored.score_hook, scored.score_headline, scored.score_copy, scored.score_visual, scored.score_cta,
+          scored.score_offer, scored.score_trust, scored.score_psychology, scored.score_conversion_potential,
+          scored.score_scroll_stop, scored.score_retention, scored.score_brand, scored.score_fatigue, scored.score_overall,
+          JSON.stringify(scored.text_analysis), 'none', null]
+      );
+      // A real, currently-active (non-dismissed) LOW_ROAS-shaped recommendation_log row.
+      testDb.db.run(
+        `INSERT INTO recommendation_log
+           (id, rule_code, ad_account_id, entity_type, entity_meta_id, entity_label, objective, severity,
+            recommendation_title, recommendation_body, generated_at, last_generated_at)
+         VALUES (?, 'LOW_ROAS', ?, 'campaign', 'camp_p46_1', 'Phase46 Test Campaign', 'sales', 'critical',
+                 'Campaign is losing money', 'Your ROAS is below 1.0. Pause and review.', datetime('now'), datetime('now'))`,
+        [uuidv4(), accountId]
+      );
+
+      const result = await getCreativeDetails(adId, { useMock: true });
+      expect(result.analyzed).toBe(true);
+      expect(result.executive_decision).toBeTruthy();
+      expect(['PAUSE', 'STOP']).toContain(result.executive_decision.decision);
+      expect(result.executive_decision.consistency_audit.signals_disagreed).toBe(true);
+      expect(result.executive_decision.consistency_audit.overrides.some(o => o.module === 'Recommendation Rules')).toBe(true);
+    });
   });
 
   describe('getAccountBestWorstCreative (Phase 44, Task 5)', () => {

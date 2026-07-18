@@ -20,6 +20,7 @@ const { runAdIntelligence } = require('./adIntelligence');
 const { buildCreativeAdvisor } = require('./advisorEngine');
 const { buildRootCauseReasoning } = require('./executiveReasoningEngine');
 const { buildExecutiveDecisionLayer } = require('./executiveDecisionEngine');
+const { loadActiveRecommendations } = require('./recommendationEngine');
 
 function round(n, dp = 2) {
   if (n === null || n === undefined || Number.isNaN(n)) return null;
@@ -504,7 +505,12 @@ async function getCreativeDetails(adIdOrMetaAdId, options = {}) {
   // cause, benchmark, plus the real Rule Engine findings already on
   // `intelligence`) -- never a second, competing verdict; see
   // executiveDecisionEngine.js's own header for the conflict-resolution rule.
+  // Dashboard Normalization (Phase 46) -- also passes this ad's campaign's
+  // real, currently-active DB-rule-driven recommendations (recommendationEngine.js's
+  // loadActiveRecommendations(), already exported and used by the /recommendations
+  // route -- reused as-is, no new query) so the arbitration is aware of them too.
   const crossModuleSignals = getCrossModuleSignals(latest.ad_account_id, latest.meta_campaign_id);
+  const recommendationLogRows = latest.meta_campaign_id ? loadActiveRecommendations(latest.meta_campaign_id) : [];
   const executiveDecision = buildExecutiveDecisionLayer({
     panel: advisor.panel,
     priorities: advisor.priorities,
@@ -518,6 +524,7 @@ async function getCreativeDetails(adIdOrMetaAdId, options = {}) {
     rootCause: advisor.root_cause,
     latestRow: latest,
     crossModuleSignals,
+    recommendationLogRows,
   });
 
   return {
