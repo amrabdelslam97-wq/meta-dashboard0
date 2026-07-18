@@ -85,7 +85,14 @@ Per your strict rules, none of the following were touched — each requires eith
 
 ## Deployment
 
-Deployed via the pattern established earlier this session: committed, pushed to `fix/phase28-30-migration-multi-statement` (Railway's confirmed GitHub auto-deploy source), verified the new deployment came online and matches the pushed commit hash, then re-ran live verification against production. See the commit log and the live checks below for the actual results of this step.
+Committed as `6f4158c` and pushed to `fix/phase28-30-migration-multi-statement`. Railway's GitHub auto-deploy picked it up automatically — new deployment `5e3bf1a8-7d41-4a28-b42f-59b2678f24ef` came online `RUNNING`, confirmed via `railway status --json`'s `meta.commitHash` matching `6f4158c7d86365b972d04e65d9918c7784975e16` exactly.
+
+**Live production verification, post-deploy:**
+- Regression spot-check: `/api/v1/health`, `/api/v1/sync/status`, `/api/v1/accounts`, `/api/v1/campaigns`, `/dashboard`, `/creative-intelligence/library`, `/api/v1/decisions/losers`, `/api/v1/decisions/winners`, `/api/v1/recommendations`, `/api/v1/alerts` — all return **200**.
+- `GET /api/v1/creative-intelligence/120250345364600170` — confirmed the new honest `why_not.PAUSE` text is live: *"Health status is 'excellent' -- no fatigue or health signal currently escalates this to a Pause."* (no more hardcoded, potentially-false "not critical" claim), and the new rule-aware `why_not.OPTIMIZE` wording is live.
+- Fetched the live `/dashboard` HTML and confirmed every frontend change actually shipped: `"Advisor's Read"` present, the old `"Current Decision"` label fully gone, `ciBulletAlreadyShown` present, `"Expected Impact"` and `"Winner Score"` labels present, `"View all alerts"` cross-links present.
+- Extracted and `node --check`'d the live production JS bundle — zero syntax errors.
+- `railway logs` post-deploy shows normal traffic and a real, successful Meta API call for the Creative Intelligence detail endpoint — no errors, no crashes.
 
 ## Confirmation: No Existing Functionality, Route, Schema, or Protected Calculation Was Removed or Altered
 
