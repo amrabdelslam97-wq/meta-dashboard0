@@ -257,4 +257,78 @@ describe('creativeTextAnalysis', () => {
       expect(result.hook.score).toBeGreaterThan(0);
     });
   });
+
+  // Phase 43 (Task 3) — Hook upgrade: emoji alone must never be treated as a
+  // real hook; a genuine persuasion signal (question/curiosity/pain-point/
+  // etc.) must always outscore an emoji-only opening of similar length.
+  describe('analyzeHook (Phase 43 — emoji de-weighting + new signal coverage)', () => {
+    test('an emoji-only opening with no other real signal scores weak, not strong', () => {
+      const emojiOnly = cta.analyzeHook('🎉🔥 great products for your home and office needs today');
+      expect(emojiOnly.label).not.toBe('strong');
+    });
+
+    test('a real persuasion signal (question) outscores an emoji-only opening of the same length', () => {
+      const emojiOnly = cta.analyzeHook('🎉 great products for your home and office needs');
+      const question = cta.analyzeHook('Why do great products cost so much for your home and office?');
+      expect(question.score).toBeGreaterThan(emojiOnly.score);
+    });
+
+    test('detects open loop, shock, novelty, pattern interrupt, and specificity signals', () => {
+      expect(cta.analyzeHook('Keep reading to find out what happened next.').detected.some(d => d.key === 'open_loop')).toBe(true);
+      expect(cta.analyzeHook('You won\'t believe what happened to us this week.').detected.some(d => d.key === 'shock')).toBe(true);
+      expect(cta.analyzeHook('This is brand new and just launched today.').detected.some(d => d.key === 'novelty')).toBe(true);
+      expect(cta.analyzeHook('Wait for it before you scroll away from this post.').detected.some(d => d.key === 'pattern_interrupt')).toBe(true);
+      expect(cta.analyzeHook('Save 3% on your first 2 orders this week.').detected.some(d => d.key === 'statistic')).toBe(true);
+    });
+
+    test('missing entries explain absence for every new signal category on plain text', () => {
+      const result = cta.analyzeHook('We sell furniture in various styles and colors for your home.');
+      const missingKeys = result.missing.map(m => m.key);
+      for (const key of ['open_loop', 'statistic', 'specificity', 'shock', 'novelty', 'pattern_interrupt', 'authority', 'transformation']) {
+        expect(missingKeys).toContain(key);
+      }
+    });
+  });
+
+  // Phase 43 (Task 4) — Psychology upgrade: new dimensions, each explaining
+  // why it fired (or why it's absent), without disturbing any pre-existing
+  // dimension.
+  describe('analyzePsychology (Phase 43 — expanded dimension coverage)', () => {
+    test('detects fear, loss aversion, identity, belonging, exclusivity, status, future pacing, reciprocity, and commitment', () => {
+      const result = cta.analyzePsychology(
+        'Don\'t let this happen to you. Don\'t miss out on this. For people who want more, join our community. ' +
+        'This is members only. Be the first to try it. Imagine yourself a month from now with a free gift on us. Book your spot now.'
+      );
+      expect(result.dimensions.fear).toBe(true);
+      expect(result.dimensions.loss_aversion).toBe(true);
+      expect(result.dimensions.identity).toBe(true);
+      expect(result.dimensions.belonging).toBe(true);
+      expect(result.dimensions.exclusivity).toBe(true);
+      expect(result.dimensions.status).toBe(true);
+      expect(result.dimensions.future_pacing).toBe(true);
+      expect(result.dimensions.reciprocity).toBe(true);
+      expect(result.dimensions.commitment).toBe(true);
+    });
+
+    test('every dimension has a details entry explaining why it was detected or why it is missing', () => {
+      const result = cta.analyzePsychology('Tired of slow results? Discover the secret today before it\'s gone. You will love it!');
+      expect(Array.isArray(result.details)).toBe(true);
+      expect(result.details.length).toBeGreaterThan(20);
+      for (const d of result.details) {
+        expect(typeof d.evidence).toBe('string');
+        expect(d.evidence.length).toBeGreaterThan(0);
+      }
+      const painDetail = result.details.find(d => d.dimension === 'pain_point');
+      expect(painDetail.detected).toBe(true);
+      const scarcityDetail = result.details.find(d => d.dimension === 'scarcity');
+      expect(scarcityDetail.detected).toBe(false);
+      expect(scarcityDetail.evidence).toMatch(/no scarcity/i);
+    });
+
+    test('new dimensions never false-positive on plain, signal-free text', () => {
+      const result = cta.analyzePsychology('This is a product description.');
+      expect(Object.values(result.dimensions).every(v => v === false)).toBe(true);
+      expect(result.score).toBe(0);
+    });
+  });
 });

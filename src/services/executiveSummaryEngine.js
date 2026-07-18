@@ -24,11 +24,18 @@ function formatObjectiveLabel(objective) {
  *   ruleEngineDecisions - decisionEngine.decisionsFromRuleEngine() output, or []
  *   recommendations    - intelligence.recommendations, or []
  *   alerts             - intelligence.alerts, or []
+ *   rootCauseReasoning - Phase 43 (Task 1), OPTIONAL: executiveReasoningEngine.
+ *     buildRootCauseReasoning() output. Callers that don't pass this get the
+ *     exact pre-Phase-43 behavior (diagnosis.summary verbatim, including its
+ *     "...investigate manually" fallback) -- fully backward compatible.
+ *     Callers that do pass it get a cross-signal, confidence-scored probable
+ *     explanation instead, for the one case diagnosisEngine.js itself has no
+ *     matching cause pattern for.
  * @returns {string}
  */
 function buildExecutiveSummary({
   objective, healthScore = null, healthStatus = null, diagnosis = null,
-  ruleEngineDecisions = [], recommendations = [], alerts = [],
+  ruleEngineDecisions = [], recommendations = [], alerts = [], rootCauseReasoning = null,
 } = {}) {
   // Lifecycle fix: a non-delivering entity (paused/archived/disapproved/
   // pending review/etc.) must never be summarized as if its performance
@@ -56,6 +63,16 @@ function buildExecutiveSummary({
 
     if (diagnosis.category && diagnosis.category !== 'unexplained' && diagnosis.category !== 'unclassified') {
       parts.push(`Root cause: ${diagnosis.category.replace(/_/g, ' ')}.`);
+    } else if (diagnosis.category === 'unexplained' && rootCauseReasoning) {
+      // Task 1 — never leave a bare "investigate manually" when cross-signal
+      // reasoning is available. `probable_explanation` is null only in the
+      // genuinely-no-data case, which itself is an honest, low-confidence
+      // statement (not a fabricated cause), so it's still safe to show.
+      parts.push(
+        rootCauseReasoning.probable_explanation
+          || 'No matching cause pattern was found, and no creative/fatigue/frequency signal was available to cross-reference.'
+      );
+      parts.push(`Confidence: ${rootCauseReasoning.confidence.confidence_pct}% (${rootCauseReasoning.confidence.reason})`);
     } else if (diagnosis.summary) {
       parts.push(diagnosis.summary);
     }

@@ -55,6 +55,34 @@ const { applyHistoricalLearning } = require('../../services/executiveMemory');
 const { buildExecutiveSummary } = require('../../services/executiveSummaryEngine');
 const { buildObjectiveIntelligence } = require('../../services/objectiveIntelligenceEngine');
 const { enrichObjectiveIntelligence } = require('../../services/objectiveDiagnosisEngine');
+const { buildRootCauseReasoning } = require('../../services/executiveReasoningEngine');
+
+// ─────────────────────────────────────────────
+// Phase 43 (Task 1) — cross-signal root-cause reasoning inputs diagnosisEngine.js
+// itself never sees: this campaign's own aggregate creative score/fatigue
+// (latest snapshot per ad, real >= $5-spend creatives only, same tables
+// creativeLibrary.js already reads -- no new table). Read-only.
+// ─────────────────────────────────────────────
+function getCampaignCreativeCrossSignals(metaCampaignId, currentMetrics, deltas) {
+  const agg = db.get(
+    `SELECT AVG(ca.score_overall) as avg_score,
+            SUM(CASE WHEN ca.fatigue_status IN ('moderate','severe') THEN 1 ELSE 0 END) as fatigued_count,
+            COUNT(*) as n
+     FROM creative_analytics ca
+     INNER JOIN (
+       SELECT meta_ad_id, MAX(date_until) as max_until FROM creative_analytics
+       WHERE meta_campaign_id = ? GROUP BY meta_ad_id
+     ) latest ON latest.meta_ad_id = ca.meta_ad_id AND latest.max_until = ca.date_until
+     WHERE ca.meta_campaign_id = ? AND ca.spend >= 5 AND ca.score_overall IS NOT NULL`,
+    [metaCampaignId, metaCampaignId]
+  );
+  return {
+    creativeScore: agg && agg.n > 0 ? Math.round(agg.avg_score * 10) / 10 : null,
+    fatigueStatus: agg && agg.n > 0 ? (agg.fatigued_count > 0 ? 'moderate' : 'none') : null,
+    frequency: currentMetrics?.frequency ?? null,
+    ctrDeltaPct: deltas?.ctr?.delta_pct ?? null,
+  };
+}
 
 // ─────────────────────────────────────────────
 // Mock data (development / no Meta token)
@@ -242,6 +270,13 @@ router.get('/', asyncHandler(async (req, res) => {
     effectiveStatus: campaign.effective_status,
   });
 
+  // Phase 43 (Task 1) — cross-signal root-cause reasoning for the one case
+  // diagnosisEngine.js's own cascade can't explain.
+  const rootCauseReasoning = buildRootCauseReasoning({
+    diagnosis,
+    crossSignals: getCampaignCreativeCrossSignals(campaign.meta_campaign_id, currentMetrics, deltas),
+  });
+
   // Product Completion Mode, Milestone 1 — Executive Summary: `diagnosis` was
   // already computed by orchestrateIntelligence() on this route but never
   // used here before now (discarded). No new computation beyond the
@@ -254,6 +289,7 @@ router.get('/', asyncHandler(async (req, res) => {
     ruleEngineDecisions,
     recommendations: intelligence.recommendations,
     alerts: intelligence.alerts,
+    rootCauseReasoning,
   });
 
   // Product Completion Mode, Milestone 2 — Objective Intelligence: joins
@@ -320,6 +356,7 @@ router.get('/', asyncHandler(async (req, res) => {
     comparisons:    buildComparisons(currentMetrics, priorMetrics, deltas, req.query.preset || 'last_7_days'),
 
     executive_summary: executiveSummary,
+    root_cause_reasoning: rootCauseReasoning,
     objective_intelligence: objectiveIntelligence,
 
     health_score:     intelligence.health.score,
@@ -688,6 +725,12 @@ router.get('/diagnosis', asyncHandler(async (req, res) => {
   const effectiveHealthScore  = isNotDelivering ? null              : (healthRow ? healthRow.health_score  : null);
   const effectiveHealthStatus = isNotDelivering ? 'not_delivering'  : (healthRow ? healthRow.health_status : null);
 
+  // Phase 43 (Task 1) — same cross-signal reasoning as the main insights route.
+  const rootCauseReasoning = buildRootCauseReasoning({
+    diagnosis,
+    crossSignals: getCampaignCreativeCrossSignals(campaign.meta_campaign_id, currentMetrics, deltas),
+  });
+
   // Product Completion Mode, Milestone 1 — Executive Summary, same function
   // as the main insights route, using this route's own already-computed
   // diagnosis/health/findings inputs.
@@ -699,6 +742,7 @@ router.get('/diagnosis', asyncHandler(async (req, res) => {
     ruleEngineDecisions,
     recommendations: recommendationFindings,
     alerts: alertFindings,
+    rootCauseReasoning,
   });
 
   return res.json({
@@ -708,6 +752,7 @@ router.get('/diagnosis', asyncHandler(async (req, res) => {
     date_range:    { since, until },
     diagnosis,
     executive_summary: executiveSummary,
+    root_cause_reasoning: rootCauseReasoning,
     health_score:      effectiveHealthScore,
     health_status:     effectiveHealthStatus,
     related_decisions: relatedDecisions,

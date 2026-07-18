@@ -53,4 +53,34 @@ describe('executiveSummaryEngine.buildExecutiveSummary', () => {
     expect(summary).not.toMatch(/Root cause: unexplained/);
     expect(summary).toMatch(/ROAS fell 20%, but no matching cause pattern was found\./);
   });
+
+  // Phase 43 (Task 1) — when the caller DOES pass cross-signal reasoning for
+  // an unexplained diagnosis, the bare "investigate manually" style summary
+  // is replaced by the hedged, confidence-scored explanation instead.
+  test('uses rootCauseReasoning instead of the raw diagnosis.summary when provided for an unexplained diagnosis', () => {
+    const summary = buildExecutiveSummary({
+      objective: 'engagement', healthScore: 70, healthStatus: 'good',
+      diagnosis: { status: 'diagnosed', primaryLabel: 'Conversations', primaryDelta: { delta_pct: -6.6 }, category: 'unexplained', summary: 'Conversations decreased 6.6%, but no matching cause pattern was found — investigate manually.' },
+      rootCauseReasoning: {
+        probable_explanation: 'Most probable explanation: auction competition or audience demand fluctuation -- every internally-tracked signal checks out healthy.',
+        confidence: { confidence_pct: 72, reason: '4 supporting signal(s), 0 conflicting signal(s).' },
+      },
+    });
+    expect(summary).not.toMatch(/investigate manually/);
+    expect(summary).toMatch(/auction competition or audience demand fluctuation/);
+    expect(summary).toMatch(/Confidence: 72%/);
+  });
+
+  test('never fabricates a cause when rootCauseReasoning itself found no cross-signal data', () => {
+    const summary = buildExecutiveSummary({
+      objective: 'engagement', healthScore: 70, healthStatus: 'good',
+      diagnosis: { status: 'diagnosed', primaryLabel: 'Conversations', primaryDelta: { delta_pct: -6.6 }, category: 'unexplained', summary: 'Conversations decreased 6.6%, but no matching cause pattern was found — investigate manually.' },
+      rootCauseReasoning: {
+        probable_explanation: null,
+        confidence: { confidence_pct: 20, reason: '0 supporting signal(s), 0 conflicting signal(s) -- capped due to insufficient historical data.' },
+      },
+    });
+    expect(summary).toMatch(/no creative\/fatigue\/frequency signal was available/);
+    expect(summary).toMatch(/Confidence: 20%/);
+  });
 });
