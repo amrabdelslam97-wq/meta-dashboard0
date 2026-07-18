@@ -18,6 +18,8 @@ const { compareCreativesInAdSet, generateRecommendations, detectFatigue } = requ
 const { buildExecutiveSummary } = require('./executiveSummaryEngine');
 const { runAdIntelligence } = require('./adIntelligence');
 const { buildCreativeAdvisor } = require('./advisorEngine');
+const { buildRootCauseReasoning } = require('./executiveReasoningEngine');
+const { buildExecutiveDecisionLayer } = require('./executiveDecisionEngine');
 
 function round(n, dp = 2) {
   if (n === null || n === undefined || Number.isNaN(n)) return null;
@@ -73,6 +75,87 @@ function getCreativeBenchmarkAverages(latestRow) {
     };
   }
   return result;
+}
+
+// ─────────────────────────────────────────────
+// Phase 43 (Task 6) — this ad's own real, already-persisted health score /
+// recommendation / alert history (health_score_history, recommendation_log,
+// active_alerts -- all Phase 2 tables, entity_type='ad' rows written by the
+// existing orchestrator, no new table). Read-only, no new writes.
+// ─────────────────────────────────────────────
+function getCreativeStateHistory(metaAdId) {
+  const healthHistory = db.all(
+    `SELECT health_score, health_status, calculated_at FROM health_score_history
+     WHERE entity_type = 'ad' AND entity_meta_id = ? ORDER BY calculated_at ASC`,
+    [metaAdId]
+  );
+  const recommendationHistory = db.all(
+    `SELECT rule_code, recommendation_title, severity, generated_at, dismissed_at FROM recommendation_log
+     WHERE entity_type = 'ad' AND entity_meta_id = ? ORDER BY generated_at ASC`,
+    [metaAdId]
+  );
+  const alertHistory = db.all(
+    `SELECT alert_code, severity, alert_message, status, first_detected_at, resolved_at FROM active_alerts
+     WHERE entity_type = 'ad' AND entity_meta_id = ? ORDER BY first_detected_at ASC`,
+    [metaAdId]
+  );
+  return { healthHistory, recommendationHistory, alertHistory };
+}
+
+// ─────────────────────────────────────────────
+// Phase 44 (Task 5) — best/worst scored creative in the account (latest
+// snapshot per ad, >= $5 spend, excluding this ad itself). Real read, no
+// fabricated "industry" comparison.
+// ─────────────────────────────────────────────
+function getAccountBestWorstCreative(adAccountId, excludeMetaAdId) {
+  if (!adAccountId) return { best: null, worst: null };
+  const rows = db.all(
+    `SELECT ca.meta_ad_id, ca.score_overall, a.name as ad_name FROM creative_analytics ca
+     LEFT JOIN ads a ON a.meta_ad_id = ca.meta_ad_id
+     INNER JOIN (
+       SELECT meta_ad_id, MAX(date_until) as max_until FROM creative_analytics
+       WHERE ad_account_id = ? GROUP BY meta_ad_id
+     ) latest ON latest.meta_ad_id = ca.meta_ad_id AND latest.max_until = ca.date_until
+     WHERE ca.ad_account_id = ? AND ca.spend >= 5 AND ca.score_overall IS NOT NULL AND ca.meta_ad_id != ?
+     ORDER BY ca.score_overall DESC`,
+    [adAccountId, adAccountId, excludeMetaAdId || '']
+  );
+  if (rows.length === 0) return { best: null, worst: null };
+  return { best: rows[0], worst: rows[rows.length - 1] };
+}
+
+// ─────────────────────────────────────────────
+// Phase 45 (Task 13) — real, already-persisted Budget Intelligence
+// (budget_analysis_history) and Audience Intelligence (audience_score_
+// history) signals for this ad's campaign, so the Executive Decision Engine
+// can cross-check against them. Both are single, cheap indexed lookups
+// (same query shape as every other Phase 42-44 benchmark read in this
+// file) -- absence of a row is reported as `null`, never fabricated.
+// ─────────────────────────────────────────────
+function getCrossModuleSignals(adAccountId, metaCampaignId) {
+  if (!metaCampaignId) return { budget: null, audience: null };
+
+  const budgetRow = db.get(
+    `SELECT waste_detected, waste_amount, efficiency_status FROM budget_analysis_history
+     WHERE ad_account_id = ? AND level = 'campaign' AND entity_meta_id = ?
+     ORDER BY calculated_at DESC LIMIT 1`,
+    [adAccountId, metaCampaignId]
+  );
+
+  // Real average saturation across this campaign's most recently-scored
+  // audience dimensions (age/gender/region/placement etc.) -- not a single
+  // dimension cherry-picked, and not fabricated when no row exists yet.
+  const audienceRow = db.get(
+    `SELECT AVG(saturation_score) as avg_saturation, COUNT(*) as n FROM audience_score_history
+     WHERE ad_account_id = ? AND meta_campaign_id = ? AND saturation_score IS NOT NULL
+     AND date_until = (SELECT MAX(date_until) FROM audience_score_history WHERE ad_account_id = ? AND meta_campaign_id = ?)`,
+    [adAccountId, metaCampaignId, adAccountId, metaCampaignId]
+  );
+
+  return {
+    budget: budgetRow ? { waste_detected: !!budgetRow.waste_detected, waste_amount: budgetRow.waste_amount, efficiency_status: budgetRow.efficiency_status } : null,
+    audience: (audienceRow && audienceRow.n > 0) ? { saturation_score: round(audienceRow.avg_saturation, 1) } : null,
+  };
 }
 
 // ─────────────────────────────────────────────
@@ -177,6 +260,10 @@ function toComparisonShape(row) {
     meta_ad_id: row.meta_ad_id,
     ad_name: row.ad_name || row.headline || row.meta_ad_id,
     cost_per_result: row.cpa,
+    // Phase 44 (Task 6) -- real CTR/frequency/fatigue fields alongside the
+    // sub-scores, so advisorEngine.buildWinLossNarrative() can cite real
+    // metrics ("CTR is 26% higher") on top of the score-dimension diffs.
+    ctr: row.ctr, frequency: row.frequency, fatigue_status: row.fatigue_status,
     scores: {
       score_overall: row.score_overall, score_hook: row.score_hook, score_headline: row.score_headline,
       score_copy: row.score_copy, score_cta: row.score_cta, score_offer: row.score_offer,
@@ -364,6 +451,24 @@ async function getCreativeDetails(adIdOrMetaAdId, options = {}) {
   // wholesale (Health/Diagnosis/Rule Engine/MAIFS), never re-implemented.
   const intelligence = await runAdIntelligence(ad.id, { useMock });
 
+  // Phase 43 (Task 1) — cross-signal root-cause reasoning for the one case
+  // diagnosisEngine.js's own cascade can't explain (category==='unexplained').
+  // Every input here is already computed above (creative score, live-
+  // recomputed fatigue) or already on the intelligence bundle (frequency via
+  // the raw metrics, CTR delta) -- no new calculation, just wiring real
+  // signals diagnosisEngine.js itself never sees into the existing summary.
+  const rootCauseReasoning = (intelligence && intelligence.analyzed !== false)
+    ? buildRootCauseReasoning({
+        diagnosis: intelligence.diagnosis,
+        crossSignals: {
+          creativeScore: scores.score_overall,
+          fatigueStatus: fatigue.status,
+          frequency: latest.frequency ?? intelligence.metrics?.frequency ?? null,
+          ctrDeltaPct: intelligence.deltas?.ctr?.delta_pct ?? null,
+        },
+      })
+    : null;
+
   const executiveSummary = intelligence && intelligence.analyzed !== false
     ? buildExecutiveSummary({
         objective: intelligence.objective,
@@ -373,6 +478,7 @@ async function getCreativeDetails(adIdOrMetaAdId, options = {}) {
         ruleEngineDecisions: [],
         recommendations: intelligence.recommendations,
         alerts: intelligence.alerts,
+        rootCauseReasoning,
       })
     : null;
 
@@ -380,10 +486,38 @@ async function getCreativeDetails(adIdOrMetaAdId, options = {}) {
   // over everything already computed above (scores/fatigue/text analysis/
   // comparison/timeline) plus real peer-average benchmarks -- no new score,
   // no rewrite of any existing engine. See advisorEngine.js's own header.
+  // Phase 43 additionally wires in the real health score (Task 2) and this
+  // ad's real persisted health/recommendation/alert history (Task 6) --
+  // both already-existing tables, no schema change, no fabricated events.
   const benchmarkAverages = getCreativeBenchmarkAverages(latest);
+  const { healthHistory, recommendationHistory, alertHistory } = getCreativeStateHistory(ad.meta_ad_id);
+  const accountBestWorst = getAccountBestWorstCreative(latest.ad_account_id, ad.meta_ad_id);
   const advisor = buildCreativeAdvisor({
     scores, fatigue, textAnalysis: aiAnalysis, latestRow: latest, benchmarkAverages,
     comparison, comparisonRole: role, shapedSiblings, timeline, recommendations,
+    healthScore: intelligence && intelligence.analyzed !== false ? intelligence.health_score : null,
+    healthHistory, recommendationHistory, alertHistory, accountBestWorst,
+  });
+
+  // Phase 45 — Executive Decision Layer. The single arbitration point over
+  // everything already computed above (advisor panel, priorities, root
+  // cause, benchmark, plus the real Rule Engine findings already on
+  // `intelligence`) -- never a second, competing verdict; see
+  // executiveDecisionEngine.js's own header for the conflict-resolution rule.
+  const crossModuleSignals = getCrossModuleSignals(latest.ad_account_id, latest.meta_campaign_id);
+  const executiveDecision = buildExecutiveDecisionLayer({
+    panel: advisor.panel,
+    priorities: advisor.priorities,
+    fatigue,
+    scores,
+    healthStatus: intelligence && intelligence.analyzed !== false ? intelligence.health_status : null,
+    ruleEngineFindings: (intelligence && intelligence.analyzed !== false) ? (intelligence.framework_recommendations || []) : [],
+    benchmarkVerdict: advisor.benchmark.overall_verdict,
+    benchmarkComparison: advisor.benchmark.comparison,
+    historicalComparison: advisor.benchmark.historical,
+    rootCause: advisor.root_cause,
+    latestRow: latest,
+    crossModuleSignals,
   });
 
   return {
@@ -403,8 +537,10 @@ async function getCreativeDetails(adIdOrMetaAdId, options = {}) {
     recommendations,
     intelligence,
     executive_summary: executiveSummary,
+    root_cause_reasoning: rootCauseReasoning,
     benchmark_averages: benchmarkAverages,
     advisor,
+    executive_decision: executiveDecision,
   };
 }
 
@@ -414,4 +550,7 @@ module.exports = {
   getAdSetComparison,
   getCreativeDetails,
   getCreativeBenchmarkAverages,
+  getCreativeStateHistory,
+  getAccountBestWorstCreative,
+  getCrossModuleSignals,
 };

@@ -44,6 +44,15 @@ beforeAll(() => {
   const source = [
     'scoreClass', 'scoreLabel', 'fmtHealthStatus', 'fmtDate', 'fmtNum', 'objChip', 'scoreCircle',
     'ciFatigueBadgeClass', 'ciRoleBadge', 'ciCreativeTypeIcon',
+    // Phase 44 — AI Strategic Advisor panel + supporting render helpers.
+    'ciAdvisorStatusBadgeClass', 'ciPriorityBadgeClass', 'ciRiskBadgeClass',
+    'ciRenderAdvisorPanel', 'ciRenderScoreRelationship', 'ciRenderBusinessImpact',
+    'ciRenderRiskAssessment', 'ciRenderPriorities', 'ciBenchmarkGrainRow', 'ciRenderBenchmark',
+    'ciMergedTimelineRows',
+    // Phase 45 — Executive Decision Layer render helpers.
+    'ciDecisionColorClass', 'ciDecisionBorderVar', 'ciRenderExecutivePriorityCard', 'ciRenderWhyNot',
+    'ciRenderConsistencyAudit', 'ciRenderExecutiveDecision', 'ciRenderMarketingDirectorPlan',
+    'ciRenderContributionFormula', 'ciRenderBusinessImpactRanking',
   ].map(name => extractFn(script, name)).join('\n\n')
     + '\n\n' + extractConst(script, 'CI_TIMELINE_BADGE')
     + '\n\n' + extractFn(script, 'ciRenderCreativeCard')
@@ -166,6 +175,88 @@ describe('Creative Intelligence frontend render functions', () => {
       }));
       expect(html).toContain('Not enough history');
       expect(html).toContain('Not enough creatives');
+    });
+
+    // Phase 44 — AI Strategic Advisor panel + upgraded recommendations/
+    // benchmarking/timeline, all driven by the `advisor` bundle field.
+    test('renders the AI Strategic Advisor panel and upgraded sections when advisor data is present', () => {
+      const html = ciRenderDetails(baseDetail({
+        advisor: {
+          panel: {
+            current_status: 'Scale', confidence: 89, priority: 'HIGH',
+            reason: ['Creative quality is holding steady (score 68).', 'This creative still has room to scale before signs of audience fatigue appear.'],
+            recommended_actions: ['Increase budget 20%', 'Keep current audience'],
+            expected_result: 'Higher reach with stable CPA.', business_risk: 'LOW',
+            potential_risks: ['Watch frequency after scaling (currently 1.4).'],
+          },
+          score_relationship: { pattern: 'both_high', explanation: 'Both health and creative quality are strong.', next_step: 'Keep the current creative running.' },
+          priorities: [{
+            priority: 1, priority_label: 'Highest Priority', tier: 'Immediate Actions', action: 'Duplicate Winner',
+            why: 'Creative continues outperforming account average.', evidence_used: ['CTR +18%', 'CPA stable', 'Frequency 1.4'],
+            confidence_pct: 92, confidence: 'high', expected_impact: 'Reach increase without major CPA increase.', risk: 'Low risk.',
+            business_impact: { reach_increase: { range: '10-20%', probability: 'Medium' }, cpa_change: { range: '+/-10%', probability: 'Low' }, ctr_improvement: { range: null, probability: null } },
+            risk_assessment: {
+              implementation_risk: { level: 'Low', reason: 'x' }, learning_phase_risk: { level: 'Medium', reason: 'x' },
+              audience_fatigue_risk: { level: 'Low', reason: 'x' }, budget_risk: { level: 'Medium', reason: 'x' }, performance_volatility: { level: 'Low', reason: 'x' },
+            },
+          }],
+          benchmark: {
+            comparison: { ad_set: { status: 'insufficient_data', reason: 'not enough peers' }, campaign: { status: 'insufficient_data', reason: 'not enough peers' }, account: { status: 'insufficient_data', reason: 'not enough peers' } },
+            historical: { status: 'ok', trend: { ctr: { direction: 'improving' } } },
+            previous_version: { status: 'no_version_change', reason: 'x' },
+            account_best_worst: { status: 'ok', best: { ad_name: 'Best Ad', score_overall: 90, score_gap: 22 }, worst: { ad_name: 'Worst Ad', score_overall: 20, score_gap: 48 } },
+          },
+          comparison_breakdown: { winner_vs_weakest: { narrative: 'This creative wins because CTR is 26% higher. Compared against: Ad XYZ.' } },
+          rich_timeline: { business_events: [{ type: 'ctr_peak', date: '2026-01-05', detail: 'New high CTR (3.5%), up 20% from the prior snapshot.' }], state_transitions: [], not_tracked_at_ad_grain: ['budget_changes', 'audience_changes'] },
+        },
+      }));
+      expect(html).toContain('AI Strategic Advisor');
+      expect(html).toContain('SCALE');
+      expect(html).toContain('89%');
+      expect(html).toContain('Increase budget 20%');
+      expect(html).toContain('Higher reach with stable CPA.');
+      expect(html).toContain('Creative Score vs. Ad Health');
+      expect(html).toContain('Keep the current creative running.');
+      expect(html).toContain('Immediate Actions');
+      expect(html).toContain('CTR +18%');
+      expect(html).toContain('Best Ad');
+      expect(html).toContain('This creative wins because CTR is 26% higher');
+      expect(html).toContain('New high CTR');
+      expect(html).toContain('budget changes');
+      expect(() => ciRenderDetails(baseDetail({ advisor: null }))).not.toThrow();
+    });
+
+    // Phase 45 — Executive Decision Layer: the single arbitrated verdict,
+    // priority card, why-not explanations, marketing director plan, and
+    // winning/loss formula, all driven by `executive_decision`.
+    test('renders the Executive Decision card and its sub-sections when executive_decision data is present', () => {
+      const html = ciRenderDetails(baseDetail({
+        executive_decision: {
+          decision: 'SCALE', confidence: 89, confidence_reason: '4 supporting signal(s), 0 conflicting signal(s).',
+          why_not: { MONITOR: 'A clear scaling signal already exists.', PAUSE: 'Health score remains excellent.', STOP: 'No compounding failure present.', TEST: 'No single weak dimension stands out.', OPTIMIZE: 'No fatigue or refresh signal is active.' },
+          consistency_audit: { signals_disagreed: true, resolution_rule: 'The more conservative signal always wins.', overrides: [{ from: 'SCALE', to: 'SCALE', because: 'Rule Engine finding "Weak CTA" suggested OPTIMIZE, but SCALE is not more conservative so it does not apply here -- kept for illustration.' }] },
+          priority_card: { available: true, action: 'Rewrite the first sentence.', business_impact: 'Highest', confidence_pct: 88, reason: 'Weak hook is currently the largest growth bottleneck.', estimated_gain: 'Highest among all available actions.' },
+          marketing_director_plan: { today: 'Keep campaign running.', tomorrow: 'Rewrite opening hook.', this_week: 'Launch Variant B.', next_week: 'Increase budget if CTR remains stable.' },
+          winning_formula: { available: true, items: [{ factor: 'Trust', contribution_pct: 35, evidence: 'x' }, { factor: 'Offer', contribution_pct: 25, evidence: 'x' }] },
+          loss_formula: { available: false, reason: 'This creative is currently winning, not losing.' },
+          recommendations: [],
+          dropped_recommendations: [{ action: 'Rewrite Hook', conflicts_with: 'Scale', reason: 'x' }],
+        },
+      }));
+      expect(html).toContain('Executive Decision');
+      expect(html).toContain('SCALE');
+      expect(html).toContain('89%');
+      expect(html).toContain('If you do only one thing today');
+      expect(html).toContain('Rewrite the first sentence.');
+      expect(html).toContain('Why not MONITOR?');
+      expect(html).toContain('Signals disagreed');
+      expect(html).toContain('If I were managing this account');
+      expect(html).toContain('Launch Variant B.');
+      expect(html).toContain('Winning Formula');
+      expect(html).toContain('Trust');
+      expect(html).toContain('35%');
+      expect(html).toContain('Not shown (conflicted');
+      expect(() => ciRenderDetails(baseDetail({ executive_decision: null }))).not.toThrow();
     });
   });
 });

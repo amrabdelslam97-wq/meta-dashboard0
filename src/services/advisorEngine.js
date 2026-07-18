@@ -18,6 +18,7 @@
  */
 
 const { MIN_SPEND_FOR_FATIGUE } = require('./creativeIntelligenceEngine');
+const { computeConfidence } = require('./executiveReasoningEngine');
 
 const TOLERANCE_PCT = 10; // within +/-10% of a benchmark average counts as "average", not above/below
 const STRONG_SCORE = 65;
@@ -103,10 +104,16 @@ function buildRootCause({ textAnalysis, fatigue, benchmarkComparison }) {
     for (const [key, label] of Object.entries(DIMENSION_LABELS)) {
       const dim = textAnalysis[key];
       if (!dim || dim.score === null || dim.score === undefined) continue;
+      // Phase 43 (Task 9) -- when this dimension tracks a real `missing`
+      // list (hook/headline today), surface it as "lost points because" so
+      // a score is never just a bare number. Absent for dimensions that
+      // don't structurally track missing signals (copy/cta/offer/trust/
+      // visual) -- honest partial coverage, never fabricated.
+      const deductions = Array.isArray(dim.missing) && dim.missing.length ? dim.missing.map(m => m.label) : undefined;
       if (dim.score >= STRONG_SCORE || STRONG_LABELS.has(dim.label)) {
-        positive.push({ factor: label, evidence: dim.evidence, impact: Math.round(dim.score - 50) });
+        positive.push({ factor: label, evidence: dim.evidence, impact: Math.round(dim.score - 50), ...(deductions ? { missed_opportunities: deductions } : {}) });
       } else if (dim.score < WEAK_SCORE || WEAK_LABELS.has(dim.label)) {
-        negative.push({ factor: label, evidence: dim.evidence, impact: Math.round(50 - dim.score) });
+        negative.push({ factor: label, evidence: dim.evidence, impact: Math.round(50 - dim.score), ...(deductions ? { lost_points_because: deductions } : {}) });
       }
     }
   }
@@ -152,12 +159,27 @@ function confidenceFromSpend(spend, fatigueStatus) {
 function buildScoreExplanation({ scores, textAnalysis, fatigue, spend }) {
   const { positive_factors, negative_factors } = buildRootCause({ textAnalysis, fatigue, benchmarkComparison: null });
   const missing_opportunities = [];
+  // Phase 43 (Task 9) -- every dimension score gets its own "why" entry,
+  // not only the ones that crossed the strong/weak threshold above. When a
+  // real `missing` list exists (hook/headline), the deduction reason names
+  // the actual absent signals instead of a bare number.
+  const dimension_breakdown = [];
   if (textAnalysis) {
     for (const [key, label] of Object.entries(DIMENSION_LABELS)) {
       const dim = textAnalysis[key];
-      if (dim && dim.label === 'missing') {
+      if (!dim) continue;
+      if (dim.label === 'missing') {
         missing_opportunities.push({ dimension: label, reason: dim.evidence });
       }
+      if (dim.score === null || dim.score === undefined) continue;
+      const deductions = Array.isArray(dim.missing) && dim.missing.length ? dim.missing.map(m => m.label) : null;
+      dimension_breakdown.push({
+        dimension: label,
+        score: dim.score,
+        reason: deductions
+          ? `Lost ${Math.max(0, 100 - dim.score)} points because: ${deductions.join(', ')}.`
+          : dim.evidence,
+      });
     }
   }
   return {
@@ -165,7 +187,289 @@ function buildScoreExplanation({ scores, textAnalysis, fatigue, spend }) {
     positive_factors,
     negative_factors,
     missing_opportunities,
+    dimension_breakdown,
     confidence_level: confidenceFromSpend(spend, fatigue?.status),
+  };
+}
+
+// ─────────────────────────────────────────────
+// PHASE 43 (Task 2) — Connect Creative Score with Health Score
+// ─────────────────────────────────────────────
+
+function scoreTier(score) {
+  if (score >= STRONG_SCORE) return 'high';
+  if (score < WEAK_SCORE) return 'low';
+  return 'mid';
+}
+const TIER_WORD = { high: 'strong', low: 'weak', mid: 'middling' };
+
+function buildScoreRelationship(healthScore, creativeScore) {
+  if (healthScore == null || creativeScore == null) {
+    return { pattern: 'insufficient_data', explanation: 'Health score and/or creative score not yet available for this ad -- cannot relate the two.', next_step: null };
+  }
+  const healthTier = scoreTier(healthScore);
+  const creativeTier = scoreTier(creativeScore);
+
+  if (healthTier === 'high' && creativeTier === 'high') {
+    return {
+      pattern: 'both_high',
+      explanation: `Both health (${healthScore}) and creative quality (${creativeScore}) are strong -- performance is being driven by a genuinely good ad, not by targeting/bid luck alone. Safe to scale with confidence.`,
+      next_step: 'Keep the current creative running and consider scaling budget -- both signals support it.',
+    };
+  }
+  if (healthTier === 'high' && creativeTier === 'low') {
+    return {
+      pattern: 'high_health_low_creative',
+      explanation: `Health is strong (${healthScore}) despite a weak creative (${creativeScore}) -- the campaign is likely being carried by targeting/bid/objective fit rather than the ad itself. There is still real creative upside on the table.`,
+      // Phase 44 (Task 3) -- the actionable "unlock additional growth" framing.
+      next_step: 'Improving the hook or copy could unlock additional growth on top of what delivery is already achieving.',
+    };
+  }
+  if (healthTier === 'low' && creativeTier === 'high') {
+    return {
+      pattern: 'high_creative_low_health',
+      explanation: `The creative itself is strong (${creativeScore}), but overall health is weak (${healthScore}) -- the drag is more likely coming from delivery, audience, or budget factors outside the creative's own message, not the ad's message itself.`,
+      next_step: 'Investigate delivery-side factors (audience, budget, bidding) before assuming the message itself needs work.',
+    };
+  }
+  if (healthTier === 'low' && creativeTier === 'low') {
+    return {
+      pattern: 'both_low',
+      explanation: `Both creative quality (${creativeScore}) and health (${healthScore}) are weak -- this is a compounding problem. Fixing only one is unlikely to be enough on its own.`,
+      next_step: 'Address the creative first -- a stronger message is usually the higher-leverage fix before spending more on delivery.',
+    };
+  }
+  // Phase 43 fix -- honesty bug: at least one score here is 'mid', never
+  // both confidently high/low, so the explanation must describe EACH
+  // score's actual tier rather than a blanket "both middling" (a health
+  // score of 99 next to a mid creative score is not "both in the middle").
+  return {
+    pattern: 'mixed',
+    explanation: `Health is ${TIER_WORD[healthTier]} (${healthScore}) and creative quality is ${TIER_WORD[creativeTier]} (${creativeScore}) -- no strong high/low pattern in both at once yet.`,
+    // Phase 44 (Task 3) -- names which side has more room to help, when one
+    // side is clearly ahead of the other, rather than a generic non-answer.
+    next_step: healthTier === 'high'
+      ? 'Performance is being carried by strong delivery -- improving the hook could unlock additional growth on top of it.'
+      : creativeTier === 'high'
+        ? 'The creative is not the bottleneck here -- delivery-side factors are more likely holding results back.'
+        : 'Keep monitoring both signals before making a scaling decision -- neither is clearly the bottleneck yet.',
+  };
+}
+
+// ─────────────────────────────────────────────
+// PHASE 43 (Task 8) — Historical (self-trend) & previous-creative-version
+// benchmarking. Extends Phase 42's account/campaign/ad-set peer averages
+// with the two comparisons Task 8 explicitly adds: this same ad's own past
+// performance, and the metrics before/after its last real content change.
+// Never compares against a fabricated "industry benchmark".
+// ─────────────────────────────────────────────
+
+const HISTORICAL_TREND_METRICS = { ctr: true, roas: true, score_overall: true, cpa: false, cpm: false };
+
+function trendDirection(metric, deltaPct) {
+  if (deltaPct == null || Math.abs(deltaPct) < 5) return 'stable';
+  if (!(metric in HISTORICAL_TREND_METRICS)) return deltaPct > 0 ? 'rising' : 'falling';
+  const higherIsBetter = HISTORICAL_TREND_METRICS[metric];
+  return (higherIsBetter ? deltaPct > 0 : deltaPct < 0) ? 'improving' : 'declining';
+}
+
+function buildHistoricalComparison(snapshots) {
+  const rows = (snapshots || []).filter(r => (r.spend || 0) >= 5).slice().sort((a, b) => a.date_since.localeCompare(b.date_since));
+  if (rows.length < 2) {
+    return { status: 'insufficient_data', reason: 'Need at least 2 real snapshots (>= $5 spend) for this ad to compare against its own history.' };
+  }
+  const latest = rows[rows.length - 1];
+  const previous = rows[rows.length - 2];
+  const trend = {};
+  for (const metric of ['ctr', 'cpa', 'cpm', 'roas', 'score_overall', 'frequency']) {
+    if (latest[metric] == null || previous[metric] == null) continue;
+    const deltaPct = previous[metric] !== 0 ? round(((latest[metric] - previous[metric]) / Math.abs(previous[metric])) * 100) : null;
+    trend[metric] = { current: latest[metric], previous: previous[metric], delta_pct: deltaPct, direction: trendDirection(metric, deltaPct) };
+  }
+  return {
+    status: 'ok',
+    latest_snapshot: { date_since: latest.date_since, date_until: latest.date_until },
+    previous_snapshot: { date_since: previous.date_since, date_until: previous.date_until },
+    trend,
+  };
+}
+
+function buildPreviousVersionComparison(timeline) {
+  if (!timeline || !Array.isArray(timeline.events)) {
+    return { status: 'no_data', reason: 'No timeline available for this ad.' };
+  }
+  const changeEvents = timeline.events.filter(e => e.type === 'change');
+  if (changeEvents.length === 0) {
+    return { status: 'no_version_change', reason: 'No content change (headline/primary text/CTA/creative type/destination URL) detected yet for this ad -- nothing to compare against a previous version.' };
+  }
+  const lastChange = changeEvents[changeEvents.length - 1];
+  const snapshots = (timeline.snapshots || []).slice().sort((a, b) => a.date_since.localeCompare(b.date_since));
+  const before = snapshots.filter(s => s.date_since < lastChange.date).slice(-1)[0];
+  const after = snapshots.find(s => s.date_since >= lastChange.date);
+  if (!before || !after) {
+    return { status: 'insufficient_data', reason: 'A content change was detected, but there are not enough snapshots on both sides of it to compare.' };
+  }
+  const comparison = {};
+  for (const metric of ['ctr', 'cpa', 'score_overall']) {
+    if (before[metric] == null || after[metric] == null) continue;
+    const deltaPct = before[metric] !== 0 ? round(((after[metric] - before[metric]) / Math.abs(before[metric])) * 100) : null;
+    comparison[metric] = { before: before[metric], after: after[metric], delta_pct: deltaPct };
+  }
+  return { status: 'ok', change: { field: lastChange.field, date: lastChange.date, from: lastChange.from, to: lastChange.to }, comparison };
+}
+
+// ─────────────────────────────────────────────
+// PHASE 43 (Task 6) — Richer creative evolution timeline. Extends the
+// existing launch/peak/decline/fatigue/recovery event timeline
+// (getCreativeTimeline()) with a real metric-by-metric time series (from
+// the same snapshots, zero new query) and real persisted state transitions
+// (health score / recommendation / alert history for this ad, fetched by
+// the caller from already-existing tables -- never fabricated, never
+// invents a "decision change"/"scaling event" that isn't actually tracked
+// at ad grain in this system).
+// ─────────────────────────────────────────────
+
+function buildMetricsTimeline(snapshots) {
+  return (snapshots || []).slice().sort((a, b) => a.date_since.localeCompare(b.date_since)).map(s => ({
+    date_since: s.date_since, date_until: s.date_until,
+    ctr: s.ctr, cpa: s.cpa, cpm: s.cpm, frequency: s.frequency, spend: s.spend,
+    conversions: s.results, score_overall: s.score_overall, fatigue_status: s.fatigue_status,
+  }));
+}
+
+// Phase 45 (Task 8) -- collapses consecutive, EXACTLY-repeated timeline
+// entries (e.g. eight identical "Health score 99 (excellent)" snapshots in
+// a row) into one ranged entry. Only merges entries of the same type with
+// the identical detail string -- a real, unchanged repeat, never entries
+// that differ in any real way.
+function humanizeRepeatedDetail(type, detail, count) {
+  if (type === 'health_score') {
+    const m = detail.match(/\(([a-z]+)\)/i);
+    const status = m ? m[1] : detail;
+    return `Health Score remained ${status.charAt(0).toUpperCase()}${status.slice(1)}`;
+  }
+  return `${detail} (unchanged across ${count} snapshots)`;
+}
+
+function mergeConsecutiveTimelineEntries(rows) {
+  if (!rows || rows.length === 0) return [];
+  const sorted = rows.slice().sort((a, b) => String(a.date).localeCompare(String(b.date)));
+  const merged = [];
+  for (const row of sorted) {
+    const last = merged[merged.length - 1];
+    if (last && last.type === row.type && last.detail === row.detail) {
+      last._rangeStart = last._rangeStart || last.date;
+      last._rangeEnd = row.date;
+      last._repeatCount = (last._repeatCount || 1) + 1;
+    } else {
+      merged.push({ ...row });
+    }
+  }
+  return merged.map(m => {
+    if (!m._repeatCount || m._repeatCount < 2) return { type: m.type, date: m.date, detail: m.detail };
+    return {
+      type: m.type,
+      date: m._rangeEnd,
+      date_range: [String(m._rangeStart).slice(0, 10), String(m._rangeEnd).slice(0, 10)],
+      detail: humanizeRepeatedDetail(m.type, m.detail, m._repeatCount),
+      repeat_count: m._repeatCount,
+    };
+  });
+}
+
+function buildStateTransitions({ healthHistory = [], recommendationHistory = [], alertHistory = [] } = {}) {
+  const transitions = [
+    ...healthHistory.map(h => ({ type: 'health_score', date: h.calculated_at, detail: `Health score ${h.health_score} (${h.health_status})` })),
+    ...recommendationHistory.map(r => ({ type: 'recommendation', date: r.generated_at, detail: r.recommendation_title || r.rule_code })),
+    ...alertHistory.map(a => ({ type: 'alert', date: a.first_detected_at, detail: `${a.alert_code} (${a.severity}, ${a.status})` })),
+  ];
+  const sorted = transitions.filter(t => !!t.date).sort((a, b) => a.date.localeCompare(b.date));
+  return mergeConsecutiveTimelineEntries(sorted);
+}
+
+// Phase 44 (Task 4) -- business-meaningful metric events (CTR Peak, CPA
+// Drop, Frequency Increase), detected only between two REAL, consecutive
+// snapshots crossing the same 10% signal threshold every other engine in
+// this system uses (creativeIntelligenceEngine.FATIGUE_SIGNAL_THRESHOLD_PCT) --
+// never a fabricated event on a metric that didn't really move.
+const BUSINESS_EVENT_THRESHOLD_PCT = 10;
+
+function buildBusinessEvents(metricsTimeline) {
+  const rows = metricsTimeline || [];
+  const events = [];
+  let ctrPeakSoFar = null;
+
+  for (let i = 0; i < rows.length; i++) {
+    const cur = rows[i];
+    const prev = i > 0 ? rows[i - 1] : null;
+
+    if (cur.ctr != null && (ctrPeakSoFar == null || cur.ctr > ctrPeakSoFar)) {
+      if (prev && prev.ctr != null && prev.ctr > 0) {
+        const pct = round(((cur.ctr - prev.ctr) / prev.ctr) * 100);
+        if (pct >= BUSINESS_EVENT_THRESHOLD_PCT) {
+          events.push({ type: 'ctr_peak', date: cur.date_since, detail: `New high CTR (${cur.ctr}%), up ${pct}% from the prior snapshot.` });
+        }
+      }
+      ctrPeakSoFar = cur.ctr;
+    }
+
+    if (prev && prev.cpa != null && cur.cpa != null && prev.cpa > 0) {
+      const pct = round(((cur.cpa - prev.cpa) / prev.cpa) * 100);
+      if (pct <= -BUSINESS_EVENT_THRESHOLD_PCT) {
+        events.push({ type: 'cpa_drop', date: cur.date_since, detail: `Cost per result fell ${Math.abs(pct)}% (${prev.cpa} -> ${cur.cpa}).` });
+      }
+    }
+
+    if (prev && prev.frequency != null && cur.frequency != null && prev.frequency > 0) {
+      const pct = round(((cur.frequency - prev.frequency) / prev.frequency) * 100);
+      if (pct >= BUSINESS_EVENT_THRESHOLD_PCT) {
+        events.push({ type: 'frequency_increase', date: cur.date_since, detail: `Frequency rose ${pct}% (${prev.frequency} -> ${cur.frequency}).` });
+      }
+    }
+  }
+  return events;
+}
+
+/** Phase 44 (Task 4) -- Creative/Health Score Milestones: a real crossing of the strong/weak threshold, or a real health-status change, never a fabricated one. */
+function buildScoreMilestones(metricsTimeline, healthHistory) {
+  const events = [];
+  const scored = (metricsTimeline || []).filter(r => r.score_overall != null);
+  for (let i = 1; i < scored.length; i++) {
+    const prev = scored[i - 1].score_overall;
+    const cur = scored[i].score_overall;
+    if (prev < STRONG_SCORE && cur >= STRONG_SCORE) {
+      events.push({ type: 'creative_score_milestone', date: scored[i].date_since, detail: `Creative score crossed into strong territory (${prev} -> ${cur}).` });
+    } else if (prev >= WEAK_SCORE && cur < WEAK_SCORE) {
+      events.push({ type: 'creative_score_milestone', date: scored[i].date_since, detail: `Creative score dropped into weak territory (${prev} -> ${cur}).` });
+    }
+  }
+  const health = (healthHistory || []).filter(r => r.health_score != null);
+  for (let i = 1; i < health.length; i++) {
+    const prev = health[i - 1];
+    const cur = health[i];
+    if (prev.health_status !== cur.health_status) {
+      events.push({ type: 'health_score_milestone', date: cur.calculated_at, detail: `Health status changed from "${prev.health_status}" to "${cur.health_status}" (${prev.health_score} -> ${cur.health_score}).` });
+    }
+  }
+  return events;
+}
+
+function buildRichEvolutionTimeline({ snapshots, healthHistory, recommendationHistory, alertHistory }) {
+  const metricsTimeline = buildMetricsTimeline(snapshots);
+  const businessEvents = [
+    ...buildBusinessEvents(metricsTimeline),
+    ...buildScoreMilestones(metricsTimeline, healthHistory),
+  ].filter(e => !!e.date).sort((a, b) => a.date.localeCompare(b.date));
+
+  return {
+    metrics_timeline: metricsTimeline,
+    state_transitions: buildStateTransitions({ healthHistory, recommendationHistory, alertHistory }),
+    business_events: businessEvents,
+    // Real, honest gaps -- this system has no ad-grain persisted log for
+    // any of these (budget/audience changes live at ad-set grain,
+    // decision_history is campaign-grain only), so they are named here
+    // rather than fabricated.
+    not_tracked_at_ad_grain: ['budget_changes', 'audience_changes', 'decision_changes'],
   };
 }
 
@@ -207,9 +511,160 @@ const IMPACT = {
   'Split Test': 'Avoids a premature scale/pause decision made on too little data.',
 };
 
-const PRIORITY_WEIGHT = { high: 0, medium: 1, low: 2 };
+// Phase 43 (Task 5) -- risk of TAKING each recommended action (distinct from
+// change_risk's "risk of leaving this ad as-is"). Every entry is a real,
+// generic-but-honest tradeoff of that specific action, not a fabricated
+// per-ad claim.
+const RISK = {
+  'Rewrite Hook': 'Low risk -- easily reversible, only the opening line changes.',
+  'Shorten Copy': 'Low risk -- reversible; may lose detail some segments valued.',
+  'Improve CTA': 'Low risk -- reversible, but a CTA mismatched to the objective can lower conversion quality.',
+  'Add Social Proof': 'Low risk, requires real proof (an actual review/count) to avoid an unsubstantiated claim.',
+  'Use Better Offer': 'Medium risk -- changes the actual economics of the ad, not just the message.',
+  'Replace Thumbnail': 'Low risk -- reversible, easy to A/B test against the current asset.',
+  'Reduce Text': 'Low risk -- reversible; may remove context some segments needed.',
+  'Pause': 'Low risk to spend, but stops all reach/learning immediately -- irreversible data gap while paused.',
+  'Refresh': 'Medium risk -- resets some learning/optimization progress in the ad set.',
+  'Scale': 'Medium risk -- watch frequency and CPA closely after increasing budget; can trigger new fatigue.',
+  'Duplicate Winner': 'Low risk -- the original keeps running; only adds a variant to test.',
+  'Reallocate Budget': 'Low risk to total spend, but reduces data volume on the ad losing budget.',
+  'Pause Loser': 'Low risk -- removes the weakest performer; verify no unique audience/placement is lost with it.',
+  'Split Test': 'No risk -- this is a hold, not a change.',
+};
 
-function buildPriorityEngine(recommendations, { spend, fatigueStatus }) {
+const PRIORITY_WEIGHT = { high: 0, medium: 1, low: 2 };
+const PRIORITY_LABELS = ['Highest Priority', 'Medium Priority', 'Low Priority'];
+// Phase 44 (Task 7) -- Decision Priority Engine tiers, additive alongside
+// the existing Highest/Medium/Low labels (kept for backward compatibility).
+const ACTION_TIERS = ['Immediate Actions', 'Important Actions', 'Future Actions'];
+
+/**
+ * Phase 43 (Task 5) -- concrete, real evidence bullets for WHY a specific
+ * action is recommended, pulled from context the caller already computed
+ * (fatigue, peer-average benchmark comparison, this ad's own historical
+ * trend). Never invents a bullet it can't back with a real field.
+ *
+ * Phase 44 (Task 10) -- phrased as a marketer would read it, not as a raw
+ * technical signal name (e.g. "still has room to scale before fatigue"
+ * instead of a bare "No fatigue detected.").
+ */
+function buildActionEvidence(action, { fatigueStatus, benchmarkVerdict, historicalComparison, latestRow } = {}) {
+  const bullets = [];
+  if (fatigueStatus === 'none') bullets.push('This creative still has room to scale before signs of audience fatigue appear.');
+  if (latestRow?.frequency != null && latestRow.frequency < 2.0) bullets.push(`It hasn't reached the audience-saturation point yet (frequency ${round(latestRow.frequency, 2)}), so there's headroom before results start to fade.`);
+  if (benchmarkVerdict?.verdict === 'above_average' && benchmarkVerdict.grain) {
+    bullets.push(`It's outperforming its ${benchmarkVerdict.grain.replace('_', ' ')} peers, not just holding steady.`);
+  }
+  if (historicalComparison?.status === 'ok') {
+    const scoreTrend = historicalComparison.trend.score_overall;
+    if (scoreTrend && scoreTrend.direction === 'improving') bullets.push(`Creative quality is trending up (score ${scoreTrend.previous} -> ${scoreTrend.current}), not just stable.`);
+    const cpaTrend = historicalComparison.trend.cpa;
+    if (cpaTrend && cpaTrend.direction === 'stable') bullets.push(`Cost per result has stayed steady (${cpaTrend.previous} -> ${cpaTrend.current}), so efficiency isn't the concern here.`);
+    const ctrTrend = historicalComparison.trend.ctr;
+    if (ctrTrend && ctrTrend.direction === 'improving') bullets.push(`Click-through rate is climbing (${ctrTrend.previous}% -> ${ctrTrend.current}%), a sign the message is still landing.`);
+  }
+  return bullets;
+}
+
+// ─────────────────────────────────────────────
+// PHASE 44 (Task 8) — Expected Business Impact. Ranges only, never a
+// fabricated precise number. Where a real gap-to-peer-average or historical
+// trend exists, the range is DERIVED from it (grounded); otherwise a wide,
+// clearly-hedged default range is used and confidence is capped low.
+// ─────────────────────────────────────────────
+
+function pctRangeLabel(lowPct, highPct) {
+  return `${round(lowPct)}-${round(highPct)}%`;
+}
+
+function buildBusinessImpactEstimate(action, { benchmarkComparison, latestRow, confidencePct } = {}) {
+  const CTR_ACTIONS = new Set(['Rewrite Hook', 'Shorten Copy', 'Improve CTA', 'Add Social Proof', 'Use Better Offer', 'Replace Thumbnail', 'Reduce Text']);
+  const SCALE_ACTIONS = new Set(['Scale', 'Duplicate Winner', 'Duplicate']);
+  const NOT_APPLICABLE = { probability: null, range: null, note: 'Not applicable -- this action stops or redirects delivery rather than growing it.' };
+
+  if (action === 'Pause' || action === 'Pause Loser' || action === 'Refresh' || action === 'Reallocate Budget') {
+    return { reach_increase: NOT_APPLICABLE, cpa_change: NOT_APPLICABLE, ctr_improvement: NOT_APPLICABLE, confidence_pct: confidencePct ?? null };
+  }
+
+  let ctrImprovement = { probability: 'Low', range: '0-5%', note: 'Default conservative range -- no peer-average CTR gap available to ground a larger estimate.' };
+  if (CTR_ACTIONS.has(action)) {
+    const adSetCtr = benchmarkComparison?.ad_set?.metrics?.ctr;
+    const campaignCtr = benchmarkComparison?.campaign?.metrics?.ctr;
+    const ctrGap = adSetCtr?.status === 'below_average' ? adSetCtr : (campaignCtr?.status === 'below_average' ? campaignCtr : null);
+    if (ctrGap) {
+      // Grounded in the REAL gap between this ad's own CTR and the real peer
+      // average -- capped to a defensible range, never the full raw gap
+      // (closing 100% of a gap from one text change would be an overclaim).
+      const gapPct = Math.min(30, Math.abs(ctrGap.diff_pct));
+      ctrImprovement = { probability: gapPct >= 15 ? 'Medium' : 'Low', range: pctRangeLabel(gapPct * 0.2, gapPct * 0.6), note: `Derived from the real CTR gap vs. its peer average (${ctrGap.diff_pct}%).` };
+    }
+  }
+
+  let reachIncrease = NOT_APPLICABLE;
+  let cpaChange = NOT_APPLICABLE;
+  if (SCALE_ACTIONS.has(action)) {
+    const freq = latestRow?.frequency;
+    // A real, bounded heuristic: more available frequency headroom (lower
+    // current frequency) supports a larger reach increase with less CPA
+    // risk -- never an unconditional fixed number.
+    if (freq != null && freq < 2.0) {
+      reachIncrease = { probability: 'Medium', range: '10-20%', note: `Frequency has headroom (${round(freq, 2)}) before saturation limits further reach.` };
+      cpaChange = { probability: 'Low', range: '+/-10%', note: 'Symmetric range -- scaling can move CPA in either direction; watch it after the change.' };
+    } else {
+      reachIncrease = { probability: 'Low', range: '5-10%', note: 'Frequency is already moderate/elevated, which caps how much incremental reach scaling can add before saturation.' };
+      cpaChange = { probability: 'Medium', range: '+5-15%', note: 'Elevated frequency raises the odds scaling pushes cost per result up.' };
+    }
+  }
+
+  return { reach_increase: reachIncrease, cpa_change: cpaChange, ctr_improvement: ctrImprovement, confidence_pct: confidencePct ?? null };
+}
+
+// ─────────────────────────────────────────────
+// PHASE 44 (Task 9) — Risk Assessment. Five named risk dimensions per
+// action, each Low/Medium/High with a real reason -- distinct from (and
+// more granular than) the single `risk` string Phase 43 already attaches.
+// ─────────────────────────────────────────────
+
+function buildRiskAssessment(action, { fatigueStatus, latestRow, confidencePct } = {}) {
+  const PAUSE_LIKE = new Set(['Pause', 'Pause Loser']);
+  const SCALE_LIKE = new Set(['Scale', 'Duplicate Winner', 'Duplicate']);
+  const TEXT_EDIT = new Set(['Rewrite Hook', 'Shorten Copy', 'Improve CTA', 'Add Social Proof', 'Use Better Offer', 'Replace Thumbnail', 'Reduce Text']);
+
+  const implementation_risk = TEXT_EDIT.has(action)
+    ? { level: 'Low', reason: 'A text/asset-only change, fully reversible in Ads Manager.' }
+    : PAUSE_LIKE.has(action)
+      ? { level: 'Low', reason: 'A status change only -- reversible by re-enabling the ad.' }
+      : { level: 'Medium', reason: 'Involves a budget or duplication change with more moving parts than a text edit.' };
+
+  const learning_phase_risk = SCALE_LIKE.has(action)
+    ? { level: 'Medium', reason: 'A meaningful budget/audience change can reset the ad set\'s delivery learning phase.' }
+    : action === 'Refresh'
+      ? { level: 'Medium', reason: 'Duplicating with new creative elements restarts learning for that variant.' }
+      : { level: 'Low', reason: 'Does not materially change delivery/targeting, so learning phase is unlikely to reset.' };
+
+  const audience_fatigue_risk = fatigueStatus === 'severe' || fatigueStatus === 'moderate'
+    ? { level: 'High', reason: `Fatigue is already "${fatigueStatus}" -- any delay compounds it further.` }
+    : (latestRow?.frequency != null && latestRow.frequency >= 3)
+      ? { level: 'Medium', reason: `Frequency is already elevated (${round(latestRow.frequency, 2)}), raising near-term fatigue risk regardless of this action.` }
+      : { level: 'Low', reason: 'No current fatigue signal and frequency is not elevated.' };
+
+  const budget_risk = SCALE_LIKE.has(action)
+    ? { level: 'Medium', reason: 'Increases spend commitment; monitor CPA closely after the change.' }
+    : PAUSE_LIKE.has(action)
+      ? { level: 'Low', reason: 'Reduces/stops spend -- the safer direction for budget risk.' }
+      : { level: 'Low', reason: 'Does not directly change spend commitment.' };
+
+  const performance_volatility = fatigueStatus === 'insufficient_data' || (latestRow?.spend != null && latestRow.spend < MIN_SPEND_FOR_FATIGUE)
+    ? { level: 'High', reason: 'Too little spend/history yet for a stable read -- short-term metrics can swing significantly.' }
+    : { level: 'Low', reason: 'Enough spend/history exists for a reasonably stable read.' };
+
+  return {
+    implementation_risk, learning_phase_risk, audience_fatigue_risk, budget_risk, performance_volatility,
+    confidence_pct: confidencePct ?? null,
+  };
+}
+
+function buildPriorityEngine(recommendations, { spend, fatigueStatus, benchmarkVerdict, benchmarkComparison, historicalComparison, latestRow } = {}) {
   const seen = new Set();
   const unique = [];
   for (const r of (recommendations || []).slice().sort((a, b) => PRIORITY_WEIGHT[a.priority] - PRIORITY_WEIGHT[b.priority])) {
@@ -217,15 +672,30 @@ function buildPriorityEngine(recommendations, { spend, fatigueStatus }) {
     seen.add(r.action);
     unique.push(r);
   }
-  return unique.slice(0, 3).map((r, i) => ({
-    priority: i + 1,
-    action: r.action,
-    why: r.reason,
-    how: HOW_TO[r.action] || r.reason,
-    expected_impact: IMPACT[r.action] || 'Impact depends on execution — not independently benchmarked in this system.',
-    confidence: confidenceFromSpend(spend, fatigueStatus),
-    evidence_used: [r.reason],
-  }));
+  return unique.slice(0, 3).map((r, i) => {
+    const evidenceBullets = buildActionEvidence(r.action, { fatigueStatus, benchmarkVerdict, historicalComparison, latestRow });
+    const confidence = computeConfidence({
+      supportingSignals: evidenceBullets.length,
+      conflictingSignals: 0,
+      dataSufficient: spend != null && spend >= MIN_SPEND_FOR_FATIGUE && fatigueStatus !== 'insufficient_data',
+    });
+    return {
+      priority: i + 1,
+      priority_label: PRIORITY_LABELS[i] || `Priority ${i + 1}`,
+      tier: ACTION_TIERS[i] || `Tier ${i + 1}`,
+      action: r.action,
+      why: r.reason,
+      how: HOW_TO[r.action] || r.reason,
+      expected_impact: IMPACT[r.action] || 'Impact depends on execution — not independently benchmarked in this system.',
+      risk: RISK[r.action] || 'Risk not characterized for this action.',
+      confidence: confidenceFromSpend(spend, fatigueStatus),
+      confidence_pct: confidence.confidence_pct,
+      confidence_reason: confidence.reason,
+      evidence_used: evidenceBullets.length ? [r.reason, ...evidenceBullets] : [r.reason],
+      business_impact: buildBusinessImpactEstimate(r.action, { benchmarkComparison, latestRow, confidencePct: confidence.confidence_pct }),
+      risk_assessment: buildRiskAssessment(r.action, { fatigueStatus, latestRow, confidencePct: confidence.confidence_pct }),
+    };
+  });
 }
 
 // ─────────────────────────────────────────────
@@ -383,6 +853,43 @@ function compareDimensions(a, b) {
   return diffs.sort((x, y) => Math.abs(y.diff ?? y.diff_pct) - Math.abs(x.diff ?? x.diff_pct));
 }
 
+/**
+ * Phase 44 (Task 6) -- turns the raw dimension diffs from compareDimensions()
+ * plus real CTR/frequency/fatigue fields (when the shaped object carries
+ * them -- see creativeLibrary.js's toComparisonShape()) into one readable
+ * "this creative wins because..." sentence. Every clause traces to a real
+ * value; when nothing crosses the explanation threshold, says so honestly
+ * instead of inventing a reason.
+ */
+function buildWinLossNarrative(a, b) {
+  if (!a || !b) return null;
+  const reasons = [];
+  if (a.ctr != null && b.ctr != null && b.ctr > 0) {
+    const pct = round(((a.ctr - b.ctr) / b.ctr) * 100);
+    if (Math.abs(pct) >= 10) reasons.push(`CTR is ${Math.abs(pct)}% ${pct > 0 ? 'higher' : 'lower'}`);
+  }
+  for (const d of compareDimensions(a, b)) {
+    if (d.dimension === 'cost per result') {
+      reasons.push(`cost per result is ${d.diff_pct < 0 ? 'lower' : 'higher'} (${d.diff_pct}%)`);
+      continue;
+    }
+    reasons.push(`${d.dimension} is ${d.diff > 0 ? 'stronger' : 'weaker'}`);
+  }
+  if (a.frequency != null && b.frequency != null && Math.abs(a.frequency - b.frequency) >= 0.3) {
+    reasons.push(`frequency is ${a.frequency < b.frequency ? 'healthier (lower)' : 'higher'}`);
+  }
+  if (a.fatigue_status != null && b.fatigue_status != null && a.fatigue_status !== b.fatigue_status) {
+    reasons.push(`fatigue status is "${a.fatigue_status}" vs. "${b.fatigue_status}"`);
+  }
+  const comparedAgainst = b.ad_name || b.meta_ad_id;
+  return {
+    narrative: reasons.length
+      ? `This creative wins because ${reasons.join(', ')}. Compared against: ${comparedAgainst}.`
+      : `The overall score differs, but no single dimension crossed the explanation threshold against ${comparedAgainst}.`,
+    compared_against: comparedAgainst,
+  };
+}
+
 function buildComparisonBreakdown(comparison, shapedSiblings) {
   if (!comparison?.winner || !shapedSiblings?.length) return null;
   const byId = new Map(shapedSiblings.map(s => [s.meta_ad_id, s]));
@@ -392,10 +899,18 @@ function buildComparisonBreakdown(comparison, shapedSiblings) {
 
   const result = {};
   if (winner && worst && worst !== winner) {
-    result.winner_vs_weakest = { winner_ad_id: winner.meta_ad_id, weakest_ad_id: worst.meta_ad_id, dimensions: compareDimensions(winner, worst) };
+    result.winner_vs_weakest = {
+      winner_ad_id: winner.meta_ad_id, weakest_ad_id: worst.meta_ad_id,
+      dimensions: compareDimensions(winner, worst),
+      narrative: buildWinLossNarrative(winner, worst)?.narrative || null,
+    };
   }
   if (winner && runnerUp && runnerUp !== winner) {
-    result.winner_vs_runner_up = { winner_ad_id: winner.meta_ad_id, runner_up_ad_id: runnerUp.meta_ad_id, dimensions: compareDimensions(winner, runnerUp) };
+    result.winner_vs_runner_up = {
+      winner_ad_id: winner.meta_ad_id, runner_up_ad_id: runnerUp.meta_ad_id,
+      dimensions: compareDimensions(winner, runnerUp),
+      narrative: buildWinLossNarrative(winner, runnerUp)?.narrative || null,
+    };
   }
   return result;
 }
@@ -438,23 +953,167 @@ function buildEvolutionStages(timeline) {
 }
 
 // ─────────────────────────────────────────────
+// PHASE 43 (Task 7) — AI Strategic Advisor Panel. The centerpiece: rolls
+// scaling/pause/change-risk/priorities into ONE clear current status with a
+// real, signal-counted confidence, a bulleted reason, concrete next
+// actions, an expected result, and named risks. Every field traces to a
+// real value already computed above -- never fabricated.
+// ─────────────────────────────────────────────
+
+function buildAdvisorPanel({ scores, fatigue, benchmarkVerdict, scalingAdvice, pauseAdvice, changeRisk, priorities, latestRow }) {
+  let currentStatus;
+  if (pauseAdvice.action === 'Pause') currentStatus = 'Pause';
+  else if (scalingAdvice.recommended) currentStatus = 'Scale';
+  else if (pauseAdvice.action === 'Refresh' || pauseAdvice.action === 'Rewrite') currentStatus = pauseAdvice.action;
+  else if (changeRisk.risk_level === 'Leave unchanged') currentStatus = 'Leave Unchanged';
+  else currentStatus = 'Monitor';
+
+  // Phase 44 (Task 10) -- business language, not raw technical signal names.
+  const reason = [];
+  if (scores.score_overall != null) {
+    reason.push(scores.score_overall >= STRONG_SCORE
+      ? `Creative quality is holding steady (score ${scores.score_overall}), which is supporting current performance.`
+      : scores.score_overall < WEAK_SCORE
+        ? `Creative quality is still developing (score ${scores.score_overall}) and is likely limiting results.`
+        : `Creative quality is average (score ${scores.score_overall}) -- neither a strength nor a weakness right now.`);
+  }
+  if (benchmarkVerdict.verdict !== 'unknown') {
+    const grainText = benchmarkVerdict.grain ? benchmarkVerdict.grain.replace('_', ' ') : 'peer';
+    reason.push(benchmarkVerdict.verdict === 'above_average'
+      ? `It's outperforming its ${grainText} average, not just keeping pace.`
+      : benchmarkVerdict.verdict === 'below_average'
+        ? `It's trailing its ${grainText} average.`
+        : `It's performing in line with its ${grainText} average.`);
+  }
+  if (fatigue.status) {
+    reason.push(fatigue.status === 'none'
+      ? 'This creative still has room to scale before signs of audience fatigue appear.'
+      : `Audience fatigue is already showing ("${fatigue.status}"), which should factor into any scaling decision.`);
+  }
+  if (latestRow?.frequency != null) {
+    reason.push(latestRow.frequency < 2
+      ? `Frequency is still low (${round(latestRow.frequency, 2)}), so the audience isn't over-exposed yet.`
+      : latestRow.frequency < 3
+        ? `Frequency is at a moderate level (${round(latestRow.frequency, 2)}) -- worth watching but not yet a concern.`
+        : `Frequency is elevated (${round(latestRow.frequency, 2)}), raising the odds of fatigue soon.`);
+  }
+
+  const supportingCount = [
+    scores.score_overall != null && scores.score_overall >= STRONG_SCORE,
+    benchmarkVerdict.verdict === 'above_average',
+    fatigue.status === 'none',
+    latestRow?.frequency != null && latestRow.frequency < 2,
+  ].filter(Boolean).length;
+  const conflictingCount = [
+    scores.score_overall != null && scores.score_overall < WEAK_SCORE,
+    benchmarkVerdict.verdict === 'below_average',
+    fatigue.status === 'severe' || fatigue.status === 'moderate',
+  ].filter(Boolean).length;
+  const confidence = computeConfidence({
+    supportingSignals: supportingCount,
+    conflictingSignals: conflictingCount,
+    dataSufficient: latestRow?.spend != null && latestRow.spend >= MIN_SPEND_FOR_FATIGUE,
+  });
+
+  const recommendedActions = [];
+  if (currentStatus === 'Scale' && scalingAdvice.actions) recommendedActions.push(...scalingAdvice.actions.map(a => a.action));
+  if (currentStatus === 'Pause') recommendedActions.push('Pause the ad');
+  if (currentStatus === 'Refresh' || currentStatus === 'Rewrite') recommendedActions.push(`${currentStatus} -- ${pauseAdvice.reason}`);
+  for (const p of (priorities || []).slice(0, 2)) recommendedActions.push(p.action);
+  const uniqueActions = [...new Set(recommendedActions)];
+
+  const expectedResult = currentStatus === 'Scale'
+    ? 'Higher reach/volume with low incremental risk given current health.'
+    : currentStatus === 'Pause'
+      ? 'Stops further budget loss on an underperforming/fatigued creative.'
+      : (currentStatus === 'Refresh' || currentStatus === 'Rewrite')
+        ? 'Resets fatigue/weak signals while preserving the elements that are still working.'
+        : 'Stable performance maintained while more data accumulates.';
+
+  const potentialRisks = [];
+  if (currentStatus === 'Scale' && latestRow?.frequency != null) potentialRisks.push(`Watch frequency after scaling (currently ${round(latestRow.frequency, 2)}).`);
+  if (currentStatus === 'Pause') potentialRisks.push('Pausing stops all reach and learning immediately.');
+  if (potentialRisks.length === 0) potentialRisks.push('No material risk identified from current signals.');
+
+  // Phase 44 (Task 1) -- Priority (how urgent this decision is) and
+  // Business Risk (how much downside is on the table right now), both
+  // derived from the same real signals already computed above.
+  const priority = (currentStatus === 'Scale' || currentStatus === 'Pause') ? 'HIGH'
+    : (currentStatus === 'Refresh' || currentStatus === 'Rewrite') ? 'MEDIUM' : 'LOW';
+  const businessRisk = fatigue.status === 'severe' ? 'HIGH'
+    : (conflictingCount >= 2 ? 'HIGH' : conflictingCount === 1 ? 'MEDIUM' : (currentStatus === 'Scale' ? 'MEDIUM' : 'LOW'));
+
+  return {
+    current_status: currentStatus,
+    confidence: confidence.confidence_pct,
+    confidence_reason: confidence.reason,
+    priority,
+    reason,
+    recommended_actions: uniqueActions,
+    expected_result: expectedResult,
+    potential_risks: potentialRisks,
+    business_risk: businessRisk,
+  };
+}
+
+/**
+ * Phase 44 (Task 5) -- "compare against the best/worst creative in the
+ * account" as a real, numeric benchmark (not a narrative) -- reports the
+ * real score gap to each, honestly insufficient_data when the account
+ * doesn't have another scored creative to compare against.
+ */
+function buildBestWorstComparison(latestRow, accountBestWorst) {
+  if (!accountBestWorst || (!accountBestWorst.best && !accountBestWorst.worst)) {
+    return { status: 'insufficient_data', reason: 'Not enough other scored creatives in this account to identify a best/worst.' };
+  }
+  const result = { status: 'ok' };
+  if (accountBestWorst.best) {
+    result.best = {
+      meta_ad_id: accountBestWorst.best.meta_ad_id, ad_name: accountBestWorst.best.ad_name,
+      score_overall: accountBestWorst.best.score_overall,
+      score_gap: latestRow?.score_overall != null ? round(accountBestWorst.best.score_overall - latestRow.score_overall) : null,
+    };
+  }
+  if (accountBestWorst.worst) {
+    result.worst = {
+      meta_ad_id: accountBestWorst.worst.meta_ad_id, ad_name: accountBestWorst.worst.ad_name,
+      score_overall: accountBestWorst.worst.score_overall,
+      score_gap: latestRow?.score_overall != null ? round(latestRow.score_overall - accountBestWorst.worst.score_overall) : null,
+    };
+  }
+  return result;
+}
+
+// ─────────────────────────────────────────────
 // Orchestrator — assembles every phase above into one advisor bundle for
 // one creative. Degrades gracefully (never throws) when a source input
 // (text analysis, comparison, benchmark averages) isn't available yet.
 // ─────────────────────────────────────────────
 
-function buildCreativeAdvisor({ scores, fatigue, textAnalysis, latestRow, benchmarkAverages, comparison, comparisonRole, shapedSiblings, timeline, recommendations }) {
+function buildCreativeAdvisor({
+  scores, fatigue, textAnalysis, latestRow, benchmarkAverages, comparison, comparisonRole,
+  shapedSiblings, timeline, recommendations, healthScore = null,
+  healthHistory = [], recommendationHistory = [], alertHistory = [], accountBestWorst = null,
+}) {
   const benchmarkComparison = buildBenchmarkComparison(benchmarkAverages || {}, latestRow || {});
   const benchmarkVerdict = overallBenchmarkVerdict(benchmarkComparison);
   const rootCause = buildRootCause({ textAnalysis, fatigue, benchmarkComparison });
   const scoreExplanation = buildScoreExplanation({ scores, textAnalysis, fatigue, spend: latestRow?.spend });
-  const priorities = buildPriorityEngine(recommendations, { spend: latestRow?.spend, fatigueStatus: fatigue?.status });
+  const historicalComparison = buildHistoricalComparison(timeline?.snapshots);
+  const priorities = buildPriorityEngine(recommendations, {
+    spend: latestRow?.spend, fatigueStatus: fatigue?.status, benchmarkVerdict, benchmarkComparison, historicalComparison, latestRow,
+  });
   const strategicAdvice = buildStrategicAdvice({ scores, fatigue, benchmarkVerdict, priorities, spend: latestRow?.spend });
   const changeRisk = buildChangeRisk({ scores, fatigue, comparisonRole, spend: latestRow?.spend });
   const scalingAdvice = buildScalingAdvice({ scores, fatigue, comparisonRole, latestRow, benchmarkVerdict });
   const pauseAdvice = buildPauseAdvice({ scores, fatigue, textAnalysis });
   const comparisonBreakdown = buildComparisonBreakdown(comparison, shapedSiblings);
   const evolution = buildEvolutionStages(timeline);
+  const scoreRelationship = buildScoreRelationship(healthScore, scores.score_overall);
+  const previousVersionComparison = buildPreviousVersionComparison(timeline);
+  const richTimeline = buildRichEvolutionTimeline({ snapshots: timeline?.snapshots, healthHistory, recommendationHistory, alertHistory });
+  const panel = buildAdvisorPanel({ scores, fatigue, benchmarkVerdict, scalingAdvice, pauseAdvice, changeRisk, priorities, latestRow });
+  const bestWorstComparison = buildBestWorstComparison(latestRow, accountBestWorst);
 
   return {
     root_cause: rootCause,
@@ -464,9 +1123,18 @@ function buildCreativeAdvisor({ scores, fatigue, textAnalysis, latestRow, benchm
     change_risk: changeRisk,
     scaling_advice: scalingAdvice,
     pause_advice: pauseAdvice,
-    benchmark: { comparison: benchmarkComparison, overall_verdict: benchmarkVerdict },
+    benchmark: {
+      comparison: benchmarkComparison,
+      overall_verdict: benchmarkVerdict,
+      historical: historicalComparison,
+      previous_version: previousVersionComparison,
+      account_best_worst: bestWorstComparison,
+    },
     comparison_breakdown: comparisonBreakdown,
     evolution,
+    score_relationship: scoreRelationship,
+    rich_timeline: richTimeline,
+    panel,
   };
 }
 
@@ -476,13 +1144,27 @@ module.exports = {
   overallBenchmarkVerdict,
   buildRootCause,
   buildScoreExplanation,
+  buildScoreRelationship,
+  buildHistoricalComparison,
+  buildPreviousVersionComparison,
+  buildMetricsTimeline,
+  buildStateTransitions,
+  mergeConsecutiveTimelineEntries,
+  buildBusinessEvents,
+  buildScoreMilestones,
+  buildRichEvolutionTimeline,
   buildPriorityEngine,
+  buildBusinessImpactEstimate,
+  buildRiskAssessment,
   buildStrategicAdvice,
   buildChangeRisk,
   buildScalingAdvice,
   buildPauseAdvice,
   compareDimensions,
+  buildWinLossNarrative,
   buildComparisonBreakdown,
   buildEvolutionStages,
+  buildBestWorstComparison,
+  buildAdvisorPanel,
   buildCreativeAdvisor,
 };

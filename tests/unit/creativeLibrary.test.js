@@ -4,7 +4,7 @@ const { v4: uuidv4 } = require('uuid');
 const { createTestDb } = require('../helpers/testDb');
 const { encryptToken } = require('../../src/services/tokenCrypto');
 const { computeCreativeScore } = require('../../src/services/creativeIntelligenceEngine');
-const { getCreativeTimeline, searchCreativeLibrary, getAdSetComparison, getCreativeDetails } = require('../../src/services/creativeLibrary');
+const { getCreativeTimeline, searchCreativeLibrary, getAdSetComparison, getCreativeDetails, getAccountBestWorstCreative, getCrossModuleSignals } = require('../../src/services/creativeLibrary');
 
 describe('creativeLibrary', () => {
   let testDb;
@@ -235,6 +235,82 @@ describe('creativeLibrary', () => {
       expect(result.advisor.strategic_advice.headline).toMatch(/Pause/i);
       expect(Array.isArray(result.advisor.root_cause.negative_factors)).toBe(true);
       expect(result.advisor.root_cause.negative_factors.length).toBeGreaterThan(0);
+
+      // Phase 44 additions -- present and structurally sound on this same response.
+      expect(result.advisor.panel.priority).toMatch(/HIGH|MEDIUM|LOW/);
+      expect(result.advisor.panel.business_risk).toMatch(/LOW|MEDIUM|HIGH/);
+      expect(result.advisor.score_relationship.next_step).toBeTruthy();
+      expect(result.advisor.benchmark.account_best_worst).toBeTruthy();
+      expect(Array.isArray(result.advisor.rich_timeline.business_events)).toBe(true);
+
+      // Phase 45 — Executive Decision Layer: severe fatigue must resolve to
+      // a halt-leaning decision (PAUSE or STOP), never SCALE/MONITOR, and
+      // "why not SCALE"/"why not MONITOR" must both be present since those
+      // weren't chosen.
+      expect(result.executive_decision).toBeTruthy();
+      expect(['PAUSE', 'STOP']).toContain(result.executive_decision.decision);
+      expect(result.executive_decision.why_not.SCALE).toBeTruthy();
+      expect(result.executive_decision.why_not.MONITOR).toBeTruthy();
+      expect(result.executive_decision.consistency_audit).toBeTruthy();
+    });
+  });
+
+  describe('getAccountBestWorstCreative (Phase 44, Task 5)', () => {
+    test('reports insufficient_data (null best/worst) honestly for an account with no scored creatives', () => {
+      const result = getAccountBestWorstCreative(uuidv4(), 'no-such-ad');
+      expect(result.best).toBeNull();
+      expect(result.worst).toBeNull();
+    });
+
+    test('identifies the real best/worst scored creative, excluding the given ad', () => {
+      // Isolated account (not the shared fixture accountId other describe
+      // blocks in this file also write to) so this test's expectations
+      // don't depend on how many other creatives happen to be in the DB.
+      const bwAccountId = uuidv4();
+      testDb.db.run(
+        `INSERT INTO ad_accounts (id, meta_account_id, account_name, access_token_encrypted, created_at, updated_at)
+         VALUES (?, 'act_bw', 'Best/Worst Test', ?, datetime('now'), datetime('now'))`,
+        [bwAccountId, encryptToken('fake-token')]
+      );
+      function insertBw(metaAdId, scoreOverall) {
+        testDb.db.run(
+          `INSERT INTO creative_analytics (id, ad_account_id, meta_ad_id, creative_type, date_since, date_until, spend, score_overall, calculated_at)
+           VALUES (?,?,?,?,?,?,?,?,datetime('now'))`,
+          [uuidv4(), bwAccountId, metaAdId, 'image', '2026-04-01', '2026-04-07', 100, scoreOverall]
+        );
+      }
+      insertBw('ad_bw_1', 50);
+      insertBw('ad_bw_2', 15);
+      insertBw('ad_bw_3', 90);
+
+      const result = getAccountBestWorstCreative(bwAccountId, 'ad_bw_1');
+      expect(result.best.meta_ad_id).toBe('ad_bw_3');
+      expect(result.worst.meta_ad_id).toBe('ad_bw_2');
+    });
+  });
+
+  describe('getCrossModuleSignals (Phase 45, Task 13)', () => {
+    test('reports both signals as null honestly when neither table has a row for this campaign', () => {
+      const result = getCrossModuleSignals(accountId, 'camp_with_no_intelligence_data');
+      expect(result.budget).toBeNull();
+      expect(result.audience).toBeNull();
+    });
+
+    test('reads a real budget-waste flag and a real averaged audience-saturation score', () => {
+      testDb.db.run(
+        `INSERT INTO budget_analysis_history (id, ad_account_id, level, entity_meta_id, date_since, date_until, waste_detected, waste_amount, efficiency_status, calculated_at)
+         VALUES (?,?,?,?,?,?,?,?,?,datetime('now'))`,
+        [uuidv4(), accountId, 'campaign', 'camp_lib_1', '2026-04-01', '2026-04-07', 1, 42.5, 'poor']
+      );
+      testDb.db.run(
+        `INSERT INTO audience_score_history (id, ad_account_id, meta_campaign_id, dimension, segment_value, date_since, date_until, saturation_score, calculated_at)
+         VALUES (?,?,?,?,?,?,?,?,datetime('now'))`,
+        [uuidv4(), accountId, 'camp_lib_1', 'age', '25-34', '2026-04-01', '2026-04-07', 80]
+      );
+
+      const result = getCrossModuleSignals(accountId, 'camp_lib_1');
+      expect(result.budget).toEqual({ waste_detected: true, waste_amount: 42.5, efficiency_status: 'poor' });
+      expect(result.audience.saturation_score).toBe(80);
     });
   });
 });

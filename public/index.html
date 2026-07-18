@@ -3241,7 +3241,330 @@ function ciRoleBadge(role) {
 function ciCreativeTypeIcon(t) {
   return { video: '🎬', image: '🖼️', carousel: '🎠' }[t] || '📄';
 }
-const CI_TIMELINE_BADGE = { launch: 'info', peak: 'excellent', decline: 'warning', fatigue: 'critical', recovery: 'good', change: 'none' };
+const CI_TIMELINE_BADGE = {
+  launch: 'info', peak: 'excellent', decline: 'warning', fatigue: 'critical', recovery: 'good', change: 'none',
+  // Phase 44 (Task 4) -- business-event / state-transition types added to
+  // the same timeline, reusing the identical badge palette.
+  ctr_peak: 'excellent', cpa_drop: 'excellent', frequency_increase: 'warning',
+  creative_score_milestone: 'info', health_score_milestone: 'info',
+  health_score: 'info', recommendation: 'none', alert: 'warning',
+};
+
+// ════════════════════════════════════════════
+// PHASE 44 — AI Strategic Advisor Panel + supporting render helpers
+// (Creative Intelligence page). Pure presentation over the `advisor`
+// object creativeLibrary.getCreativeDetails() already returns (Phase 42/43
+// backend) -- no new API call, no new endpoint, just rendering what the
+// bundle already carries.
+// ════════════════════════════════════════════
+
+function ciAdvisorStatusBadgeClass(status) {
+  return { Scale: 'excellent', Pause: 'critical', Refresh: 'warning', Rewrite: 'warning', 'Leave Unchanged': 'good', Monitor: 'info' }[status] || 'none';
+}
+function ciPriorityBadgeClass(p) {
+  return p === 'HIGH' ? 'critical' : p === 'MEDIUM' ? 'warning' : p === 'LOW' ? 'good' : 'none';
+}
+function ciRiskBadgeClass(level) {
+  return level === 'HIGH' ? 'critical' : level === 'MEDIUM' ? 'warning' : level === 'LOW' ? 'excellent' : 'none';
+}
+
+function ciRenderAdvisorPanel(panel) {
+  if (!panel) return '';
+  return `
+  <div class="card" style="margin-bottom:20px;border:1px solid rgba(99,102,241,.35)">
+    <div class="section-title" style="margin-bottom:16px">🧭 AI Strategic Advisor</div>
+    <div class="grid grid-3" style="gap:12px;margin-bottom:16px">
+      <div class="detail-item">
+        <div class="detail-label">Current Decision</div>
+        <div class="detail-value"><span class="badge ${ciAdvisorStatusBadgeClass(panel.current_status)}">${(panel.current_status || '—').toUpperCase()}</span></div>
+      </div>
+      <div class="detail-item">
+        <div class="detail-label">Confidence</div>
+        <div class="detail-value">${panel.confidence != null ? panel.confidence + '%' : '—'}</div>
+      </div>
+      <div class="detail-item">
+        <div class="detail-label">Priority</div>
+        <div class="detail-value"><span class="badge ${ciPriorityBadgeClass(panel.priority)}">${panel.priority || '—'}</span></div>
+      </div>
+    </div>
+    <div style="margin-bottom:14px">
+      <div class="detail-label" style="margin-bottom:6px">Reason</div>
+      ${(panel.reason || []).map(r => `<div style="font-size:13px;margin-bottom:4px;line-height:1.5">${r}</div>`).join('') || '<div class="empty">No reasoning available yet.</div>'}
+    </div>
+    <div style="margin-bottom:14px">
+      <div class="detail-label" style="margin-bottom:6px">Recommended Actions</div>
+      ${(panel.recommended_actions || []).map(a => `<div style="font-size:13px;margin-bottom:4px">✓ ${a}</div>`).join('') || '<div class="empty">No specific action recommended right now.</div>'}
+    </div>
+    <div class="grid grid-2" style="gap:12px">
+      <div class="detail-item">
+        <div class="detail-label">Expected Result</div>
+        <div style="font-size:13px;margin-top:4px">${panel.expected_result || '—'}</div>
+      </div>
+      <div class="detail-item">
+        <div class="detail-label">Business Risk</div>
+        <div class="detail-value" style="margin-bottom:4px"><span class="badge ${ciRiskBadgeClass(panel.business_risk)}">${panel.business_risk || '—'}</span></div>
+        ${(panel.potential_risks || []).map(r => `<div style="font-size:11px;color:var(--muted)">${r}</div>`).join('')}
+      </div>
+    </div>
+  </div>`;
+}
+
+function ciRenderScoreRelationship(sr, creativeScore, healthScore) {
+  if (!sr) return '';
+  return `
+  <div class="card" style="margin-bottom:20px">
+    <div class="section-title" style="margin-bottom:12px">Creative Score vs. Ad Health</div>
+    <div class="grid grid-2" style="gap:12px;margin-bottom:12px">
+      <div class="detail-item"><div class="detail-label">Creative Score</div><div class="detail-value">${creativeScore != null ? creativeScore : '—'}</div></div>
+      <div class="detail-item"><div class="detail-label">Ad Health</div><div class="detail-value">${healthScore != null ? healthScore : '—'}</div></div>
+    </div>
+    <div style="font-size:13px;line-height:1.6">${sr.explanation || ''}</div>
+    ${sr.next_step ? `<div style="font-size:12px;color:var(--muted);margin-top:8px">💡 ${sr.next_step}</div>` : ''}
+  </div>`;
+}
+
+function ciRenderBusinessImpact(bi) {
+  if (!bi) return '';
+  const parts = [];
+  if (bi.reach_increase?.range) parts.push(`Reach ${bi.reach_increase.range} (${bi.reach_increase.probability})`);
+  if (bi.cpa_change?.range) parts.push(`CPA ${bi.cpa_change.range} (${bi.cpa_change.probability})`);
+  if (bi.ctr_improvement?.range) parts.push(`CTR ${bi.ctr_improvement.range} (${bi.ctr_improvement.probability})`);
+  if (!parts.length) return '';
+  return `<div style="font-size:11px;color:var(--muted);margin-top:6px">Expected impact — ${parts.join(' · ')}</div>`;
+}
+
+// Phase 45 (Task 11) -- Business Impact Ranking: 5 named categories + one
+// overall label, reshaped from the same per-action business_impact/
+// risk_assessment fields ciRenderBusinessImpact/ciRenderRiskAssessment
+// already render individually -- this adds the ranked "Overall Business
+// Impact" summary those two don't provide on their own.
+function ciRenderBusinessImpactRanking(ranking) {
+  if (!ranking) return '';
+  const dims = [
+    ['Revenue', ranking.revenue_impact], ['Reach', ranking.reach_impact], ['CPA', ranking.cpa_impact],
+    ['CTR', ranking.ctr_impact], ['Learning', ranking.learning_impact],
+  ].filter(([, v]) => v && v.level && v.level !== 'Not applicable');
+  if (!dims.length) return '';
+  const overallCls = { Highest: 'excellent', High: 'good', Medium: 'warning', Low: 'info' }[ranking.overall_business_impact] || 'none';
+  return `<div style="margin-top:8px">
+    <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center">
+      <span class="badge ${overallCls}">Overall Business Impact: ${ranking.overall_business_impact}</span>
+      ${dims.map(([label, v]) => `<span class="badge none" title="${v.reason || ''}">${label}: ${v.level}${v.range ? ' ' + v.range : ''}</span>`).join('')}
+    </div>
+  </div>`;
+}
+
+function ciRenderRiskAssessment(ra) {
+  if (!ra) return '';
+  const dims = [
+    ['Implementation', ra.implementation_risk], ['Learning phase', ra.learning_phase_risk],
+    ['Audience fatigue', ra.audience_fatigue_risk], ['Budget', ra.budget_risk], ['Volatility', ra.performance_volatility],
+  ].filter(([, v]) => v);
+  if (!dims.length) return '';
+  return `<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:8px">
+    ${dims.map(([label, v]) => `<span class="badge ${ciRiskBadgeClass(v.level)}" title="${v.reason}">${label}: ${v.level}</span>`).join('')}
+  </div>`;
+}
+
+function ciRenderPriorities(priorities, fallbackRecommendations) {
+  if (priorities && priorities.length) {
+    return priorities.map(p => {
+      const pcls = p.priority === 1 ? 'critical' : p.priority === 2 ? 'warning' : 'info';
+      return `
+      <div class="rec-card ${pcls}" style="margin-bottom:12px">
+        <div style="display:flex;justify-content:space-between;gap:8px;align-items:center">
+          <strong style="font-size:13px">${p.action}</strong>
+          <span class="badge ${pcls}">${p.tier || p.priority_label}</span>
+        </div>
+        ${p.problem ? `<div style="font-size:11px;color:var(--muted);margin-bottom:4px"><strong>Problem:</strong> ${p.problem}</div>` : ''}
+        <div class="rec-body">${p.why}</div>
+        ${(p.evidence_used || []).length ? `<div style="font-size:12px;margin-bottom:8px"><strong>Evidence</strong>${p.evidence_used.map(e => `<div>• ${e}</div>`).join('')}</div>` : ''}
+        <div class="rec-meta" style="margin-bottom:4px">
+          <span style="font-size:11px;color:var(--muted)">Confidence: <strong>${p.confidence_pct != null ? p.confidence_pct + '%' : p.confidence}</strong></span>
+          <span style="font-size:11px;color:var(--muted)">Expected impact: ${p.expected_impact}</span>
+        </div>
+        <div style="font-size:11px;color:var(--muted)">Risk: ${p.risk}</div>
+        ${(p.estimated_time_to_observe || p.implementation_difficulty) ? `<div style="font-size:11px;color:var(--muted);margin-top:4px">Time to observe results: <strong>${p.estimated_time_to_observe || '—'}</strong> · Difficulty: <strong>${p.implementation_difficulty || '—'}</strong></div>` : ''}
+        ${ciRenderBusinessImpact(p.business_impact)}
+        ${ciRenderBusinessImpactRanking(p.business_impact_ranking)}
+        ${ciRenderRiskAssessment(p.risk_assessment)}
+      </div>`;
+    }).join('');
+  }
+  // Backward-compatible fallback when the advisor bundle isn't available
+  // for some reason (e.g. an older cached response) -- the original,
+  // simpler recommendation card.
+  if ((fallbackRecommendations || []).length) {
+    return fallbackRecommendations.map(r => {
+      const pcls = r.priority === 'high' ? 'critical' : r.priority === 'medium' ? 'warning' : 'info';
+      return `<div class="rec-card ${pcls}" style="margin-bottom:10px">
+        <div style="display:flex;justify-content:space-between;gap:8px"><strong style="font-size:13px">${r.action}</strong><span class="badge ${pcls}">${r.priority}</span></div>
+        <div style="font-size:12px;color:var(--muted);margin-top:4px">${r.reason}</div>
+      </div>`;
+    }).join('');
+  }
+  return '<div class="empty">No recommendations right now.</div>';
+}
+
+function ciBenchmarkGrainRow(label, g) {
+  if (!g || g.status !== 'ok') {
+    return `<div style="font-size:12px;color:var(--muted);padding:6px 0;border-bottom:1px solid var(--border)">${label}: ${(g && g.reason) || 'insufficient data'}</div>`;
+  }
+  const m = g.metrics || {};
+  return `<div style="font-size:12px;padding:8px 0;border-bottom:1px solid var(--border)">
+    <strong>${label}</strong> <span style="color:var(--muted)">(vs. ${g.sample_size} other creative${g.sample_size === 1 ? '' : 's'})</span>
+    <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:6px">
+      ${Object.entries(m).map(([k, v]) => `<span class="badge ${v.status === 'above_average' ? 'excellent' : v.status === 'below_average' ? 'critical' : 'good'}">${k.toUpperCase()} ${v.status.replace('_', ' ')}</span>`).join('')}
+    </div>
+  </div>`;
+}
+
+function ciRenderBenchmark(b) {
+  if (!b) return '';
+  const bw = b.account_best_worst;
+  return `
+  <div class="card" style="margin-bottom:20px">
+    <div class="section-title" style="margin-bottom:12px">Benchmarking</div>
+    ${ciBenchmarkGrainRow('Ad Set', b.comparison?.ad_set)}
+    ${ciBenchmarkGrainRow('Campaign', b.comparison?.campaign)}
+    ${ciBenchmarkGrainRow('Account', b.comparison?.account)}
+    ${b.historical?.status === 'ok' ? `<div style="font-size:12px;padding:8px 0;border-bottom:1px solid var(--border)"><strong>Vs. its own previous snapshot:</strong> ${Object.entries(b.historical.trend).map(([k, v]) => `${k.toUpperCase()} ${v.direction}`).join(', ')}</div>` : ''}
+    ${b.previous_version?.status === 'ok' ? `<div style="font-size:12px;padding:8px 0;border-bottom:1px solid var(--border)"><strong>Vs. its previous version</strong> (${b.previous_version.change.field} changed ${b.previous_version.change.date}): ${Object.entries(b.previous_version.comparison).map(([k, v]) => `${k.toUpperCase()} ${v.delta_pct}%`).join(', ')}</div>` : ''}
+    ${bw && bw.status === 'ok' ? `<div style="font-size:12px;padding-top:8px">
+      ${bw.best ? `<div style="margin-bottom:4px">🏆 Best in account: <strong>${bw.best.ad_name}</strong> (score ${bw.best.score_overall}, gap ${bw.best.score_gap})</div>` : ''}
+      ${bw.worst ? `<div>⚠ Weakest in account: ${bw.worst.ad_name} (score ${bw.worst.score_overall}, +${bw.worst.score_gap} ahead of it)</div>` : ''}
+    </div>` : ''}
+  </div>`;
+}
+
+/** Merges the existing lifecycle-event timeline with Phase 44's real business events and state transitions into one sorted, chronological list. */
+function ciMergedTimelineRows(d) {
+  const rows = (d.timeline?.events || []).map(e => ({ ...e }));
+  const rt = d.advisor?.rich_timeline;
+  if (rt) {
+    (rt.business_events || []).forEach(e => rows.push({ type: e.type, date: e.date, detail: e.detail }));
+    // Phase 45 (Task 8) -- state transitions may already be merged, ranged
+    // entries (repeat_count/date_range) from advisorEngine.buildStateTransitions();
+    // pass those fields through so the render below can show the range
+    // instead of a single (misleading) date.
+    (rt.state_transitions || []).forEach(e => rows.push({ type: e.type, date: e.date, detail: e.detail, date_range: e.date_range, repeat_count: e.repeat_count }));
+  }
+  return rows.filter(r => r.date).sort((a, b) => String(a.date).localeCompare(String(b.date)));
+}
+
+// ════════════════════════════════════════════
+// PHASE 45 — Executive Decision Layer render helpers (Creative Intelligence
+// page). Pure presentation over `executive_decision`, the single
+// arbitrated verdict creativeLibrary.getCreativeDetails() now returns
+// alongside `advisor` -- no new API call.
+// ════════════════════════════════════════════
+
+function ciDecisionColorClass(decision) {
+  return { SCALE: 'excellent', MONITOR: 'info', OPTIMIZE: 'good', TEST: 'info', PAUSE: 'warning', STOP: 'critical' }[decision] || 'none';
+}
+// Maps the same badge-class vocabulary to a real theme CSS variable (the
+// theme defines --green/--yellow/--orange/--red/--blue, not --excellent
+// etc.) for the one place this page needs an actual border color, not a class.
+function ciDecisionBorderVar(decision) {
+  return { SCALE: '--green', MONITOR: '--blue', OPTIMIZE: '--yellow', TEST: '--blue', PAUSE: '--orange', STOP: '--red' }[decision] || '--border';
+}
+
+/** Task 2 -- exactly one recommendation, never a second competing card. */
+function ciRenderExecutivePriorityCard(card) {
+  if (!card || !card.available) return '';
+  return `
+  <div style="background:var(--bg3);border:1px dashed rgba(99,102,241,.5);border-radius:10px;padding:16px;margin-top:16px">
+    <div style="font-size:11px;font-weight:700;letter-spacing:.5px;color:var(--accent2);text-transform:uppercase;margin-bottom:8px">If you do only one thing today</div>
+    <div style="font-size:17px;font-weight:700;margin-bottom:10px">${card.action}</div>
+    <div class="grid grid-3" style="gap:10px;margin-bottom:10px">
+      <div><div class="detail-label">Business Impact</div><div style="font-size:14px;font-weight:600">${card.business_impact}</div></div>
+      <div><div class="detail-label">Confidence</div><div style="font-size:14px;font-weight:600">${card.confidence_pct != null ? card.confidence_pct + '%' : '—'}</div></div>
+      <div><div class="detail-label">Estimated Gain</div><div style="font-size:12px">${card.estimated_gain}</div></div>
+    </div>
+    <div style="font-size:12px;color:var(--muted)"><strong>Reason:</strong> ${card.reason}</div>
+  </div>`;
+}
+
+/** Task 3 -- why not the other 5 decisions. */
+function ciRenderWhyNot(whyNot) {
+  if (!whyNot || !Object.keys(whyNot).length) return '';
+  return `
+  <div style="margin-top:16px">
+    <div class="detail-label" style="margin-bottom:8px">Why not the alternatives?</div>
+    <div class="grid grid-2" style="gap:8px">
+      ${Object.entries(whyNot).map(([dec, reason]) => `
+        <div style="background:var(--bg3);border-radius:8px;padding:10px 12px">
+          <div style="font-size:11px;font-weight:700;color:var(--muted)">Why not ${dec}?</div>
+          <div style="font-size:12px;margin-top:2px">${reason}</div>
+        </div>`).join('')}
+    </div>
+  </div>`;
+}
+
+/** Task 13 -- when signals genuinely disagreed and had to be reconciled. */
+function ciRenderConsistencyAudit(audit) {
+  if (!audit || !audit.signals_disagreed) return '';
+  return `
+  <div style="margin-top:16px;padding:10px 12px;background:rgba(249,115,22,.08);border:1px solid rgba(249,115,22,.25);border-radius:8px">
+    <div style="font-size:11px;font-weight:700;color:var(--orange)">⚠ Signals disagreed -- resolved automatically</div>
+    <div style="font-size:11px;color:var(--muted);margin-top:4px">${audit.resolution_rule}</div>
+    ${audit.overrides.map(o => `<div style="font-size:12px;margin-top:6px">${o.because}</div>`).join('')}
+  </div>`;
+}
+
+/** Task 12 -- the single most prominent card on the page: the Executive Decision itself. */
+function ciRenderExecutiveDecision(ed) {
+  if (!ed) return '';
+  const cls = ciDecisionColorClass(ed.decision);
+  const borderVar = ciDecisionBorderVar(ed.decision);
+  return `
+  <div class="card" style="margin-bottom:20px;border:2px solid var(${borderVar});background:var(--bg2)">
+    <div class="section-title" style="margin-bottom:4px">⭐ Executive Decision</div>
+    <div style="font-size:11px;color:var(--muted);margin-bottom:16px">If I were your Marketing Director, this is exactly what I would do first.</div>
+    <div style="display:flex;align-items:center;gap:20px;flex-wrap:wrap;margin-bottom:8px">
+      <span class="badge ${cls}" style="font-size:22px;padding:10px 24px;letter-spacing:1px">${ed.decision}</span>
+      <div><div class="detail-label">Confidence</div><div style="font-size:24px;font-weight:800">${ed.confidence}%</div></div>
+    </div>
+    <div style="font-size:11px;color:var(--muted);margin-bottom:6px">${ed.confidence_reason || ''}</div>
+    ${ciRenderExecutivePriorityCard(ed.priority_card)}
+    ${ciRenderWhyNot(ed.why_not)}
+    ${ciRenderConsistencyAudit(ed.consistency_audit)}
+  </div>`;
+}
+
+/** Task 4 -- Marketing Director Mode. */
+function ciRenderMarketingDirectorPlan(plan) {
+  if (!plan) return '';
+  const steps = [['Today', plan.today], ['Tomorrow', plan.tomorrow], ['This Week', plan.this_week], ['Next Week', plan.next_week], ['Next Month', plan.next_month]].filter(([, text]) => !!text);
+  return `
+  <div class="card" style="margin-bottom:20px">
+    <div class="section-title" style="margin-bottom:4px">🧑‍💼 If I were managing this account...</div>
+    <div style="display:flex;flex-direction:column;gap:2px;margin-top:12px">
+      ${steps.map(([label, text]) => `
+        <div style="display:flex;gap:12px;align-items:flex-start;padding:10px 0;border-bottom:1px solid var(--border)">
+          <span class="badge info" style="min-width:78px;text-align:center;flex-shrink:0">${label}</span>
+          <div style="font-size:13px">${text}</div>
+        </div>`).join('')}
+    </div>
+  </div>`;
+}
+
+/** Task 5/6 -- Winning Formula / Loss Formula, shared bar-chart-style renderer. */
+function ciRenderContributionFormula(title, formula) {
+  if (!formula) return '';
+  if (!formula.available) return `<div class="card" style="margin-bottom:20px"><div class="section-title" style="margin-bottom:8px">${title}</div><div class="empty">${formula.reason}</div></div>`;
+  const items = formula.items || [formula.largest_weakness, formula.second_weakness, formula.third_weakness].filter(Boolean);
+  return `
+  <div class="card" style="margin-bottom:20px">
+    <div class="section-title" style="margin-bottom:12px">${title}</div>
+    ${items.map(i => `
+      <div style="margin-bottom:10px">
+        <div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:3px"><span>${i.factor}</span><strong>${i.contribution_pct}%</strong></div>
+        <div style="height:8px;background:var(--bg3);border-radius:4px;overflow:hidden"><div style="height:100%;width:${i.contribution_pct}%;background:var(--accent2)"></div></div>
+        <div style="font-size:11px;color:var(--muted);margin-top:2px">${i.evidence || ''}</div>
+      </div>`).join('')}
+  </div>`;
+}
 
 async function loadCreativeLibrary() {
   document.getElementById('content').innerHTML = '<div class="loader"><span class="spin">◌</span> Loading Creative Library...</div>';
@@ -3398,6 +3721,7 @@ function ciRenderDetails(d) {
   const fatigue = d.fatigue || {};
   const comp = d.comparison || {};
   const intel = d.intelligence;
+  const advisor = d.advisor || null; // Phase 42-44 AI Marketing Advisor bundle
   const isWinner = comp.winner?.meta_ad_id === d.meta_ad_id;
   const isWorst = comp.worst?.meta_ad_id === d.meta_ad_id;
 
@@ -3463,7 +3787,18 @@ function ciRenderDetails(d) {
     <div style="text-align:center">${scoreCircle(scores.score_overall)}<div style="font-size:10px;color:var(--muted);margin-top:4px">Creative Score</div></div>
   </div>
 
+  ${ciRenderExecutiveDecision(d.executive_decision)}
+  ${ciRenderMarketingDirectorPlan(d.executive_decision?.marketing_director_plan)}
+
   ${d.executive_summary ? `<div class="card" style="margin-bottom:20px"><div class="section-title" style="margin-bottom:8px">Executive Summary</div><div style="font-size:13px">${d.executive_summary}</div><div style="font-size:11px;color:var(--muted);margin-top:6px">This score is the ad's overall Health Score (spend/CTR/CPA-based, from Ad Intelligence) -- a different metric from the Creative Score above (text/CTA/copy-based). See Rule Engine &amp; Governance below for the Health Score breakdown.</div></div>` : ''}
+
+  ${ciRenderAdvisorPanel(advisor?.panel)}
+  ${ciRenderScoreRelationship(advisor?.score_relationship, scores.score_overall, intel?.health_score)}
+
+  <div class="grid grid-2" style="margin-bottom:20px">
+    ${ciRenderContributionFormula('🏆 Winning Formula', d.executive_decision?.winning_formula)}
+    ${ciRenderContributionFormula('⚠ Loss Formula', d.executive_decision?.loss_formula)}
+  </div>
 
   <div class="grid grid-2" style="margin-bottom:20px">
     <div class="card">
@@ -3496,39 +3831,46 @@ function ciRenderDetails(d) {
         <div style="font-size:12px;margin-bottom:6px">🏆 Winner: <strong>${comp.winner.ad_name}</strong> (${comp.winner.score})</div>
         ${comp.runner_up ? `<div style="font-size:12px;margin-bottom:6px">🥈 Runner-up: ${comp.runner_up.ad_name} (${comp.runner_up.score})</div>` : ''}
         ${comp.worst ? `<div style="font-size:12px;margin-bottom:6px">⚠ Weakest: ${comp.worst.ad_name} (${comp.worst.score})</div>` : ''}
-        ${(comp.comparisons || []).map(c => `
+        ${advisor?.comparison_breakdown?.winner_vs_weakest?.narrative
+          ? `<div style="font-size:11px;color:var(--muted);margin-top:8px;padding:8px;background:var(--bg3);border-radius:6px">${advisor.comparison_breakdown.winner_vs_weakest.narrative}</div>`
+          : (comp.comparisons || []).map(c => `
           <div style="font-size:11px;color:var(--muted);margin-top:8px;padding:8px;background:var(--bg3);border-radius:6px">
             <strong>Why the winner beats the weakest:</strong> ${(c.why || []).join('; ')}
           </div>`).join('')}
+        ${advisor?.comparison_breakdown?.winner_vs_runner_up?.narrative
+          ? `<div style="font-size:11px;color:var(--muted);margin-top:6px;padding:8px;background:var(--bg3);border-radius:6px">${advisor.comparison_breakdown.winner_vs_runner_up.narrative}</div>` : ''}
       ` : '<div class="empty">Not enough creatives in this ad set (same date range) to compare.</div>'}
     </div>
 
     <div class="card">
       <div class="section-title" style="margin-bottom:12px">Recommendations</div>
-      ${(d.recommendations || []).length ? d.recommendations.map(r => {
-        const pcls = r.priority === 'high' ? 'critical' : r.priority === 'medium' ? 'warning' : 'info';
-        return `<div class="rec-card ${pcls}" style="margin-bottom:10px">
-          <div style="display:flex;justify-content:space-between;gap:8px"><strong style="font-size:13px">${r.action}</strong><span class="badge ${pcls}">${r.priority}</span></div>
-          <div style="font-size:12px;color:var(--muted);margin-top:4px">${r.reason}</div>
-        </div>`;
-      }).join('') : '<div class="empty">No recommendations right now.</div>'}
+      ${ciRenderPriorities(d.executive_decision?.recommendations || advisor?.priorities, d.recommendations)}
+      ${(d.executive_decision?.dropped_recommendations || []).length ? `<div style="font-size:11px;color:var(--muted);margin-top:8px">Not shown (conflicted with a higher-priority action): ${d.executive_decision.dropped_recommendations.map(x => x.action).join(', ')}.</div>` : ''}
     </div>
   </div>
 
+  ${ciRenderBenchmark(advisor?.benchmark)}
+
   <div class="card" style="margin-bottom:20px">
     <div class="section-title" style="margin-bottom:12px">Timeline</div>
-    ${(d.timeline?.events || []).length ? `<div style="display:flex;flex-direction:column;gap:2px">
-      ${d.timeline.events.map(e => `
-        <div style="display:flex;gap:10px;align-items:flex-start;padding:8px 0;border-bottom:1px solid var(--border)">
-          <span class="badge ${CI_TIMELINE_BADGE[e.type] || 'none'}" style="min-width:74px;text-align:center;flex-shrink:0">${e.type}</span>
-          <div style="font-size:12px">
-            <div style="color:var(--muted)">${e.date}</div>
-            ${e.score_overall != null ? `<div>Score: ${e.score_overall}${e.drop_from_peak_pct != null ? ` (−${e.drop_from_peak_pct}% from peak)` : ''}</div>` : ''}
-            ${e.field ? `<div>${e.field}: "${e.from || '(none)'}" → "${e.to || '(none)'}"</div>` : ''}
-            ${e.recommendation ? `<div>Recommended: ${e.recommendation}</div>` : ''}
-          </div>
-        </div>`).join('')}
-    </div>` : `<div class="empty">${d.timeline?.status === 'insufficient_data' ? 'Only one sync snapshot so far -- a timeline needs at least two.' : 'Not enough history yet for a timeline.'}</div>`}
+    ${(() => {
+      const rows = ciMergedTimelineRows(d);
+      if (!rows.length) return `<div class="empty">${d.timeline?.status === 'insufficient_data' ? 'Only one sync snapshot so far -- a timeline needs at least two.' : 'Not enough history yet for a timeline.'}</div>`;
+      return `<div style="display:flex;flex-direction:column;gap:2px">
+        ${rows.map(e => `
+          <div style="display:flex;gap:10px;align-items:flex-start;padding:8px 0;border-bottom:1px solid var(--border)">
+            <span class="badge ${CI_TIMELINE_BADGE[e.type] || 'none'}" style="min-width:74px;text-align:center;flex-shrink:0">${e.type.replace(/_/g, ' ')}</span>
+            <div style="font-size:12px">
+              <div style="color:var(--muted)">${e.date_range ? `${e.date_range[0]} → ${e.date_range[1]}` : String(e.date).slice(0, 10)}</div>
+              ${e.score_overall != null ? `<div>Score: ${e.score_overall}${e.drop_from_peak_pct != null ? ` (−${e.drop_from_peak_pct}% from peak)` : ''}</div>` : ''}
+              ${e.field ? `<div>${e.field}: "${e.from || '(none)'}" → "${e.to || '(none)'}"</div>` : ''}
+              ${e.recommendation ? `<div>Recommended: ${e.recommendation}</div>` : ''}
+              ${e.detail ? `<div>${e.detail}</div>` : ''}
+            </div>
+          </div>`).join('')}
+      </div>`;
+    })()}
+    ${(advisor?.rich_timeline?.not_tracked_at_ad_grain || []).length ? `<div style="font-size:11px;color:var(--muted);margin-top:10px">Not tracked at the individual-ad level in this system: ${advisor.rich_timeline.not_tracked_at_ad_grain.join(', ').replace(/_/g, ' ')}.</div>` : ''}
   </div>
 
   ${intel && intel.analyzed !== false ? `
