@@ -7,6 +7,7 @@
 require('dotenv').config();
 
 const express = require('express');
+const session = require('express-session');
 const helmet  = require('helmet');
 const cors    = require('cors');
 const rateLimit = require('express-rate-limit');
@@ -42,6 +43,8 @@ const { startAutoSyncScheduler } = require('./services/autoSyncScheduler');
 const { recoverInterruptedSyncs } = require('./services/syncService');
 const { encryptLegacyTokens }    = require('./db/encryptLegacyTokens');
 const { requireEncryptionKey }   = require('./services/tokenCrypto');
+const { requireAuth, requireSessionSecret } = require('./middleware/auth');
+const authRouter                 = require('./api/routes/auth');
 const apiRouter                  = require('./api/router');
 const { errorHandler }           = require('./middleware/errorHandler');
 const { parseAllowedOrigins, requestOrigin, isOriginAllowed } = require('./middleware/corsOriginPolicy');
@@ -74,6 +77,7 @@ const DB_PATH = process.env.DB_PATH || './data/meta_ads.db';
  */
 async function initializeApp(dbPath = DB_PATH) {
   requireEncryptionKey();
+  requireSessionSecret();
   await initializeDatabase(dbPath);
   runMigrations();
   runPhase2Migrations();
@@ -159,6 +163,23 @@ function createApp() {
     });
   }));
 
+  // Session cookie (Phase 48 — Authentication). In-memory store is a
+  // deliberate, accepted tradeoff: this is a single-user system by design
+  // (see CLAUDE.md) so there is only ever 0-1 active sessions, and a
+  // restart simply requires logging in again -- not a real cost here.
+  app.use(session({
+    name: 'sid',
+    secret: process.env.SESSION_SECRET,
+    resave: false,
+    saveUninitialized: false,
+    cookie: {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === 'production',
+      sameSite: 'lax',
+      maxAge: 30 * 24 * 60 * 60 * 1000, // 30 days
+    },
+  }));
+
   // Rate limiting: general API traffic gets a generous ceiling; the
   // Meta sync endpoint (which fans out into many Graph API calls per
   // request) gets a much tighter one to prevent accidental or
@@ -194,9 +215,14 @@ function createApp() {
   // Serve static dashboard
   app.use(express.static(path.join(__dirname, '../public')));
 
-  // API routes
+  // API routes. /auth is mounted ahead of the general prefix so
+  // login/logout/status are reachable without a session (requireAuth would
+  // otherwise 401 the very request that establishes the session). Every
+  // other /api/v1/* route requires auth, except /health (Railway's
+  // healthcheck target -- excluded inside requireAuth itself).
   app.use('/api/v1/sync', syncLimiter);
-  app.use('/api/v1', apiLimiter, apiRouter);
+  app.use('/api/v1/auth', authRouter);
+  app.use('/api/v1', apiLimiter, requireAuth, apiRouter);
 
   // SPA fallback — all non-API routes serve index.html
   app.get('/{*path}', (req, res) => {

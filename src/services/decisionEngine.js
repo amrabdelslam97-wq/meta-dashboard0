@@ -29,6 +29,36 @@ const { detectTrend }  = require('./topWinnersEngine');
 const { detectAllOpportunities } = require('./opportunityEngine');
 const { computePriorityScore } = require('./prioritizationEngine');
 const { resolveProfile } = require('./kpiProfileResolver');
+const { computeConfidence } = require('./executiveReasoningEngine');
+
+// ─────────────────────────────────────────────
+// Phase 48 — Blocker 4 (Decision Architecture unification, shared
+// primitives): this file used to compute confidence with a crude inline
+// `severity === 'critical' ? 'high' : 'medium'` ternary, duplicated 6 times.
+// executiveDecisionEngine.js and advisorEngine.js already share one real
+// confidence primitive (executiveReasoningEngine.computeConfidence()) --
+// this file now routes through the same primitive instead of a third,
+// independent one. severity->supportingSignals below is calibrated so the
+// *qualitative output* is unchanged (critical still resolves to 'high',
+// everything else still resolves to 'medium') -- maifsGovernance.js
+// hardcodes `decision.confidence === 'high' || 'medium'` as a validation
+// gate, so this deliberately never changes the emitted string, only how
+// it's computed. `confidence_pct` is a new, additive field alongside it.
+// ─────────────────────────────────────────────
+const CONFIDENCE_HIGH_THRESHOLD = 60;
+const CONFIDENCE_MEDIUM_THRESHOLD = 35;
+
+function classifyConfidencePct(pct) {
+  if (pct >= CONFIDENCE_HIGH_THRESHOLD) return 'high';
+  if (pct >= CONFIDENCE_MEDIUM_THRESHOLD) return 'medium';
+  return 'low';
+}
+
+function severityConfidence(severity) {
+  const supportingSignals = severity === 'critical' ? 2 : severity === 'warning' ? 1 : 0;
+  const result = computeConfidence({ supportingSignals, conflictingSignals: 0, dataSufficient: true });
+  return { confidence: classifyConfidencePct(result.confidence_pct), confidence_pct: result.confidence_pct };
+}
 
 // ─────────────────────────────────────────────
 // Map recommendation rule codes to decision types.
@@ -123,7 +153,7 @@ function decisionShapeForGovernance(source, row) {
   return {
     decision_type: mapping ? mapping.type : null,
     priority: row.severity === 'critical' ? 'critical' : 'high',
-    confidence: row.severity === 'critical' ? 'high' : 'medium',
+    confidence: severityConfidence(row.severity).confidence,
     suggested_action: source === 'recommendation' ? row.recommendation_body : (row.alert_message || row.message),
   };
 }
@@ -178,7 +208,7 @@ function findingShapeForCard(source, row) {
     decision_type: mapping ? mapping.type : null,
     decision_label: mapping ? DECISION_LABELS[mapping.type] : null,
     priority: row.severity === 'critical' ? 'critical' : 'high',
-    confidence: row.severity === 'critical' ? 'high' : 'medium',
+    confidence: severityConfidence(row.severity).confidence,
     suggested_action: source === 'recommendation' ? row.recommendation_body : (row.alert_message || row.message),
     framework: null,
     framework_name: null,
@@ -245,6 +275,7 @@ function decisionsFromRecommendations(adAccountId) {
     // read back here and applied the same way decisionsFromRuleEngineLog()
     // already downgrades rule-engine decisions, never recomputed.
     const governanceFailed = rec.governance_state === 'failed';
+    const conf = severityConfidence(rec.severity);
 
     decisions.push({
       id:              uuidv4(),
@@ -262,7 +293,8 @@ function decisionsFromRecommendations(adAccountId) {
       suggested_action: actionText(mapping.type, rec.campaign_name || rec.entity_label, rec.objective),
       supporting_metrics: rec.metric_snapshot ? JSON.parse(rec.metric_snapshot) : {},
       health_score:    latestScore?.health_score || null,
-      confidence:      rec.severity === 'critical' ? 'high' : 'medium',
+      confidence:      conf.confidence,
+      confidence_pct:  conf.confidence_pct,
       governance_state: rec.governance_state || null,
     });
   }
@@ -303,6 +335,7 @@ function decisionsFromAlerts(adAccountId) {
     // MAIFS enforcement (Phase X.3) -- see decisionsFromRecommendations()'s
     // identical comment; same persisted-once, read-many pattern.
     const governanceFailed = alert.governance_state === 'failed';
+    const conf = severityConfidence(alert.severity);
 
     decisions.push({
       id:              uuidv4(),
@@ -324,7 +357,8 @@ function decisionsFromAlerts(adAccountId) {
         occurrence_count: alert.occurrence_count,
       },
       health_score:    latestScore?.health_score || null,
-      confidence:      alert.severity === 'critical' ? 'high' : 'medium',
+      confidence:      conf.confidence,
+      confidence_pct:  conf.confidence_pct,
       governance_state: alert.governance_state || null,
     });
   }
@@ -394,6 +428,7 @@ function decisionsFromRuleEngine(campaign, adAccountId, ruleEngineFired = []) {
       trendDirection:  getTrendForEntity(campaign.meta_campaign_id),
       objectiveWeight: resolveProfile(campaign.objective).priorityWeight ?? 1.0,
     });
+    const conf = severityConfidence(fired.severity);
 
     return {
       id:              uuidv4(),
@@ -411,7 +446,8 @@ function decisionsFromRuleEngine(campaign, adAccountId, ruleEngineFired = []) {
       suggested_action: fired.action.suggestedActionOverride || actionText(fired.action.type, campaign.name, campaign.objective),
       supporting_metrics: {},
       health_score:    latestScore?.health_score || null,
-      confidence:      fired.severity === 'critical' ? 'high' : 'medium',
+      confidence:      conf.confidence,
+      confidence_pct:  conf.confidence_pct,
       // Framework/Rule attribution -- not present on other decision
       // sources, additive fields only.
       rule_id:         fired.rule_id,
@@ -531,6 +567,7 @@ function decisionsFromRuleEngineLog(adAccountId) {
     // priority score -- governance changes runtime behavior here, not
     // just a reported field.
     const priority = row.governance_state === 'failed' ? 'observation_only' : priorityResult.priority;
+    const conf = severityConfidence(row.severity);
 
     return {
       id:              uuidv4(),
@@ -548,7 +585,8 @@ function decisionsFromRuleEngineLog(adAccountId) {
       suggested_action: actionText(row.decision_type, row.entity_label, row.objective),
       supporting_metrics: row.evidence ? JSON.parse(row.evidence) : {},
       health_score:    latestScore?.health_score || null,
-      confidence:      row.severity === 'critical' ? 'high' : 'medium',
+      confidence:      conf.confidence,
+      confidence_pct:  conf.confidence_pct,
       rule_id:         row.rule_id,
       framework:       row.framework,
       rule_name:       row.rule_name,

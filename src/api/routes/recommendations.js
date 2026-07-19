@@ -58,9 +58,13 @@ router.get('/', asyncHandler(async (req, res) => {
        r.metric_snapshot, r.governance_state,
        r.health_score_at_generation, r.generated_at, r.last_generated_at,
        r.dismissed_at, r.action_taken, r.action_notes, r.action_taken_at,
-       c.name as campaign_name, c.status as campaign_status
+       COALESCE(c.name, ca.name) as campaign_name,
+       COALESCE(c.status, ca.status) as campaign_status,
+       COALESCE(c.meta_campaign_id, ca.meta_campaign_id) as owning_campaign_meta_id
      FROM recommendation_log r
      LEFT JOIN campaigns c ON c.meta_campaign_id = r.entity_meta_id
+     LEFT JOIN ads a ON a.meta_ad_id = r.entity_meta_id
+     LEFT JOIN campaigns ca ON ca.id = a.campaign_id
      ${where}
      ORDER BY
        CASE r.severity WHEN 'critical' THEN 1 WHEN 'warning' THEN 2 ELSE 3 END,

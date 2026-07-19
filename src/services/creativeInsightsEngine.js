@@ -16,6 +16,27 @@ function round(n, dp = 2) {
   return Math.round(n * f) / f;
 }
 
+// Phase 48 — Blocker 2: calculateCreativeScore()'s `components` now reflects
+// the canonical creativeIntelligenceEngine.js scoring dimensions (content
+// quality) rather than the old, now-retired metric-based breakdown
+// (ctr/conversion/hook/roas/frequency/cpm). This maps each dimension to a
+// human-readable label for the strength/weakness narrative below.
+const COMPONENT_LABELS = {
+  hook: 'hook',
+  headline: 'headline',
+  copy: 'ad copy',
+  visual: 'visual creative',
+  cta: 'call-to-action',
+  offer: 'offer',
+  trust: 'trust signals',
+  psychology: 'psychological triggers',
+  conversion_potential: 'conversion potential',
+  scroll_stop: 'scroll-stopping power',
+  retention: 'audience retention',
+  brand: 'brand presence',
+  fatigue: 'creative freshness',
+};
+
 /**
  * Generate comprehensive AI insights for a creative.
  */
@@ -48,31 +69,20 @@ function generateCreativeInsights(metaAdId) {
 
   insights.top_strengths = [];
   if (componentScores[0]?.value > 70) {
-    if (componentScores[0].name === 'ctr') {
-      insights.top_strengths.push(`Excellent click-through rate (${round(analytics.ctr, 3)}%)`);
-    } else if (componentScores[0].name === 'hook') {
-      insights.top_strengths.push(`Strong hook/retention (${round(analytics.video_p25_pct || 0)}%)`);
-    } else if (componentScores[0].name === 'roas') {
-      insights.top_strengths.push(`High return on ad spend (${round(analytics.roas, 1)}x)`);
-    } else if (componentScores[0].name === 'conversion') {
-      insights.top_strengths.push(`Strong conversion efficiency (CPA: $${round(analytics.cpa, 2)})`);
-    }
+    const label = COMPONENT_LABELS[componentScores[0].name] || componentScores[0].name;
+    insights.top_strengths.push(`Strong ${label} (${round(componentScores[0].value, 0)}/100)`);
   }
   if (componentScores[1]?.value > 70) {
-    insights.top_strengths.push(`Secondary strength: ${componentScores[1].name}`);
+    const label = COMPONENT_LABELS[componentScores[1].name] || componentScores[1].name;
+    insights.top_strengths.push(`Secondary strength: ${label}`);
   }
 
   // Top Weaknesses (components scoring lowest)
   const weakestComponent = componentScores[componentScores.length - 1];
   insights.top_weaknesses = [];
   if (weakestComponent?.value < 40) {
-    if (weakestComponent.name === 'ctr') {
-      insights.top_weaknesses.push(`Low click-through rate (${round(analytics.ctr, 3)}%)`);
-    } else if (weakestComponent.name === 'frequency') {
-      insights.top_weaknesses.push(`High frequency fatigue (${round(analytics.frequency, 1)}x)`);
-    } else if (weakestComponent.name === 'cpm') {
-      insights.top_weaknesses.push(`High cost-per-impression ($${round(analytics.cpm, 2)})`);
-    }
+    const label = COMPONENT_LABELS[weakestComponent.name] || weakestComponent.name;
+    insights.top_weaknesses.push(`Weak ${label} (${round(weakestComponent.value, 0)}/100)`);
   }
 
   // Why it wins / Why it loses
@@ -101,7 +111,7 @@ function generateCreativeInsights(metaAdId) {
 
   // Biggest Opportunity
   insights.biggest_opportunity = null;
-  if (analytics.spend > 100 && analytics.ctr < 1 && score.components.ctr < 50) {
+  if (analytics.spend > 100 && analytics.ctr < 1 && (score.components.conversion_potential ?? 100) < 50) {
     insights.biggest_opportunity = {
       type: 'engagement_improvement',
       description: 'Test new visuals or headlines — could significantly improve CTR',

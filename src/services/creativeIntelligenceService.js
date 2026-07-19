@@ -35,11 +35,26 @@ function pctChange(current, prior) {
 // CREATIVE QUALITY SCORING
 // ─────────────────────────────────────────────
 
+function classifyScoreStatus(score) {
+  if (score >= 85) return 'Excellent';
+  if (score >= 70) return 'Very Good';
+  if (score >= 55) return 'Good';
+  if (score >= 40) return 'Average';
+  if (score >= 25) return 'Poor';
+  return 'Critical';
+}
+
 /**
- * Calculate comprehensive creative quality score (0-100).
- * Based on: CTR, hook efficiency, video retention, result quality, cost, frequency, trends.
+ * Phase 48 — Blocker 2 (Creative Score consolidation): this used to compute
+ * its own independently-weighted score (weights summed to 0.90, not 1.0 --
+ * a real normalization bug) that could disagree with both
+ * creativeIntelligenceEngine.js's computeCreativeScore() (the canonical,
+ * persisted formula) and creativeScoringEngine.js's own formula for the
+ * same ad. Now a thin presentation wrapper over the single persisted score:
+ * same route shape, same status vocabulary, `components`/`metrics` reshaped
+ * to reflect real data instead of a third independently computed breakdown.
  */
-function scoreCreative(metaAdId, lookbackDays = 30) {
+function scoreCreative(metaAdId) {
   const latest = db.get(
     `SELECT * FROM creative_analytics WHERE meta_ad_id = ? ORDER BY date_until DESC LIMIT 1`,
     [metaAdId]
@@ -54,92 +69,35 @@ function scoreCreative(metaAdId, lookbackDays = 30) {
     };
   }
 
-  // Component scores (0-100)
-  const components = {};
-
-  // 1. CTR Score (25% weight)
-  // Benchmark: 0% = 0, 3% = 100
-  components.ctr = Math.min(100, Math.max(0, (latest.ctr || 0) / 3 * 100));
-
-  // 2. Hook Efficiency (15% weight)
-  // For video: p25_pct is main signal
-  if (latest.video_p25_pct) {
-    components.hook = latest.video_p25_pct; // 0-100 already
-  } else {
-    components.hook = components.ctr * 0.7; // Proxy from CTR
+  if (latest.score_overall === null || latest.score_overall === undefined) {
+    return {
+      meta_ad_id: metaAdId,
+      score: null,
+      status: 'INSUFFICIENT_DATA',
+      reason: 'Creative score has not been computed for this ad yet',
+    };
   }
 
-  // 3. Video Retention (15% weight)
-  // Average of retention metrics
-  if (latest.video_p100_pct) {
-    components.retention = latest.video_p100_pct;
-  } else if (latest.hold_rate) {
-    components.retention = latest.hold_rate;
-  } else {
-    components.retention = components.hook * 0.8;
-  }
-
-  // 4. Result Quality (20% weight)
-  // Inverse CPA: lower CPA = higher score
-  // Benchmark: CPA < $10 = 100, CPA > $50 = 0
-  if (latest.cpa) {
-    components.result_quality = Math.min(100, Math.max(0, 100 - (latest.cpa / 50 * 100)));
-  } else {
-    components.result_quality = 50;
-  }
-
-  // 5. Cost Efficiency (10% weight)
-  // CPM score: lower CPM = higher score
-  // Benchmark: CPM < $5 = 100, CPM > $20 = 0
-  if (latest.cpm) {
-    components.cost = Math.min(100, Math.max(0, 100 - ((latest.cpm - 5) / 15 * 100)));
-  } else {
-    components.cost = 50;
-  }
-
-  // 6. Frequency Impact (5% weight)
-  // High frequency = negative impact
-  // Benchmark: Freq < 1 = 100, Freq > 5 = 0
-  if (latest.frequency) {
-    components.frequency = Math.min(100, Math.max(0, 100 - (latest.frequency / 5 * 100)));
-  } else {
-    components.frequency = 50;
-  }
-
-  // Weighted average
-  const weights = {
-    ctr: 0.25,
-    hook: 0.15,
-    retention: 0.15,
-    result_quality: 0.20,
-    cost: 0.10,
-    frequency: 0.05,
-  };
-
-  const overallScore = Object.entries(weights).reduce((sum, [key, weight]) => {
-    return sum + ((components[key] || 50) * weight);
-  }, 0);
-
-  // Status mapping
-  let status = 'Average';
-  if (overallScore >= 85) status = 'Excellent';
-  else if (overallScore >= 70) status = 'Very Good';
-  else if (overallScore >= 55) status = 'Good';
-  else if (overallScore >= 40) status = 'Average';
-  else if (overallScore >= 25) status = 'Poor';
-  else status = 'Critical';
+  const overallScore = round(latest.score_overall, 1);
 
   return {
     meta_ad_id: metaAdId,
-    score: round(overallScore),
-    status,
+    score: overallScore,
+    status: classifyScoreStatus(overallScore),
     components: {
-      ctr: round(components.ctr),
-      hook: round(components.hook),
-      retention: round(components.retention),
-      result_quality: round(components.result_quality),
-      cost: round(components.cost),
-      frequency: round(components.frequency),
+      hook: round(latest.score_hook, 1),
+      headline: round(latest.score_headline, 1),
+      copy: round(latest.score_copy, 1),
+      visual: round(latest.score_visual, 1),
+      cta: round(latest.score_cta, 1),
+      offer: round(latest.score_offer, 1),
+      trust: round(latest.score_trust, 1),
+      psychology: round(latest.score_psychology, 1),
+      conversion_potential: round(latest.score_conversion_potential, 1),
+      scroll_stop: round(latest.score_scroll_stop, 1),
+      retention: round(latest.score_retention, 1),
+      brand: round(latest.score_brand, 1),
+      fatigue: round(latest.score_fatigue, 1),
     },
     metrics: {
       ctr: latest.ctr,

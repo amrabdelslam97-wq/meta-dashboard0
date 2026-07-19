@@ -1,10 +1,17 @@
 /**
  * Creative Scoring Engine — Phase 21 Section 6
  *
- * Calculate Creative Score (0-100) from:
- * CTR, Hook, Retention, Conversion, Frequency, Cost, ROAS, Quality
- *
- * Never simulate. Only real Meta data.
+ * Phase 48 — Blocker 2 (Creative Score consolidation): this module used to
+ * compute its own independent weighted score (CTR/conversion/hook/ROAS/
+ * frequency/CPM, with a hardcoded avgCPA=10 placeholder). That produced a
+ * different number than creativeIntelligenceEngine.js's computeCreativeScore()
+ * -- the formula actually persisted to creative_analytics.score_* and used
+ * by the rest of the Creative Intelligence/Advisor/Executive Decision
+ * pipeline -- for the same ad. calculateCreativeScore() is now a thin
+ * presentation wrapper over that single persisted score: same route shape,
+ * same status vocabulary, same `metrics` block, but `components` reflects
+ * the real canonical scoring dimensions instead of a second, independently
+ * computed breakdown.
  */
 
 const db = require('../db/database');
@@ -14,23 +21,19 @@ function round(n, dp = 1) {
   return Math.round(n * 10 ** dp) / 10 ** dp;
 }
 
-/**
- * Normalize a metric to 0-100 scale with configurable benchmarks.
- */
-function normalizeMetric(value, benchmarkLow, benchmarkHigh) {
-  if (value === null || value === undefined) return null;
-
-  // Map value to 0-100 scale
-  // benchmarkLow = 0 points, benchmarkHigh = 100 points
-  if (value <= benchmarkLow) return 0;
-  if (value >= benchmarkHigh) return 100;
-
-  return ((value - benchmarkLow) / (benchmarkHigh - benchmarkLow)) * 100;
+function classifyScoreStatus(score) {
+  if (score >= 85) return 'Excellent';
+  if (score >= 70) return 'Very Good';
+  if (score >= 55) return 'Good';
+  if (score >= 40) return 'Average';
+  if (score >= 25) return 'Poor';
+  return 'Critical';
 }
 
 /**
- * Calculate Creative Score (0-100) for a single ad.
- * Weights different components and returns an overall score + breakdown.
+ * Read the canonical Creative Score (persisted by creativeAnalytics.js via
+ * creativeIntelligenceEngine.js's computeCreativeScore()) for a single ad,
+ * reshaped into this route family's existing response envelope.
  */
 function calculateCreativeScore(metaAdId) {
   const analytics = db.get(
@@ -50,93 +53,36 @@ function calculateCreativeScore(metaAdId) {
     };
   }
 
-  // 1. CTR Score (0-100)
-  // Benchmark: 0% CTR = 0, 3% CTR = 100
-  const ctrScore = normalizeMetric(analytics.ctr || 0, 0, 3);
-
-  // 2. Conversion Score (0-100)
-  // Based on cost per result (lower is better)
-  // Benchmark: High CPA = 0, Excellent CPA = 100
-  // Excellent = 50% of current average for objective
-  const avgCPA = 10; // Placeholder; should be calculated from account average
-  const conversionScore = analytics.cpa
-    ? normalizeMetric(avgCPA / (analytics.cpa || avgCPA), 0, 1.5) // Inverse scoring
-    : null;
-
-  // 3. Retention/Hook Score (0-100)
-  // From video metrics if available
-  let hookScore = null;
-  if (analytics.video_p25_pct) {
-    // P25 retention is a good hook indicator
-    hookScore = normalizeMetric(analytics.video_p25_pct || 0, 0, 100);
-  } else if (analytics.hold_rate) {
-    hookScore = normalizeMetric(analytics.hold_rate || 0, 0, 100);
+  if (analytics.score_overall === null || analytics.score_overall === undefined) {
+    return {
+      meta_ad_id: metaAdId,
+      score: null,
+      status: 'INSUFFICIENT_DATA',
+      reason: 'Creative score has not been computed for this ad yet',
+      components: {},
+    };
   }
 
-  // 4. ROAS Score (0-100)
-  // Benchmark: ROAS < 1 = 0, ROAS > 5 = 100
-  const roasScore = analytics.roas ? normalizeMetric(analytics.roas, 1, 5) : null;
-
-  // 5. Frequency Impact (0-100, inverse)
-  // High frequency = creative fatigue = lower score
-  // Benchmark: Frequency < 1 = 100, Frequency > 5 = 0
-  const frequencyScore = analytics.frequency
-    ? 100 - normalizeMetric(analytics.frequency, 1, 5)
-    : 50; // Neutral if not available
-
-  // 6. Cost Efficiency (0-100)
-  // CPM score: lower is better
-  // Benchmark: CPM < $5 = 100, CPM > $20 = 0
-  const cpmScore = analytics.cpm ? normalizeMetric(analytics.cpm, 5, 20) : null;
-
-  // Weights
-  const weights = {
-    ctr: 0.25, // CTR is core engagement signal
-    conversion: 0.25, // CPA is core business metric
-    hook: 0.15, // Hook retention matters for video
-    roas: 0.15, // Business outcome
-    frequency: 0.10, // Fatigue indicator
-    cpm: 0.10, // Cost efficiency
-  };
-
-  // Calculate overall score
-  const scoreComponents = {
-    ctr: ctrScore !== null ? ctrScore : 50,
-    conversion: conversionScore !== null ? conversionScore : 50,
-    hook: hookScore !== null ? hookScore : 50,
-    roas: roasScore !== null ? roasScore : 50,
-    frequency: frequencyScore,
-    cpm: cpmScore !== null ? cpmScore : 50,
-  };
-
-  const totalWeight = Object.values(weights).reduce((s, w) => s + w, 0);
-  let weightedScore = 0;
-  for (const [component, value] of Object.entries(scoreComponents)) {
-    weightedScore += (value || 0) * (weights[component] || 0);
-  }
-
-  const overallScore = Math.min(100, Math.max(0, round(weightedScore / totalWeight)));
-
-  // Determine status
-  let status = 'Average';
-  if (overallScore >= 85) status = 'Excellent';
-  else if (overallScore >= 70) status = 'Very Good';
-  else if (overallScore >= 55) status = 'Good';
-  else if (overallScore >= 40) status = 'Average';
-  else if (overallScore >= 25) status = 'Poor';
-  else status = 'Critical';
+  const overallScore = round(analytics.score_overall);
 
   return {
     meta_ad_id: metaAdId,
     score: overallScore,
-    status,
+    status: classifyScoreStatus(overallScore),
     components: {
-      ctr: round(scoreComponents.ctr),
-      conversion: round(scoreComponents.conversion),
-      hook: round(scoreComponents.hook),
-      roas: round(scoreComponents.roas),
-      frequency: round(scoreComponents.frequency),
-      cpm: round(scoreComponents.cpm),
+      hook: round(analytics.score_hook),
+      headline: round(analytics.score_headline),
+      copy: round(analytics.score_copy),
+      visual: round(analytics.score_visual),
+      cta: round(analytics.score_cta),
+      offer: round(analytics.score_offer),
+      trust: round(analytics.score_trust),
+      psychology: round(analytics.score_psychology),
+      conversion_potential: round(analytics.score_conversion_potential),
+      scroll_stop: round(analytics.score_scroll_stop),
+      retention: round(analytics.score_retention),
+      brand: round(analytics.score_brand),
+      fatigue: round(analytics.score_fatigue),
     },
     metrics: {
       ctr_pct: analytics.ctr,
@@ -187,5 +133,4 @@ function scoreCreativesByCampaign(metaCampaignId, limit = 50) {
 module.exports = {
   calculateCreativeScore,
   scoreCreativesByCampaign,
-  normalizeMetric,
 };

@@ -17,6 +17,27 @@
 
 const { computeConfidence } = require('./executiveReasoningEngine');
 
+/**
+ * Phase 48 — Blocker 4 (Decision Architecture unification, shared
+ * primitives): Decision Center (decisionEngine.js) and Executive Decision
+ * used no common urgency scale -- Decision Center's `priority` is
+ * critical/high/medium/low; Executive Decision had no priority field at
+ * all. Rather than collapsing the two systems' decision vocabularies (which
+ * would require rewriting decisionEngine.js's decision_type output AND
+ * mirroring that in maifsGovernance.js's hardcoded checks against it --
+ * genuinely different action spaces, campaign-grain vs. ad-grain), this
+ * derives a `priority` on the SAME critical/high/medium/low scale from the
+ * already-resolved decision + confidence, so both systems expose one
+ * directly comparable urgency axis without renaming either one's core
+ * decision vocabulary.
+ */
+function decisionToPriority(decision, confidencePct) {
+  if (decision === 'STOP' || decision === 'PAUSE') return 'critical';
+  if (decision === 'TEST' || decision === 'OPTIMIZE') return confidencePct >= 60 ? 'high' : 'medium';
+  if (decision === 'SCALE') return confidencePct >= 60 ? 'medium' : 'low';
+  return 'low'; // MONITOR
+}
+
 // ─────────────────────────────────────────────
 // TASK 1 — The one allowed vocabulary. Every module's own internal verdict
 // (advisor panel's current_status, the Rule Engine's fired actions, fatigue
@@ -136,18 +157,42 @@ function recommendationLogCandidateDecisions(recommendationLogRows) {
 }
 
 /**
+ * Phase 48 — Blocker 3: the Advisor panel's own Scale/Refresh/Rewrite/Monitor
+ * branches (baseDecisionFromPanel() above) never looked at healthStatus --
+ * only the Pause branch did. That let a critical-health ad still surface a
+ * SCALE verdict. Health now enters through the SAME candidate-decision +
+ * "more conservative wins" arbitration every other module already uses
+ * (ruleEngineCandidateDecisions, recommendationLogCandidateDecisions) rather
+ * than a special-cased branch -- so a critical health status can override
+ * ANY optimistic decision, not just block Scale specifically, and the
+ * override is auditable in consistency_audit.overrides[] exactly like every
+ * other module's disagreement.
+ */
+function healthCandidateDecisions(healthStatus) {
+  const meta = { module: 'Health Score Engine', id: 'health_status', name: `${healthStatus} health` };
+  if (healthStatus === 'critical') {
+    return [{ decision: 'PAUSE', ...meta, reason: 'Health Score Engine flagged this entity\'s health as critical.' }];
+  }
+  if (healthStatus === 'warning') {
+    return [{ decision: 'OPTIMIZE', ...meta, reason: 'Health Score Engine flagged this entity\'s health as warning.' }];
+  }
+  return [];
+}
+
+/**
  * TASK 1 + TASK 13 — the single arbitration point across every module this
  * platform has a real, already-computed verdict from (the Advisor panel,
- * the Rule Engine, and -- when the caller supplies them -- Budget/Audience
- * Intelligence). Returns the final decision plus a `consistency_audit`:
- * empty when every signal already agreed, or a real trail naming which
- * MODULE disagreed and why the more conservative signal won, whenever an
- * override actually happened (Task 13's "automatically determine the root
- * cause" requirement).
+ * the Rule Engine, Health Score, and -- when the caller supplies them --
+ * Budget/Audience Intelligence). Returns the final decision plus a
+ * `consistency_audit`: empty when every signal already agreed, or a real
+ * trail naming which MODULE disagreed and why the more conservative signal
+ * won, whenever an override actually happened (Task 13's "automatically
+ * determine the root cause" requirement).
  */
 function resolveExecutiveDecision({ panelStatus, healthStatus, fatigue, scores, ruleEngineFindings, crossModuleSignals, recommendationLogRows }) {
   const base = baseDecisionFromPanel(panelStatus, { healthStatus, fatigue, scores });
   const candidates = [
+    ...healthCandidateDecisions(healthStatus).map(c => ({ ...c, source: 'advisor_vs_health_score' })),
     ...ruleEngineCandidateDecisions(ruleEngineFindings).map(c => ({ ...c, source: 'advisor_vs_rule_engine' })),
     ...crossModuleCandidateDecisions(crossModuleSignals).map(c => ({ ...c, source: 'advisor_vs_cross_module' })),
     ...recommendationLogCandidateDecisions(recommendationLogRows).map(c => ({ ...c, source: 'advisor_vs_recommendation_rules' })),
@@ -388,7 +433,7 @@ function resolveRecommendationConflicts(priorities) {
 // and benchmark sample size (a real confidence signal already computed by
 // Phase 42's benchmark averages, previously only implicit).
 // ─────────────────────────────────────────────
-function computeExecutiveConfidence({ consistencyAudit, historicalComparison, benchmarkComparison, fatigue, latestRow }) {
+function computeExecutiveConfidence({ consistencyAudit, historicalComparison, benchmarkComparison, fatigue, latestRow, businessRisk }) {
   let supporting = 0;
   let conflicting = 0;
 
@@ -397,6 +442,14 @@ function computeExecutiveConfidence({ consistencyAudit, historicalComparison, be
   // override that had to happen.
   if (consistencyAudit?.agreement === 'unanimous') supporting += 2;
   else conflicting += consistencyAudit?.overrides?.length || 1;
+
+  // Phase 48 — Blocker 3: the Advisor panel's own business_risk (Phase 44,
+  // derived from real conflicting-signal count) was computed but never fed
+  // back into Executive Decision's confidence -- a HIGH business-risk ad
+  // should never report the same confidence as a LOW-risk one on otherwise
+  // identical signal agreement. This is what makes "Business Risk" a real,
+  // measurable confidence input rather than a decorative field.
+  if (businessRisk === 'HIGH') conflicting += 1;
 
   // Historical consistency -- do multiple real metrics agree on direction?
   if (historicalComparison?.status === 'ok') {
@@ -516,12 +569,13 @@ function buildExecutiveDecisionLayer({
   const { kept: conflictFreePriorities, dropped: droppedRecommendations } = resolveRecommendationConflicts(priorities);
   const enrichedPriorities = conflictFreePriorities.map(p => enrichRecommendationQuality(p, rootCause, latestRow));
 
-  const confidence = computeExecutiveConfidence({ consistencyAudit: consistency_audit, historicalComparison, benchmarkComparison, fatigue, latestRow });
+  const confidence = computeExecutiveConfidence({ consistencyAudit: consistency_audit, historicalComparison, benchmarkComparison, fatigue, latestRow, businessRisk: panel?.business_risk });
 
   return {
     decision,
     allowed_decisions: ALLOWED_DECISIONS,
     base_from_advisor,
+    priority: decisionToPriority(decision, confidence.confidence_pct),
     confidence: confidence.confidence_pct,
     confidence_reason: confidence.reason,
     why_not: buildWhyNot(decision, { scores, fatigue, healthStatus, benchmarkVerdict, priorities: conflictFreePriorities, crossModuleSignals, recommendationLogRows }),
@@ -539,6 +593,8 @@ module.exports = {
   ALLOWED_DECISIONS,
   CONSERVATISM_RANK,
   resolveExecutiveDecision,
+  healthCandidateDecisions,
+  decisionToPriority,
   crossModuleCandidateDecisions,
   recommendationLogCandidateDecisions,
   buildWhyNot,

@@ -77,6 +77,9 @@ nav{padding:12px 8px;flex:1;overflow-y:auto}
 .badge.good{background:var(--yellow-bg);color:var(--yellow)}
 .badge.warning{background:var(--orange-bg);color:var(--orange)}
 .badge.critical{background:var(--red-bg);color:var(--red)}
+.badge.high{background:var(--orange-bg);color:var(--orange)}
+.badge.medium{background:var(--yellow-bg);color:var(--yellow)}
+.badge.low{background:var(--bg3);color:var(--muted)}
 .badge.info{background:var(--blue-bg);color:var(--blue)}
 .badge.none{background:var(--bg3);color:var(--muted)}
 .badge.not_delivering{background:var(--bg3);color:var(--muted);font-style:italic}
@@ -283,11 +286,11 @@ textarea.form-input{resize:vertical;min-height:80px}
 .ic-kpi-sub{font-size:11px;color:var(--muted);margin-top:4px;display:flex;align-items:center;gap:4px}
 .hs-inline{display:flex;align-items:center;gap:8px}
 .ic-adset-row,.ic-ad-row{display:grid;align-items:center;gap:10px;padding:11px 14px;border-bottom:1px solid var(--border);transition:background .1s;cursor:default}
-.ic-adset-row{grid-template-columns:2fr 70px 70px 100px 100px 90px 80px 70px 100px auto}
+.ic-adset-row{grid-template-columns:2fr 70px 70px 90px 100px 90px 80px 70px 100px auto}
 .ic-ad-row{grid-template-columns:2fr 70px 70px 100px 90px 70px 90px 60px auto}
 .ic-adset-row:hover,.ic-ad-row:hover{background:rgba(99,102,241,.04)}
 .ic-col-label{font-size:11px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.4px;padding:8px 14px;border-bottom:1px solid var(--border);background:var(--bg3);display:grid;align-items:center;gap:10px}
-.ic-adset-label{grid-template-columns:2fr 70px 70px 100px 100px 90px 80px 70px 100px auto}
+.ic-adset-label{grid-template-columns:2fr 70px 70px 90px 100px 90px 80px 70px 100px auto}
 .ic-ad-label{grid-template-columns:2fr 70px 70px 100px 90px 70px 90px 60px auto}
 .ic-cell-name{font-weight:600;font-size:13px}
 .ic-cell-muted{font-size:12px;color:var(--muted)}
@@ -297,6 +300,25 @@ textarea.form-input{resize:vertical;min-height:80px}
 .ic-drill-btn:hover{color:var(--text);border-color:var(--accent2)}
 .ic-empty{text-align:center;padding:40px;color:var(--muted);font-size:13px}
 .ic-score-sm{width:36px;height:36px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:700;border:2px solid;flex-shrink:0}
+
+/* Phase 47 (G1) -- no @media rule existed anywhere in this file before this
+   block, so every fixed multi-column grid and the fixed-position sidebar
+   were unconditionally desktop-shaped. This is a conservative, CSS-only
+   reflow (no new JS/interactivity, no hamburger/toggle state to test):
+   below 768px the sidebar un-fixes itself into a horizontally-scrollable
+   top bar instead of overlapping content, #main's matching left margin is
+   removed, and every multi-column grid collapses to one column. Applies
+   platform-wide since every page shares this one stylesheet. Not visually
+   verified against a real narrow viewport -- no browser tooling was
+   available in this session; please confirm on an actual device/DevTools
+   responsive mode before relying on it. */
+@media (max-width: 768px) {
+  #sidebar{position:static;width:100%;height:auto;flex-direction:row;flex-wrap:nowrap;overflow-x:auto}
+  #sidebar nav{flex-direction:row}
+  #main{margin-left:0}
+  .grid-4,.grid-3,.grid-2{grid-template-columns:1fr}
+  .ic-adset-row,.ic-adset-label,.ic-ad-row,.ic-ad-label{grid-template-columns:1fr}
+}
 </style>
 </head>
 <body>
@@ -347,7 +369,10 @@ textarea.form-input{resize:vertical;min-height:80px}
       Settings
     </button>
   </nav>
-  <div class="sidebar-footer">v6.1 · Phase 6C</div>
+  <div class="sidebar-footer">
+    v6.1 · Phase 6C
+    <button class="btn btn-ghost btn-sm" style="margin-left:8px" onclick="handleLogout()">Logout</button>
+  </div>
 </aside>
 
 <!-- Main -->
@@ -397,9 +422,27 @@ let currentPage = 'dashboard';
 let dashboardData = null;
 
 // ─── API helpers ───────────────────────────────────────────────
+class ApiError extends Error {
+  constructor(message, status, body) {
+    super(message);
+    this.status = status;
+    this.body = body;
+  }
+}
 async function api(path, opts={}) {
-  const r = await fetch(API + path, { headers:{'Content-Type':'application/json'}, ...opts });
-  return r.json();
+  let r;
+  try {
+    r = await fetch(API + path, { headers:{'Content-Type':'application/json'}, credentials:'same-origin', ...opts });
+  } catch (networkErr) {
+    throw new ApiError('Network error — check your connection and try again.', 0, null);
+  }
+  let body = null;
+  try { body = await r.json(); } catch (parseErr) { /* empty or non-JSON body */ }
+  if (!r.ok) {
+    const message = (body && body.error) || `Request failed (${r.status})`;
+    throw new ApiError(message, r.status, body);
+  }
+  return body;
 }
 async function apiPatch(path, body) {
   return api(path, { method:'PATCH', body: JSON.stringify(body) });
@@ -412,6 +455,16 @@ async function apiDelete(path) {
 }
 
 // ─── Navigation ────────────────────────────────────────────────
+function escapeHtml(str) {
+  const div = document.createElement('div');
+  div.textContent = str == null ? '' : String(str);
+  return div.innerHTML;
+}
+
+// Single dispatch point for all page loaders -- wrapping it here (rather
+// than each of the ~15 individual loadX() functions) is what guarantees no
+// page load can leave the UI stuck on the loading spinner or a white
+// screen: any throw/rejection from a loader lands in handlePageLoadError.
 function navigate(page, params={}) {
   currentPage = page;
   document.querySelectorAll('.nav-item').forEach(el => el.classList.remove('active'));
@@ -423,8 +476,49 @@ function navigate(page, params={}) {
   const content = document.getElementById('content');
   content.innerHTML = '<div class="loader"><span class="spin">◌</span> Loading...</div>';
   const pages = { portfolio: loadPortfolio, dashboard: loadDashboard, campaigns: loadCampaigns, recommendations: loadRecommendations, alerts: loadAlerts, decisions: loadDecisions, reports: loadReports, settings: loadSettings, creative: loadCreativeLibrary };
-  if (pages[page]) pages[page](params);
+  const loader = pages[page];
+  if (!loader) return;
+  Promise.resolve().then(() => loader(params)).catch(err => handlePageLoadError(err, page, params));
 }
+
+function handlePageLoadError(err, page, params) {
+  console.error('[Page load error]', page, err);
+  if (err instanceof ApiError && err.status === 401) {
+    renderLoginForm('Your session has expired. Please sign in again.');
+    return;
+  }
+  const content = document.getElementById('content');
+  content.innerHTML = `<div class="card" style="max-width:480px;margin:60px auto;text-align:center">
+    <div style="font-size:28px;margin-bottom:8px">⚠️</div>
+    <div style="font-weight:600;margin-bottom:6px">Something went wrong loading this page</div>
+    <div class="text-muted" style="font-size:13px;margin-bottom:16px">${escapeHtml(err && err.message || 'Unknown error')}</div>
+    <button class="btn btn-primary" onclick="navigate('${page}', ${JSON.stringify(params || {})})">Retry</button>
+  </div>`;
+}
+
+// ─── Toasts ────────────────────────────────────────────────────
+function showToast(message, type='info') {
+  let host = document.getElementById('toast-host');
+  if (!host) {
+    host = document.createElement('div');
+    host.id = 'toast-host';
+    host.style.cssText = 'position:fixed;bottom:20px;right:20px;z-index:9999;display:flex;flex-direction:column;gap:8px';
+    document.body.appendChild(host);
+  }
+  const colors = { error: 'var(--red)', success: 'var(--green)', info: 'var(--accent)' };
+  const toast = document.createElement('div');
+  toast.className = 'card';
+  toast.style.cssText = `padding:12px 16px;border-left:3px solid ${colors[type] || colors.info};max-width:340px;font-size:13px;box-shadow:0 4px 16px rgba(0,0,0,.3)`;
+  toast.textContent = message;
+  host.appendChild(toast);
+  setTimeout(() => toast.remove(), 5000);
+}
+
+window.addEventListener('unhandledrejection', (event) => {
+  console.error('[Unhandled rejection]', event.reason);
+  const message = (event.reason && event.reason.message) || 'An unexpected error occurred.';
+  showToast(message, 'error');
+});
 
 function refreshData() {
   // Clear IC cached insights so next render re-fetches with new account/date
@@ -457,7 +551,7 @@ function refreshData() {
   // "All Accounts" (empty _accountId) still does a full flush, which is
   // correct for that view -- no backend change needed, no behavior change
   // for the "All Accounts" case.
-  fetch(API + '/sync/cache/flush', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(window._accountId ? { account_id: window._accountId } : {}) })
+  fetch(API + '/sync/cache/flush', { method: 'POST', headers: {'Content-Type':'application/json'}, credentials:'same-origin', body: JSON.stringify(window._accountId ? { account_id: window._accountId } : {}) })
     .catch(() => {})
     .finally(() => navigate(currentPage));
 }
@@ -505,6 +599,16 @@ function severityClass(s) {
 function fmtDate(d) {
   if (!d) return '—';
   return new Date(d).toLocaleDateString('en-GB', { day:'2-digit', month:'short', year:'numeric' });
+}
+// Phase 47 (AS3) -- plain String.slice() + '…' on real mixed-direction text
+// (Arabic ad/ad-set names alongside LTR UI chrome) has no bidi-safety.
+// Wraps the truncated text in Unicode FIRST STRONG ISOLATE (U+2066) /
+// POP DIRECTIONAL ISOLATE (U+2069) so the browser's bidi algorithm scopes
+// the truncated fragment + ellipsis to its own natural direction instead of
+// inheriting/bleeding into the surrounding LTR layout.
+function icTruncateBidi(text, len) {
+  if (!text || text.length <= len) return text || '';
+  return '⁦' + text.slice(0, len) + '…⁩';
 }
 function fmtNum(n, dec=2) {
   if (n === null || n === undefined) return '—';
@@ -591,7 +695,13 @@ function icPortfolioTraceBadge(gov) {
 // already computed by the existing pipeline -- no new engine, no LLM). The
 // first thing shown when a campaign loads, per the milestone's "visible
 // value" requirement.
-function icExecutiveSummaryCard(summary) {
+// Phase 47 (CD1) -- linkToDiagnosis is true only on the Overview tab, whose
+// executive_summary comes from a separately-fetched-but-identical backend
+// call to the Diagnosis tab's own (same underlying computation, same
+// inputs) -- rather than removing this useful at-a-glance summary from
+// Overview, this makes the relationship between the two explicit so the
+// repetition reads as intentional cross-linking, not accidental duplication.
+function icExecutiveSummaryCard(summary, linkToDiagnosis) {
   if (!summary) return '';
   return `
     <div class="card" style="margin-bottom:16px;border-left:3px solid var(--accent2);background:var(--bg3)">
@@ -600,6 +710,7 @@ function icExecutiveSummaryCard(summary) {
         <div>
           <div class="stat-label" style="margin-bottom:4px">Executive Summary</div>
           <div style="font-size:13px;color:var(--text);line-height:1.5">${summary}</div>
+          ${linkToDiagnosis ? `<div style="margin-top:6px"><span style="font-size:11px;color:var(--accent2);cursor:pointer" onclick="icSetLevel('diagnosis')">View full diagnosis →</span></div>` : ''}
         </div>
       </div>
     </div>
@@ -670,6 +781,7 @@ function icObjectiveIntelligenceSection(oi, currency) {
       <div><span style="color:var(--muted);font-size:12px">Objective Health:</span> <span class="badge ${healthCls}">${oi.objective_health || 'unscored'}</span></div>
       ${oi.root_cause && oi.root_cause.category ? `<div><span style="color:var(--muted);font-size:12px">Root Cause:</span> <span class="chip" style="background:var(--bg3);text-transform:capitalize">${oi.root_cause.category.replace('_',' ')}</span></div>` : ''}
     </div>
+    ${oi.root_cause && oi.root_cause.summary ? `<div style="font-size:12px;color:var(--text);margin-top:8px">${oi.root_cause.summary}</div>` : ''}
   </div>
   ${oi.kpis.map(kpi => icObjectiveIntelligenceKpiCard(kpi, currency)).join('')}
   `;
@@ -752,14 +864,14 @@ function icBusinessLogicInventoryTab(inventory) {
       <table>
         <thead><tr><th>Owner</th><th>ID</th><th>Name</th><th>Metric / Threshold</th><th>Severity</th><th>Runtime Editable</th></tr></thead>
         <tbody>
-          ${inventory.entries.map(e => `<tr>
+          ${(inventory.entries||[]).length ? inventory.entries.map(e => `<tr>
             <td><span class="chip" style="background:var(--bg3)">${OWNER_LABELS[e.owner]||e.owner}</span></td>
             <td class="td-muted" style="font-size:11px">${e.id}</td>
             <td>${e.name||'—'}</td>
             <td class="td-muted" style="font-size:11px">${e.metric ? `${e.metric} ${e.operator||''} ${e.threshold??''}` : (e.threshold!==undefined ? e.threshold : '—')}</td>
             <td>${e.severity ? `<span class="badge ${e.severity}" style="font-size:10px">${e.severity}</span>` : '—'}</td>
             <td>${e.editableAtRuntime ? '<span class="badge good" style="font-size:10px">✓ DB-driven</span>' : '<span class="badge none" style="font-size:10px">Code-defined</span>'}</td>
-          </tr>`).join('')}
+          </tr>`).join('') : '<tr><td colspan="6"><div class="empty">No rules registered.</div></td></tr>'}
         </tbody>
       </table>
     </div>
@@ -828,17 +940,17 @@ async function loadDashboard() {
       <div class="stat-value">${s.campaigns.total}</div>
       <div class="stat-sub">${s.campaigns.active} active</div>
     </div>
-    <div class="stat-card">
-      <div class="stat-label">Avg Health Score</div>
-      <div class="stat-value" style="color:var(--${avgCls==='excellent'?'green':avgCls==='good'?'yellow':avgCls==='warning'?'orange':'red'})">${avgScore ?? '—'}</div>
+    <div class="stat-card" title="A plain (unweighted) average across all scored campaigns. The Portfolio page shows a spend-weighted Portfolio Health score instead -- the two are different, legitimate metrics and may not match.">
+      <div class="stat-label">Avg Health Score (Simple)</div>
+      <div class="stat-value" style="color:var(--${avgCls==='excellent'?'green':avgCls==='good'?'yellow':avgCls==='warning'?'orange':avgCls==='none'?'muted':'red'})">${avgScore ?? '—'}</div>
       <div class="stat-sub"><span class="badge ${avgCls}">${scoreLabel(avgScore)}</span></div>
     </div>
     <div class="stat-card">
       <div class="stat-label">Active Alerts</div>
-      <div class="stat-value text-red">${s.alerts.critical}</div>
+      <div class="stat-value ${s.alerts.critical > 0 ? 'text-red' : ''}">${s.alerts.critical}</div>
       <div class="stat-sub">
-        <span class="badge critical">${s.alerts.critical} critical</span>
-        <span class="badge warning" style="margin-left:4px">${s.alerts.warning} warning</span>
+        <span class="badge ${s.alerts.critical > 0 ? 'critical' : 'none'}">${s.alerts.critical} critical</span>
+        <span class="badge ${s.alerts.warning > 0 ? 'warning' : 'none'}" style="margin-left:4px">${s.alerts.warning} warning</span>
       </div>
     </div>
   </div>
@@ -882,13 +994,14 @@ async function loadDashboard() {
   <div class="table-wrap">
     <table>
       <thead><tr>
-        <th>Campaign</th><th>Objective</th><th>Status</th>
+        <th>Campaign</th><th>Account</th><th>Objective</th><th>Status</th>
         <th>Health</th><th>Recs</th><th>Alerts</th><th></th>
       </tr></thead>
       <tbody>
-        ${d.top_campaigns.map(c => `
+        ${(d.top_campaigns || []).filter(c => c.health_score != null).length ? (d.top_campaigns || []).filter(c => c.health_score != null).map(c => `
         <tr>
           <td class="td-name" style="cursor:pointer;color:var(--accent2)" onclick="viewCampaign('${c.meta_campaign_id}')">${c.name}</td>
+          <td class="td-muted" style="font-size:12px">${c.account_name || '—'}</td>
           <td>${objChip(c.objective)}</td>
           <td>${lifecycleChip(c)}</td>
           <td>
@@ -900,7 +1013,7 @@ async function loadDashboard() {
           <td>${c.recommendation_count > 0 ? `<span class="badge warning">${c.recommendation_count}</span>` : '<span class="text-muted">0</span>'}</td>
           <td>${c.alert_count > 0 ? `<span class="badge critical">${c.alert_count}</span>` : '<span class="text-muted">0</span>'}</td>
           <td><button class="btn btn-ghost btn-sm" onclick="viewCampaign('${c.meta_campaign_id}')">Details →</button></td>
-        </tr>`).join('')}
+        </tr>`).join('') : '<tr><td colspan="8"><div class="empty">No scored campaigns yet — run analysis on a synced campaign to see it here.</div></td></tr>'}
       </tbody>
     </table>
   </div>
@@ -1187,9 +1300,19 @@ async function loadCampaigns() {
   window.ic.scoreMap  = {};
   (histR.data || []).forEach(h => { window.ic.scoreMap[h.entity_meta_id] = h; });
 
-  // Always default to first campaign if none selected
+  // Phase 47 (C2) -- previously always window.ic.campaigns[0] (raw API
+  // order), which real production data confirmed can land a fresh session
+  // on an unanalyzed empty-state campaign. Prefers an active campaign that
+  // already has a real scored history entry (so the first view is
+  // populated, not empty), falling back to the first active campaign, then
+  // to plain API order if nothing is active/scored -- never leaves the
+  // selection empty when campaigns exist.
   if (!window.ic.selectedCampaign && window.ic.campaigns.length) {
-    window.ic.selectedCampaign = window.ic.campaigns[0];
+    const active = window.ic.campaigns.filter(c => c.status === 'active');
+    window.ic.selectedCampaign =
+      active.find(c => window.ic.scoreMap[c.meta_campaign_id]) ||
+      active[0] ||
+      window.ic.campaigns[0];
   }
 
   // IMPORTANT: Always clear insights so date changes take effect
@@ -1212,7 +1335,7 @@ function renderIC() {
     <div class="ic-topbar">
       <select class="ic-campaign-select" id="ic-camp-select" onchange="icSelectCampaign(this.value)" style="max-width:280px">
         ${window.ic.campaigns.map(cam =>
-          `<option value="${cam.meta_campaign_id}"${c?.meta_campaign_id===cam.meta_campaign_id?' selected':''}>${cam.name}</option>`
+          `<option value="${cam.meta_campaign_id}"${c?.meta_campaign_id===cam.meta_campaign_id?' selected':''}>${cam.name}${cam.account_name ? ' — ' + cam.account_name : ''}</option>`
         ).join('')}
       </select>
       ${c ? `
@@ -1222,8 +1345,7 @@ function renderIC() {
       </div>
       ${icScoreEl(h?.health_score ?? null)}
       <span class="badge ${h?.health_status||'none'}" style="font-size:11px">${h?.health_status||'Not analyzed'}</span>
-      ${window.ic.insights ? `<span class="ic-header-pill">${icKPI(c.objective).label}: <strong>${icFmtVal(icKPI(c.objective).key, window.ic.insights.metrics?.[icKPI(c.objective).key], window.ic.insights.currency)}</strong></span>
-      <span class="ic-header-pill">Spend: <strong>${icFmtVal('spend', window.ic.insights.metrics?.spend, window.ic.insights.currency)}</strong></span>` : ''}
+      <span id="ic-header-kpi-pills">${window.ic.insights ? icHeaderKpiPillsHtml(c, window.ic.insights) : ''}</span>
       <button class="ic-analyze-btn" id="ic-analyze-btn" style="margin-left:auto" onclick="icAnalyze()">⚡ Analyze</button>
       ` : ''}
     </div>
@@ -1239,7 +1361,7 @@ function renderIC() {
         📦 Ad Sets
       </div>
       <div class="ic-tab${window.ic.level==='ads'?' active':''}" onclick="icSetLevel('ads')">
-        🎯 Ads ${window.ic.selectedAdSet ? '<span class="ic-tab-count">'+window.ic.selectedAdSet.name.slice(0,12)+'…</span>' : ''}
+        🎯 Ads ${window.ic.selectedAdSet ? '<span class="ic-tab-count">'+icTruncateBidi(window.ic.selectedAdSet.name,12)+'</span>' : ''}
       </div>
       <div class="ic-tab${window.ic.level==='diagnosis'?' active':''}" onclick="icSetLevel('diagnosis')">
         🩺 Diagnosis
@@ -1258,11 +1380,11 @@ function renderIC() {
 function buildBreadcrumb() {
   const parts = [];
   const c = window.ic.selectedCampaign;
-  if (c) parts.push(`<span class="bc-item" onclick="icSetLevel('campaign')">${c.name.length>30?c.name.slice(0,30)+'…':c.name}</span>`);
+  if (c) parts.push(`<span class="bc-item" onclick="icSetLevel('campaign')">${icTruncateBidi(c.name,30)}</span>`);
   if (window.ic.level === 'adsets') parts.push('<span class="bc-sep">›</span><span class="bc-current">Ad Sets</span>');
   if (window.ic.level === 'ads' && window.ic.selectedAdSet) {
     parts.push(`<span class="bc-sep">›</span><span class="bc-item" onclick="icSetLevel('adsets')">Ad Sets</span>`);
-    parts.push(`<span class="bc-sep">›</span><span class="bc-current">${window.ic.selectedAdSet.name.length>25?window.ic.selectedAdSet.name.slice(0,25)+'…':window.ic.selectedAdSet.name}</span>`);
+    parts.push(`<span class="bc-sep">›</span><span class="bc-current">${icTruncateBidi(window.ic.selectedAdSet.name,25)}</span>`);
   }
   if (window.ic.level === 'ads' && !window.ic.selectedAdSet) parts.push('<span class="bc-sep">›</span><span class="bc-current">All Ads</span>');
   return parts.join(' ');
@@ -1326,6 +1448,15 @@ async function icAnalyze() {
 }
 
 // ── Refresh only the compressed header bar (score + KPI pills) without rebuilding tabs/content ──
+// Phase 47 (C3) -- extracted so both the initial render (when insights are
+// already cached) and the late-arriving refresh below (once the Overview
+// tab's own fetch resolves) produce byte-identical markup from one place.
+function icHeaderKpiPillsHtml(c, ins) {
+  const kpi = icKPI(c.objective);
+  return `<span class="ic-header-pill">${kpi.label}: <strong>${icFmtVal(kpi.key, ins.metrics?.[kpi.key], ins.currency)}</strong></span>
+      <span class="ic-header-pill">Spend: <strong>${icFmtVal('spend', ins.metrics?.spend, ins.currency)}</strong></span>`;
+}
+
 function icRefreshHeaderOnly() {
   const c = window.ic.selectedCampaign;
   if (!c) return;
@@ -1342,6 +1473,16 @@ function icRefreshHeaderOnly() {
   if (badgeEl) {
     badgeEl.className = `badge ${h?.health_status||'none'}`;
     badgeEl.textContent = fmtHealthStatus(h?.health_status);
+  }
+  // Phase 47 (C3) -- the KPI/Spend header pills previously only appeared
+  // once the user left and re-entered the Overview tab, because renderIC()
+  // builds the topbar synchronously before the async insights fetch that
+  // feeds these pills resolves. Now filled in-place as soon as that fetch
+  // (in icLoadCampaignView) actually completes, the same way the score
+  // circle/status badge two lines above are already refreshed in-place.
+  const pillsEl = topbar.querySelector('#ic-header-kpi-pills');
+  if (pillsEl && window.ic.insights && window.ic.insights.analyzed !== false) {
+    pillsEl.innerHTML = icHeaderKpiPillsHtml(c, window.ic.insights);
   }
 }
 
@@ -1556,7 +1697,7 @@ async function icLoadCampaignView(el) {
   // Use cached insights or fetch fresh
   let ins = window.ic.insights;
   if (!ins) {
-    try { ins = await api(addDateQ(insightsUrl(`/campaigns/${c.id}/insights`))); window.ic.insights = ins; } catch {}
+    try { ins = await api(addDateQ(insightsUrl(`/campaigns/${c.id}/insights`))); window.ic.insights = ins; icRefreshHeaderOnly(); } catch {}
   }
   if (!ins) { el.innerHTML = '<div class="ic-empty">📊 Not analyzed yet<br><span style="font-size:11px;opacity:.7">Click ⚡ Analyze above to generate insights for this period</span></div>'; return; }
 
@@ -1577,10 +1718,10 @@ async function icLoadCampaignView(el) {
     <!-- Date range context pill -->
     <div style="margin-bottom:10px;display:flex;align-items:center;gap:8px">
       ${ins.date_range ? `<span style="font-size:11px;padding:3px 8px;background:var(--bg3);border:1px solid var(--border);border-radius:6px;color:var(--muted)">${ins.date_range.since} → ${ins.date_range.until}</span>` : ''}
-      ${ins.data_freshness?.source === 'mock' ? '<span style="font-size:10px;padding:2px 6px;background:var(--blue-bg);color:var(--blue);border-radius:8px;font-weight:600">MOCK</span>' : ''}
-      ${ins.data_freshness?.data_may_be_incomplete ? '<span style="font-size:10px;padding:2px 6px;background:var(--orange-bg);color:var(--orange);border-radius:8px">⚠ Partial data</span>' : ''}
+      ${ins.is_mock ? '<span style="font-size:10px;padding:2px 6px;background:var(--blue-bg);color:var(--blue);border-radius:8px;font-weight:600">MOCK</span>' : ''}
+      ${ins.data_freshness?.data_may_be_incomplete ? `<span style="font-size:10px;padding:2px 6px;background:var(--orange-bg);color:var(--orange);border-radius:8px;cursor:help" title="${ins.data_freshness.warning || ''}${ins.data_freshness.attribution_window_days ? ' (' + ins.data_freshness.attribution_window_days + '-day attribution window)' : ''}">⚠ Partial data</span>` : ''}
     </div>
-    ${icExecutiveSummaryCard(ins.executive_summary)}
+    ${icExecutiveSummaryCard(ins.executive_summary, true)}
     ${icObjectiveIntelligenceSection(ins.objective_intelligence, ins.currency)}
     <!-- Primary KPI hero row -->
     <div class="ic-hero">
@@ -1606,6 +1747,10 @@ async function icLoadCampaignView(el) {
       </div>
     </div>
 
+    <!-- Phase 47 (CD4) -- goal_achievement was already fetched here but
+         never rendered anywhere in the file. -->
+    ${ins.goal_achievement ? `<div style="font-size:12px;color:var(--muted);margin-bottom:12px">🎯 Goal Achievement: ${ins.goal_achievement.has_targets ? `<span class="badge ${ins.goal_achievement.composite_status||'none'}">${ins.goal_achievement.composite_status||'—'}</span>` : ins.goal_achievement.message}</div>` : ''}
+
     <!-- Health Score trend (Phase 7B — Part 4) -->
     ${buildHealthTrendHtml(ins.health_trend, cur?.health_score)}
 
@@ -1622,7 +1767,7 @@ async function icLoadCampaignView(el) {
         return `<div style="display:flex;align-items:center;justify-content:space-between;padding:5px 0;border-bottom:1px solid var(--border)">
           <span style="font-size:12px;color:var(--muted);text-transform:uppercase">${k}</span>
           <div style="display:flex;align-items:center;gap:8px">
-            <span style="font-size:13px">${v.value??'—'}</span>
+            <span style="font-size:13px">${v.value!=null ? icFmtVal(k, v.value, ins.currency) : '—'}</span>
             <span class="badge ${sc}" style="font-size:10px">${v.status}</span>
             ${v.deviation!==null?`<span style="font-size:10px;color:var(--muted)">${v.deviation>0?'▲':'▼'}${Math.abs(v.deviation)}%</span>`:''}
           </div>
@@ -1717,7 +1862,7 @@ async function icLoadAdSetsView(el) {
 function icRenderAdSetRows(data, kpi, insightMap) {
   return `
     <div class="ic-col-label ic-adset-label">
-      <span>Ad Set</span><span>Delivery</span><span>Health</span><span>Audience</span>
+      <span>Ad Set</span><span>Delivery</span><span>Health</span><span>Budget</span>
       <span>Results (${kpi.label})</span><span>Cost (${kpi.costLabel})</span><span>CTR</span><span>Freq</span><span>Spend</span><span></span>
     </div>
     ${data.map(s => {
@@ -1736,7 +1881,7 @@ function icRenderAdSetRows(data, kpi, insightMap) {
         </div>
         <div style="font-size:10px">${lifecycleChip(s)}</div>
         <div style="display:flex;align-items:center;gap:5px">${icScoreEl(hs)}</div>
-        <div class="ic-cell-muted" style="font-size:11px">${s.targeting_summary || '—'}</div>
+        <div class="ic-cell-muted" style="font-size:11px">${s.daily_budget != null ? icFmtVal('spend', s.daily_budget, s.currency) + '/day' : (s.lifetime_budget != null ? icFmtVal('spend', s.lifetime_budget, s.currency) + ' total' : '<span style="font-style:italic;opacity:.6">CBO</span>')}</div>
         <div class="ic-cell-muted">${hasLiveMetrics ? icFmtVal(kpi.key, m[kpi.key]) : '<span style="font-style:italic;opacity:.5;font-size:10px">Click ⚡</span>'}</div>
         <div class="ic-cell-muted">${hasLiveMetrics ? icFmtVal(kpi.costKey, m[kpi.costKey]) : '—'}</div>
         <div class="ic-cell-muted">${hasLiveMetrics ? icFmtVal('ctr', m.ctr) : '—'}</div>
@@ -1820,7 +1965,7 @@ async function icLoadAdsView(el) {
         <div style="text-align:center">${a.thumbnail_url ? `<img src="${a.thumbnail_url}" style="width:28px;height:28px;border-radius:4px;object-fit:cover" title="Creative preview">` : `<span style="color:var(--muted);font-size:10px;cursor:default" title="Meta Sync has not downloaded creative data for this ad yet">Preview unavailable</span>`}</div>
         <div style="display:flex;gap:5px">
           <button class="ic-analyze-btn" onclick="icAnalyzeAd('${a.meta_ad_id}','${a.name.replace(/'/g,"\'")}',this)">⚡</button>
-          <button class="ic-drill-btn" onclick="icShowAdBreakdown('${a.meta_ad_id}','${a.name.replace(/'/g,"\'")}')">🔍</button>
+          <button class="ic-drill-btn" onclick="icShowAdBreakdown('${a.meta_ad_id}','${a.name.replace(/'/g,"\'")}','${(a.preview_url||'').replace(/'/g,"\'")}')">🔍</button>
         </div>
       </div>`;
     }).join('')}
@@ -1861,8 +2006,8 @@ async function icAnalyzeAd(metaAdId, name, btnEl) {
       <div class="details-grid" style="margin-top:12px">
         ${Object.entries(r.metrics||{}).filter(([k,v])=>v!==null&&typeof v==='number').slice(0,8).map(([k,v])=>`
           <div class="detail-item">
-            <div class="detail-label" style="font-size:10px">${k.toUpperCase()}</div>
-            <div class="detail-value small">${typeof v==='number'?v.toFixed(2):v}</div>
+            <div class="detail-label" style="font-size:10px">${k.replace(/_/g,' ').replace(/\b\w/g, c => c.toUpperCase())}</div>
+            <div class="detail-value small">${icFmtVal(k, v, r.currency)}</div>
           </div>`).join('')}
       </div>
       <div style="margin-top:14px;display:flex;align-items:center;gap:8px">
@@ -1886,8 +2031,16 @@ async function icToggleBreakdown(entityId, entityType) {
 }
 
 // ── Ad score breakdown modal ──
-async function icShowAdBreakdown(metaAdId, name) {
-  openModal(`<h3>Score: ${name}</h3><div id="modal-breakdown"><div class="loader"><span class="spin">◌</span></div></div><div class="modal-actions"><button class="btn btn-ghost" onclick="closeModal()">Close</button></div>`);
+// Phase 47 (AD1) -- preview_url (a real Meta ad-preview iframe URL, already
+// fetched alongside every ad row) was never used anywhere despite the
+// drill-down button's own magnifying-glass icon suggesting "look closer at
+// the ad" -- only the score breakdown was ever shown. Renders the real
+// preview alongside the existing breakdown, additive only.
+async function icShowAdBreakdown(metaAdId, name, previewUrl) {
+  const previewHtml = previewUrl
+    ? `<iframe src="${previewUrl}" style="width:100%;height:400px;border:1px solid var(--border);border-radius:8px;margin-bottom:12px" title="Ad preview"></iframe>`
+    : '';
+  openModal(`<h3>Score: ${name}</h3>${previewHtml}<div id="modal-breakdown"><div class="loader"><span class="spin">◌</span></div></div><div class="modal-actions"><button class="btn btn-ghost" onclick="closeModal()">Close</button></div>`);
   await loadScoreBreakdown(metaAdId, 'ad', 'modal-breakdown');
 }
 
@@ -2040,7 +2193,7 @@ async function loadRecommendations() {
     </select>
   </div>
   <div id="rec-list">
-    ${renderFullRecList(recs.data || [], campMap)}
+    ${renderFullRecList((recs.data || []).filter(r => !r.dismissed_at), campMap)}
   </div>
   `;
   window._allRecs = recs.data || [];
@@ -2056,7 +2209,7 @@ function renderFullRecList(data, campMap) {
         <div class="rec-title">${r.recommendation_title}</div>
         <div style="margin-top:4px;display:flex;gap:6px;align-items:center">
           <span class="badge ${r.severity}">${r.severity}</span>
-          ${r.campaign_name ? `<span class="text-muted" style="font-size:12px">${r.campaign_name}</span>` : ''}
+          ${r.campaign_name || r.entity_label ? `<span class="text-muted" style="font-size:12px">${r.campaign_name || r.entity_label}</span>` : ''}
           ${r.objective ? objChip(r.objective) : ''}
           ${r.governance_state ? icGovernanceStateBadge(r.governance_state) : ''}
         </div>
@@ -2087,18 +2240,26 @@ function filterRecs() {
   if (stat === 'completed') filtered = filtered.filter(r => r.action_taken);
   else if (stat === 'dismissed') filtered = filtered.filter(r => r.dismissed_at);
   else filtered = filtered.filter(r => !r.dismissed_at);
-  if (camp) filtered = filtered.filter(r => r.entity_meta_id === camp);
+  if (camp) filtered = filtered.filter(r => r.entity_meta_id === camp || r.owning_campaign_meta_id === camp);
   if (obj)  filtered = filtered.filter(r => r.objective === obj);
   document.getElementById('rec-list').innerHTML = renderFullRecList(filtered, window._campMap || {});
 }
 
 async function markRecDone(id, done=true) {
-  await apiPatch(`/recommendations/${id}`, { action_taken: done });
-  loadRecommendations();
+  try {
+    await apiPatch(`/recommendations/${id}`, { action_taken: done });
+    loadRecommendations();
+  } catch (e) {
+    showToast(e.message || 'Could not update recommendation.', 'error');
+  }
 }
 async function dismissRec(id) {
-  await apiPatch(`/recommendations/${id}`, { dismiss: true });
-  loadRecommendations();
+  try {
+    await apiPatch(`/recommendations/${id}`, { dismiss: true });
+    loadRecommendations();
+  } catch (e) {
+    showToast(e.message || 'Could not dismiss recommendation.', 'error');
+  }
 }
 function addRecNote(id) {
   openModal(`
@@ -2142,7 +2303,7 @@ async function loadAlerts() {
     </select>
   </div>
   <div class="table-wrap" id="alerts-table">
-    ${renderAlertsTable(alerts.data || [])}
+    ${renderAlertsTable((alerts.data || []).filter(a => a.status === 'active' && (!a.snoozed_until || new Date(a.snoozed_until) < new Date())))}
   </div>
   `;
   window._allAlerts = alerts.data || [];
@@ -2214,9 +2375,13 @@ async function confirmSnooze(id) {
   loadAlerts();
 }
 async function dismissAlert(id) {
-  await apiPatch(`/alerts/${id}`, { action: 'dismiss' });
-  loadAlerts();
-  updateBadges();
+  try {
+    await apiPatch(`/alerts/${id}`, { action: 'dismiss' });
+    loadAlerts();
+    updateBadges();
+  } catch (e) {
+    showToast(e.message || 'Could not dismiss alert.', 'error');
+  }
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -2224,7 +2389,7 @@ async function dismissAlert(id) {
 // ═══════════════════════════════════════════════════════════════
 async function loadSettings() {
   const settings = await api('/settings');
-  const { accounts, industries, targets, benchmark_overrides, sync_intervals } = settings;
+  const { accounts, targets, benchmark_overrides, sync_intervals, scoring_configs } = settings;
   const inventoryResp = await api('/rule-engine/inventory').catch(() => null);
   const inventory = inventoryResp && inventoryResp.data;
   // Scheduler state per account (Task 6) -- reuses the same scheduler-status
@@ -2310,6 +2475,30 @@ async function loadSettings() {
         </tbody>
       </table>
     </div>
+
+    <!-- Phase 47 (S1) -- the platform defaults referenced above ("Platform
+         defaults are in use") were fetched by this same /settings call but
+         never actually shown anywhere; this is a read-only view of the
+         same objective_scoring_configs rows the Health Score Engine itself
+         reads, not a second/editable copy. -->
+    ${(scoring_configs && scoring_configs.length) ? `
+    <div class="section-title" style="margin:20px 0 12px">Platform Defaults (read-only)</div>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Objective</th><th>Metric</th><th>Excellent</th><th>Good</th><th>Warning</th><th>Critical</th><th>Direction</th></tr></thead>
+        <tbody>
+          ${scoring_configs.map(c=>`<tr>
+            <td>${objChip(c.objective)}</td>
+            <td><code style="font-size:11px;background:var(--bg3);padding:2px 6px;border-radius:4px">${c.metric_key}</code></td>
+            <td class="text-green">${c.excellent_threshold ?? '—'}</td>
+            <td class="text-yellow">${c.good_threshold ?? '—'}</td>
+            <td class="text-orange">${c.warning_threshold ?? '—'}</td>
+            <td class="text-red">${c.critical_threshold ?? '—'}</td>
+            <td class="td-muted" style="font-size:11px">${c.comparison_direction}</td>
+          </tr>`).join('')}
+        </tbody>
+      </table>
+    </div>` : ''}
   </div>
 
   <!-- Rule Engine Tab -->
@@ -2475,8 +2664,13 @@ async function toggleAccountAutoSync(id, enable, btnEl) {
   // Scheduler re-queries ad_accounts fresh every tick, so this takes effect
   // on the very next cycle with no restart, no separate enable/disable path.
   if (btnEl) { btnEl.disabled = true; }
-  await apiPatch(`/accounts/${id}`, { auto_sync_enabled: enable });
-  loadSettings();
+  try {
+    await apiPatch(`/accounts/${id}`, { auto_sync_enabled: enable });
+    loadSettings();
+  } catch (e) {
+    showToast(e.message || 'Could not update auto-sync setting.', 'error');
+    if (btnEl) { btnEl.disabled = false; }
+  }
 }
 
 function openAddAccount() {
@@ -2514,8 +2708,13 @@ async function saveNewAccount() {
   const currency = document.getElementById('new-acct-currency').value.trim();
   const timezone = document.getElementById('new-acct-timezone').value.trim();
 
-  const res = await apiPost('/accounts', body);
-  if (res.error) { errEl.textContent = res.message || res.error; return; }
+  let res;
+  try {
+    res = await apiPost('/accounts', body);
+  } catch (e) {
+    errEl.textContent = (e.body && e.body.message) || e.message;
+    return;
+  }
 
   // Currency/timezone overrides (Meta auto-detects on connect; only patch if user typed something)
   if (currency || timezone) {
@@ -2556,15 +2755,20 @@ function openEditAccount(id) {
 }
 
 async function saveEditAccount(id) {
-  await apiPatch(`/accounts/${id}`, {
-    account_name: document.getElementById('edit-acct-name').value.trim(),
-    business_name: document.getElementById('edit-acct-business').value.trim(),
-    currency: document.getElementById('edit-acct-currency').value.trim(),
-    timezone: document.getElementById('edit-acct-timezone').value.trim(),
-    notes: document.getElementById('edit-acct-notes').value.trim(),
-    auto_sync_enabled: document.getElementById('edit-acct-autosync').value === '1',
-    auto_sync_interval_minutes: parseInt(document.getElementById('edit-acct-interval').value, 10) || 60,
-  });
+  try {
+    await apiPatch(`/accounts/${id}`, {
+      account_name: document.getElementById('edit-acct-name').value.trim(),
+      business_name: document.getElementById('edit-acct-business').value.trim(),
+      currency: document.getElementById('edit-acct-currency').value.trim(),
+      timezone: document.getElementById('edit-acct-timezone').value.trim(),
+      notes: document.getElementById('edit-acct-notes').value.trim(),
+      auto_sync_enabled: document.getElementById('edit-acct-autosync').value === '1',
+      auto_sync_interval_minutes: parseInt(document.getElementById('edit-acct-interval').value, 10) || 60,
+    });
+  } catch (e) {
+    showToast(e.message || 'Could not save account changes.', 'error');
+    return;
+  }
   closeModal();
   loadAccountSelector();
   loadSettings();
@@ -2584,8 +2788,12 @@ function openRefreshToken(id) {
 async function saveRefreshToken(id) {
   const token = document.getElementById('refresh-token-value').value.trim();
   if (!token) return;
-  const res = await apiPost(`/accounts/${id}/token`, { access_token: token });
-  if (res.error) { document.getElementById('refresh-token-error').textContent = res.message || res.error; return; }
+  try {
+    await apiPost(`/accounts/${id}/token`, { access_token: token });
+  } catch (e) {
+    document.getElementById('refresh-token-error').textContent = (e.body && e.body.message) || e.message;
+    return;
+  }
   closeModal();
   loadSettings();
 }
@@ -2631,18 +2839,26 @@ async function syncAccountNow(id, btnEl) {
 }
 
 async function setAccountStatus(id, status) {
-  await apiPatch(`/accounts/${id}`, { status });
-  loadAccountSelector();
-  loadSettings();
+  try {
+    await apiPatch(`/accounts/${id}`, { status });
+    loadAccountSelector();
+    loadSettings();
+  } catch (e) {
+    showToast(e.message || 'Could not update account status.', 'error');
+  }
 }
 
 async function removeAccount(id) {
   const a = (window._settingsAccounts || []).find(x => x.id === id);
   if (!confirm(`Remove "${a ? a.account_name : 'this account'}"? It will be disconnected and hidden, but its historical data is kept and it can be reconnected later.`)) return;
-  await apiDelete(`/accounts/${id}`);
-  if (window._accountId === id) { window._accountId = ''; }
-  loadAccountSelector();
-  loadSettings();
+  try {
+    await apiDelete(`/accounts/${id}`);
+    if (window._accountId === id) { window._accountId = ''; }
+    loadAccountSelector();
+    loadSettings();
+  } catch (e) {
+    showToast(e.message || 'Could not remove account.', 'error');
+  }
 }
 
 function openAddTarget(accounts) {
@@ -2755,8 +2971,12 @@ async function saveBenchmark() {
 
 async function deleteBenchmark(id) {
   if (!confirm('Remove this benchmark override?')) return;
-  await apiDelete(`/settings/benchmarks/${id}`);
-  loadSettings();
+  try {
+    await apiDelete(`/settings/benchmarks/${id}`);
+    loadSettings();
+  } catch (e) {
+    showToast(e.message || 'Could not remove benchmark override.', 'error');
+  }
 }
 
 
@@ -2957,11 +3177,12 @@ async function loadDecisions() {
         </div>
       </div>`).join('') || '<div class="empty">No winners yet — run analysis</div>'}
 
-      <div class="section-title" style="margin:16px 0 10px">🔻 Needs Attention <span style="font-size:11px;color:var(--muted);font-weight:normal">(lowest-ranked this period, factoring in alerts and trend — a different ranking than the Dashboard's health-only list)</span></div>
+      <div class="section-title" style="margin:16px 0 10px">🔻 Needs Attention <span style="font-size:11px;color:var(--muted);font-weight:normal">(ranked using health score, alerts, and trend combined — may not match the Dashboard's health-only list)</span></div>
       ${(losers.data||[]).map(l => `
       <div class="loser-card">
         <div>
           <div style="font-size:13px;font-weight:600;cursor:pointer;color:var(--accent2)" onclick="viewCampaign('${l.meta_campaign_id}')">${l.campaign_name}</div>
+          <div style="margin-top:2px">${lifecycleChip(l)}</div>
           <div style="font-size:11px;color:var(--red);margin-top:3px">${(l.problems||[])[0]||''}</div>
         </div>
         <div style="text-align:center">
@@ -2987,6 +3208,25 @@ async function loadDecisions() {
   window._allDecisions = decisions;
 }
 
+// Phase 47 (DC1) -- decisionEngine.js's `supporting_metrics` is a straight
+// JSON.parse() of whatever was stored in recommendation_log.metric_snapshot,
+// which real production data confirms is sometimes a plain object
+// ({metric_key: value}) and sometimes an array of condition-check objects
+// ([{metric, operator, threshold, actual}]) depending on which rule
+// produced it. Object.entries() on an array silently yields index-keyed
+// entries pointing at whole objects, rendering the literal text
+// "0: [object Object]". Handles both real shapes without assuming either.
+function decisionMetricPairs(sm) {
+  if (!sm) return [];
+  if (Array.isArray(sm)) {
+    return sm
+      .filter(m => m && m.metric != null && m.actual != null)
+      .map(m => [m.metric, m.actual]);
+  }
+  if (typeof sm === 'object') return Object.entries(sm);
+  return [];
+}
+
 function renderDecisionCards(decisions) {
   if (!decisions.length) return '<div class="empty">✓ No decisions pending. Run campaign analysis to generate insights.</div>';
   return decisions.map(d => `
@@ -3009,9 +3249,9 @@ function renderDecisionCards(decisions) {
       ${d.governance_state ? icGovernanceStateBadge(d.governance_state) : ''}
     </div>` : ''}
     <div class="decision-action">→ ${d.suggested_action}</div>
-    ${Object.keys(d.supporting_metrics||{}).length ? `
+    ${decisionMetricPairs(d.supporting_metrics).length ? `
     <div class="decision-metrics">
-      ${Object.entries(d.supporting_metrics).slice(0,4).map(([k,v]) =>
+      ${decisionMetricPairs(d.supporting_metrics).slice(0,4).map(([k,v]) =>
         v !== null && v !== undefined ? `<span class="decision-metric">${k}: ${typeof v==='number'?v.toFixed(2):v}</span>` : ''
       ).join('')}
     </div>` : ''}
@@ -3059,13 +3299,38 @@ async function saveDecisionComplete(id) {
 }
 
 async function dismissDecision(id) {
-  try { await apiPatch('/decisions/history/' + id, { status: 'dismissed' }); } catch {}
+  try {
+    await apiPatch('/decisions/history/' + id, { status: 'dismissed' });
+  } catch (e) {
+    showToast(e.message || 'Could not dismiss decision.', 'error');
+  }
   loadDecisions();
 }
 
 // ═══════════════════════════════════════════════════════════════
 // REPORTS — Phase 5
 // ═══════════════════════════════════════════════════════════════
+// Phase 47 (RP3) -- recommendation_log creates one real row per calendar
+// day for a recurring, still-unresolved issue (its own dedup unique index
+// is keyed on (rule_code, entity_meta_id, date)), so an ongoing problem can
+// legitimately produce several near-identical-looking rows in a period
+// report. Groups by (rule_code, entity_meta_id) -- the same real dedup key
+// the backend itself already uses -- keeping the most recent occurrence and
+// an occurrence_count, the same pattern already used for alerts.
+function reportsGroupRecs(items) {
+  const groups = new Map();
+  for (const r of items || []) {
+    const key = (r.rule_code || r.recommendation_title) + '|' + r.entity_meta_id;
+    const existing = groups.get(key);
+    if (!existing || (r.generated_at || '') > (existing.generated_at || '')) {
+      groups.set(key, { ...r, occurrence_count: (existing?.occurrence_count || 0) + 1 });
+    } else {
+      existing.occurrence_count += 1;
+    }
+  }
+  return Array.from(groups.values()).sort((a, b) => (b.generated_at || '').localeCompare(a.generated_at || ''));
+}
+
 async function loadReports() {
   document.getElementById('content').innerHTML = '<div class="loader"><span class="spin">◌</span> Loading report...</div>';
   const period    = window._reportPeriod    || 'weekly';
@@ -3099,6 +3364,7 @@ async function loadReports() {
         <option value=""${objective===''?' selected':''}>All Objectives</option>
         ${['awareness','traffic','engagement','leads','app_promotion','sales'].map(o=>`<option value="${o}"${objective===o?' selected':''}>${o}</option>`).join('')}
       </select>
+      ${summary.period ? `<span class="text-muted" style="font-size:11px">${summary.period.since} → ${summary.period.until}${summary.generated_at ? ' · generated ' + fmtDate(summary.generated_at) : ''}</span>` : ''}
     </div>
     <div style="display:flex;gap:8px">
       <button class="btn btn-ghost btn-sm" onclick="exportReport('csv')">⬇ CSV</button>
@@ -3165,11 +3431,11 @@ async function loadReports() {
     <table>
       <thead><tr><th>Campaign</th><th>Severity</th><th>Recommendation</th><th>Status</th><th>Date</th></tr></thead>
       <tbody>
-        ${(recs.items||[]).slice(0,8).map(r=>`
+        ${reportsGroupRecs(recs.items||[]).slice(0,8).map(r=>`
         <tr>
           <td class="td-name">${r.entity_label}</td>
           <td><span class="badge ${r.severity}">${r.severity}</span></td>
-          <td>${r.recommendation_title}</td>
+          <td>${r.recommendation_title}${r.occurrence_count > 1 ? ` <span class="text-muted" style="font-size:11px">×${r.occurrence_count}</span>` : ''}</td>
           <td>${r.action_taken?'<span class="badge good">✓ Done</span>':'<span class="text-muted">Pending</span>'}</td>
           <td class="td-muted">${r.generated_at?.slice(0,10)||'—'}</td>
         </tr>`).join('') || '<tr><td colspan="5" class="empty">No recommendations in this period</td></tr>'}
@@ -3187,10 +3453,10 @@ async function loadReports() {
       <thead><tr><th>Campaign</th><th>Alert</th><th>Severity</th><th>Occurrences</th><th>Detected</th></tr></thead>
       <tbody>
         ${(alerts.items||[]).slice(0,8).map(a=>`
-        <tr class="alert-row ${a.severity}">
+        <tr class="alert-row ${a.status === 'resolved' ? '' : a.severity}" style="${a.status === 'resolved' ? 'opacity:.6' : ''}">
           <td class="td-name">${a.entity_label}</td>
           <td><code style="font-size:11px;background:var(--bg3);padding:2px 6px;border-radius:4px">${a.alert_code}</code></td>
-          <td><span class="badge ${a.severity}">${a.severity}</span></td>
+          <td><span class="badge ${a.status === 'resolved' ? 'none' : a.severity}">${a.severity}</span>${a.status === 'resolved' ? ' <span class="badge none">Resolved</span>' : ''}</td>
           <td>${a.occurrence_count}</td>
           <td class="td-muted">${a.first_detected_at?.slice(0,10)||'—'}</td>
         </tr>`).join('') || '<tr><td colspan="5" class="empty">No alerts in this period</td></tr>'}
@@ -3198,8 +3464,6 @@ async function loadReports() {
     </table>
   </div>
   `;
-
-  window._reportPeriod = 'weekly';
 }
 
 async function changeReportPeriod() {
@@ -3217,7 +3481,8 @@ function exportReport(format) {
   const period    = window._reportPeriod    || 'weekly';
   const objective = window._reportObjective || '';
   const objQ = objective ? '&objective=' + objective : '';
-  const url = `/api/v1/reports/export?format=${format}&period=${period}${objQ}`;
+  const acctQ = window._accountId ? '&account_id=' + window._accountId : '';
+  const url = `/api/v1/reports/export?format=${format}&period=${period}${objQ}${acctQ}`;
   if (format === 'pdf') {
     window.open(url, '_blank');
   } else {
@@ -3362,11 +3627,15 @@ function ciRenderBusinessImpactRanking(ranking) {
     ['CTR', ranking.ctr_impact], ['Learning', ranking.learning_impact],
   ].filter(([, v]) => v && v.level && v.level !== 'Not applicable');
   if (!dims.length) return '';
-  const overallCls = { Highest: 'excellent', High: 'good', Medium: 'warning', Low: 'info' }[ranking.overall_business_impact] || 'none';
+  // Phase 47 (CI1) -- shared by the "Overall" badge and each per-dimension
+  // badge below; these are impact levels (High impact is desirable), not
+  // risk levels, so this uses its own positive-oriented color mapping
+  // rather than ciRiskBadgeClass() (which colors High as alarm-red).
+  const impactCls = v => ({ Highest: 'excellent', High: 'good', Medium: 'warning', Low: 'info' }[v] || 'none');
   return `<div style="margin-top:8px">
     <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center">
-      <span class="badge ${overallCls}">Overall Business Impact: ${ranking.overall_business_impact}</span>
-      ${dims.map(([label, v]) => `<span class="badge none" title="${v.reason || ''}">${label}: ${v.level}${v.range ? ' ' + v.range : ''}</span>`).join('')}
+      <span class="badge ${impactCls(ranking.overall_business_impact)}">Overall Business Impact: ${ranking.overall_business_impact}</span>
+      ${dims.map(([label, v]) => `<span class="badge ${impactCls(v.level)}" title="${v.reason || ''}">${label}: ${v.level}${v.range ? ' ' + v.range : ''}</span>`).join('')}
     </div>
   </div>`;
 }
@@ -3773,6 +4042,21 @@ function ciRenderDetails(d) {
   // plain evidence sentence for dimensions that only ever return one
   // (cta/offer/trust/copy/mobile_friendliness/visual/brand_consistency),
   // never fabricating a checklist those dimensions don't actually have.
+  // Phase 47 (CI2) -- the Winning/Loss Formula cards above already show a
+  // per-factor evidence sentence (e.g. "offer" -> "A concrete offer signal
+  // ... is present."); when a dimension here has no detected/missing
+  // checklist or dimensions object to fall back on, its plain evidence
+  // sentence can be the exact same string already shown up there. Reuses
+  // the same ciBulletAlreadyShown() exact-match mechanism Phase 46 already
+  // built for the Advisor-Panel-vs-Priorities duplicate, applied to this
+  // second, different pair of sections.
+  const formulaEvidence = [
+    ...((d.executive_decision?.winning_formula?.items) || []),
+    d.executive_decision?.loss_formula?.largest_weakness,
+    d.executive_decision?.loss_formula?.second_weakness,
+    d.executive_decision?.loss_formula?.third_weakness,
+  ].filter(Boolean).map(f => f.evidence).filter(Boolean);
+
   function ciChecklist(dim) {
     if (Array.isArray(dim.detected) && Array.isArray(dim.missing) && (dim.detected.length || dim.missing.length)) {
       const yes = dim.detected.map(d => `<div style="color:var(--good,#2e7d32)">✔ ${d.label}</div>`).join('');
@@ -3784,6 +4068,9 @@ function ciRenderDetails(d) {
         `<div style="color:${active ? 'var(--good,#2e7d32)' : 'var(--muted)'}">${active ? '✔' : '✖'} ${key.replace(/_/g, ' ')}</div>`
       ).join('');
       return `<div style="font-size:12px;margin-top:4px;display:grid;grid-template-columns:1fr 1fr;gap:2px 12px">${items}</div>`;
+    }
+    if (dim.evidence && ciBulletAlreadyShown(dim.evidence, formulaEvidence)) {
+      return `<div style="font-size:12px;color:var(--muted);margin-top:4px;font-style:italic">Already explained in the Winning/Loss Formula above.</div>`;
     }
     return `<div style="font-size:12px;color:var(--muted);margin-top:4px">${dim.evidence || dim.label || '—'}</div>`;
   }
@@ -3932,7 +4219,7 @@ window._accountId = '';
 // refresh.
 async function loadAccountSelector() {
   try {
-    const r = await fetch(API + '/accounts');
+    const r = await fetch(API + '/accounts', { credentials: 'same-origin' });
     const j = await r.json();
     window._accountsCache = j.data || []; // Phase 8: populate cache used by hasValidToken()
     const sel = document.getElementById('acct-selector');
@@ -4040,7 +4327,7 @@ window._accountsCache = null;
 async function ensureAccountsCache() {
   if (window._accountsCache) return window._accountsCache;
   try {
-    const r = await fetch(API + '/accounts');
+    const r = await fetch(API + '/accounts', { credentials: 'same-origin' });
     const j = await r.json();
     window._accountsCache = j.data || [];
   } catch { window._accountsCache = []; }
@@ -4105,7 +4392,7 @@ async function loadPortfolio() {
       </div>
       <div class="stat-card">
         <div class="stat-label">Cross-Account Alerts</div>
-        <div class="stat-value text-red">${(overview.data?.cross_account_alerts || []).length}</div>
+        <div class="stat-value text-red">${(alerts.data || []).length}</div>
       </div>
       <div class="stat-card">
         <div class="stat-label">Health Dist.</div>
@@ -4131,7 +4418,7 @@ async function loadPortfolio() {
         </div>
         <div style="display:flex;align-items:center;gap:8px">
           ${a.health_score !== null ? scoreCircle(a.health_score, true) : '<span class="text-muted">—</span>'}
-          ${a.health_status ? `<span class="badge ${a.health_status}">${a.health_status}</span>` : ''}
+          ${a.health_status ? `<span class="badge ${scoreClass(a.health_score)}">${a.health_status}</span>` : ''}
         </div>
       </div>`).join('') || '<div class="empty">No accounts found</div>'}
     </div>
@@ -4154,7 +4441,7 @@ async function loadPortfolio() {
   </div>
 
   <!-- Cross-account alerts -->
-  ${(overview.data?.cross_account_alerts || []).length > 0 ? `
+  ${(alerts.data || []).length > 0 ? `
   <div class="section-header" style="margin-bottom:10px">
     <span class="section-title">🔔 Cross-Account Alerts</span>
     <button class="btn btn-ghost btn-sm" onclick="navigate('alerts')">View all alerts →</button>
@@ -4163,12 +4450,12 @@ async function loadPortfolio() {
     <table>
       <thead><tr><th>Account</th><th>Alert</th><th>Campaign</th><th>Severity</th><th>Occurrences</th></tr></thead>
       <tbody>
-        ${overview.data.cross_account_alerts.map(a => `
-        <tr class="alert-row ${a.severity}">
+        ${alerts.data.map(a => `
+        <tr class="alert-row ${severityClass(a.severity)}">
           <td class="td-muted">${a.account_name}</td>
           <td><code style="font-size:11px;background:var(--bg3);padding:2px 6px;border-radius:4px">${a.alert_code}</code></td>
           <td class="td-name">${a.entity_label}</td>
-          <td><span class="badge ${a.severity}">${a.severity}</span></td>
+          <td><span class="badge ${severityClass(a.severity)}">${a.severity}</span></td>
           <td>${a.occurrence_count}</td>
         </tr>`).join('')}
       </tbody>
@@ -4237,9 +4524,74 @@ function toggleBreakdown(entityId, entityType) {
   loadScoreBreakdown(entityId, entityType, 'score-breakdown-panel');
 }
 
+// ─── Auth gate ─────────────────────────────────────────────────
+function setShellVisible(visible) {
+  const display = visible ? '' : 'none';
+  document.getElementById('sidebar').style.display = display;
+  document.querySelector('.topbar').style.display = display;
+  document.getElementById('date-bar').style.display = display;
+}
+
+function renderLoginForm(errorMsg) {
+  setShellVisible(false);
+  document.getElementById('freshness-bar').style.display = 'none';
+  document.getElementById('content').innerHTML = `
+    <div class="card" style="max-width:360px;margin:80px auto">
+      <h2 style="margin-bottom:4px">📊 Meta Ads</h2>
+      <div class="text-muted" style="font-size:13px;margin-bottom:20px">Sign in to continue</div>
+      ${errorMsg ? `<div style="color:var(--red);font-size:13px;margin-bottom:12px">${escapeHtml(errorMsg)}</div>` : ''}
+      <form id="login-form">
+        <div class="form-group" style="margin-bottom:12px">
+          <label class="form-label">Email</label>
+          <input class="form-input" type="email" id="login-email" required autofocus>
+        </div>
+        <div class="form-group" style="margin-bottom:16px">
+          <label class="form-label">Password</label>
+          <input class="form-input" type="password" id="login-password" required>
+        </div>
+        <button type="submit" class="btn btn-primary" style="width:100%;justify-content:center">Sign in</button>
+      </form>
+    </div>`;
+  document.getElementById('login-form').addEventListener('submit', handleLogin);
+}
+
+async function handleLogin(evt) {
+  evt.preventDefault();
+  const email = document.getElementById('login-email').value;
+  const password = document.getElementById('login-password').value;
+  try {
+    const res = await apiPost('/auth/login', { email, password });
+    if (res && res.authenticated) {
+      setShellVisible(true);
+      loadAccountSelector();
+      navigate('dashboard');
+    } else {
+      renderLoginForm('Invalid email or password.');
+    }
+  } catch (e) {
+    renderLoginForm(e.message || 'Invalid email or password.');
+  }
+}
+
+async function handleLogout() {
+  try { await apiPost('/auth/logout', {}); } catch (e) { /* proceed to login screen regardless */ }
+  renderLoginForm();
+}
+
 // ─── Boot ──────────────────────────────────────────────────────
-loadAccountSelector();
-navigate('dashboard');
+(async function boot() {
+  try {
+    const status = await api('/auth/status');
+    if (status && status.authenticated) {
+      loadAccountSelector();
+      navigate('dashboard');
+    } else {
+      renderLoginForm();
+    }
+  } catch (e) {
+    renderLoginForm();
+  }
+})();
 // Meta has no data beyond today; the custom range inputs previously had no
 // upper bound, so a user could silently pick a future date and get an
 // unexplained empty "No Data" result (confirmed live: GET /dashboard with a

@@ -49,6 +49,48 @@ describe('API: /api/v1/recommendations', () => {
     expect(rec.governance_state).toBeNull();
   });
 
+  // Phase 47 (R2) — a recommendation fired against an ad-level entity_meta_id
+  // (real production shape, e.g. rules like LOW_CTR evaluated at ad grain)
+  // previously had no field connecting it back to its owning campaign, so
+  // the Recommendations page's campaign filter dropdown (which only knows
+  // campaign-level IDs) could never match it. owning_campaign_meta_id
+  // resolves this via ads.campaign_id -> campaigns.meta_campaign_id, additive
+  // only -- campaign_name/campaign_status still resolve correctly too.
+  test('GET /recommendations resolves owning_campaign_meta_id for an ad-level recommendation via the ads table', async () => {
+    const campId = uuidv4();
+    testDb.db.run(
+      `INSERT INTO campaigns (id, ad_account_id, meta_campaign_id, name, objective, status, created_at, updated_at)
+       VALUES (?, ?, 'camp_rec_owner', 'Owning Campaign', 'sales', 'active', datetime('now'), datetime('now'))`,
+      [campId, accountId]
+    );
+    const adSetId = uuidv4();
+    testDb.db.run(
+      `INSERT INTO ad_sets (id, campaign_id, ad_account_id, meta_adset_id, name, status, created_at, updated_at)
+       VALUES (?, ?, ?, 'adset_rec_owner', 'Ad Set', 'active', datetime('now'), datetime('now'))`,
+      [adSetId, campId, accountId]
+    );
+    const adId = uuidv4();
+    testDb.db.run(
+      `INSERT INTO ads (id, ad_set_id, campaign_id, ad_account_id, meta_ad_id, name, status, created_at, updated_at)
+       VALUES (?, ?, ?, ?, 'ad_rec_owner', 'Test Ad', 'active', datetime('now'), datetime('now'))`,
+      [adId, adSetId, campId, accountId]
+    );
+    const adRecId = uuidv4();
+    testDb.db.run(
+      `INSERT INTO recommendation_log
+         (id, rule_code, ad_account_id, entity_type, entity_meta_id, entity_label,
+          severity, recommendation_title, recommendation_body)
+       VALUES (?, 'LOW_CTR', ?, 'ad', 'ad_rec_owner', 'Test Ad', 'warning', 'Low CTR', 'Body text')`,
+      [adRecId, accountId]
+    );
+
+    const res = await request(app).get('/api/v1/recommendations');
+    const rec = res.body.data.find(r => r.id === adRecId);
+    expect(rec).toBeTruthy();
+    expect(rec.owning_campaign_meta_id).toBe('camp_rec_owner');
+    expect(rec.campaign_name).toBe('Owning Campaign');
+  });
+
   // Regression test for the recommendation_log has-no-updated_at-column
   // bug found during live verification: PATCH used to reference a
   // non-existent `updated_at` column in all three UPDATE branches, so

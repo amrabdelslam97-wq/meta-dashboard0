@@ -38,17 +38,31 @@ function section(title) {
   console.log(`\n── ${title} ─────────────────────────────`);
 }
 
-function httpGet(path) {
+// Phase 48 — every /api/v1/* route except /health now requires a session
+// (see src/middleware/auth.js). This script logs in once (login()) and
+// carries the resulting cookie on every subsequent request, exactly like
+// the real dashboard does -- otherwise every HTTP test below would 401.
+let sessionCookie = null;
+
+function httpRequest(method, path, body) {
   return new Promise((resolve, reject) => {
+    const payload = body ? JSON.stringify(body) : null;
     const options = {
       hostname: 'localhost',
       port: process.env.PORT || 3000,
       path,
-      method: 'GET',
-      headers: { 'Content-Type': 'application/json' },
+      method,
+      headers: {
+        'Content-Type': 'application/json',
+        ...(payload ? { 'Content-Length': Buffer.byteLength(payload) } : {}),
+        ...(sessionCookie ? { Cookie: sessionCookie } : {}),
+      },
     };
 
     const req = http.request(options, (res) => {
+      const setCookie = res.headers['set-cookie'];
+      if (setCookie && setCookie.length) sessionCookie = setCookie[0].split(';')[0];
+
       let data = '';
       res.on('data', chunk => (data += chunk));
       res.on('end', () => {
@@ -62,8 +76,17 @@ function httpGet(path) {
 
     req.on('error', reject);
     req.setTimeout(5000, () => reject(new Error('Request timeout')));
+    if (payload) req.write(payload);
     req.end();
   });
+}
+
+function httpGet(path) {
+  return httpRequest('GET', path);
+}
+
+function httpPost(path, body) {
+  return httpRequest('POST', path, body);
 }
 
 // ── Test Runner ──
@@ -234,6 +257,15 @@ async function runTests() {
     serverAvailable = false;
     console.log('  ⚠  Server not running — skipping HTTP tests');
     console.log('     Start with: npm start  then run verify again');
+  }
+
+  if (serverAvailable && process.env.USER_EMAIL && process.env.USER_PASSWORD) {
+    const login = await httpPost('/api/v1/auth/login', {
+      email: process.env.USER_EMAIL, password: process.env.USER_PASSWORD,
+    });
+    ok('Login succeeds with USER_EMAIL/USER_PASSWORD', login.status === 200 && login.body?.authenticated === true);
+  } else if (serverAvailable) {
+    console.log('  ⚠  USER_EMAIL/USER_PASSWORD not set — skipping login, HTTP API tests will 401');
   }
 
   if (serverAvailable) {

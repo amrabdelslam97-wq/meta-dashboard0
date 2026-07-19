@@ -30,6 +30,7 @@
     "exceljs": "^4.4.0",
     "express": "^5.2.1",
     "express-rate-limit": "^8.5.2",
+    "express-session": "^1.19.0",
     "helmet": "^8.2.0",
     "sql.js": "^1.14.1",
     "uuid": "^14.0.1"

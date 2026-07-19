@@ -87,6 +87,21 @@ describe('decisionEngine.generateTodaysDecisions', () => {
     expect(declining.priority_score - improving.priority_score).toBe(15);
   });
 
+  // Phase 48 — Blocker 4: confidence is now computed via the shared
+  // executiveReasoningEngine.computeConfidence() primitive instead of a
+  // crude inline ternary, but the emitted qualitative string must stay
+  // exactly 'high'/'medium'/'low' (maifsGovernance.js's hardcoded gate
+  // depends on it) and a new confidence_pct field should be present
+  // alongside it.
+  test('confidence is a real percentage (confidence_pct) backing the existing high/medium/low string', () => {
+    const result = generateTodaysDecisions(accountId);
+    const declining = result.decisions.find(d => d.meta_campaign_id === 'camp_declining');
+    expect(declining.confidence).toBe('high'); // critical severity, unchanged from before
+    expect(typeof declining.confidence_pct).toBe('number');
+    expect(declining.confidence_pct).toBeGreaterThanOrEqual(15);
+    expect(declining.confidence_pct).toBeLessThanOrEqual(90);
+  });
+
   // Regression test for T4-19: REC_TO_DECISION/ALERT_TO_DECISION used to
   // carry entries for rule/alert codes (AD_FATIGUE, REAL_ROAS_DIVERGENCE,
   // BUDGET_EXHAUSTION, FREQUENCY_SPIKE, AD_REJECTED) that no seeded rule

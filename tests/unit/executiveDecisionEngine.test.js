@@ -14,6 +14,8 @@ const {
   buildExecutiveDecisionLayer,
   crossModuleCandidateDecisions,
   recommendationLogCandidateDecisions,
+  healthCandidateDecisions,
+  decisionToPriority,
   ALLOWED_DECISIONS,
 } = require('../../src/services/executiveDecisionEngine');
 
@@ -317,6 +319,93 @@ describe('executiveDecisionEngine', () => {
       });
       expect(result.decision).toBe('MONITOR');
       expect(result.consistency_audit.agreement).toBe('unanimous');
+    });
+  });
+
+  describe('healthCandidateDecisions', () => {
+    test('critical health produces a PAUSE candidate', () => {
+      expect(healthCandidateDecisions('critical')).toEqual([
+        expect.objectContaining({ decision: 'PAUSE', module: 'Health Score Engine' }),
+      ]);
+    });
+
+    test('warning health produces an OPTIMIZE candidate', () => {
+      expect(healthCandidateDecisions('warning')).toEqual([
+        expect.objectContaining({ decision: 'OPTIMIZE', module: 'Health Score Engine' }),
+      ]);
+    });
+
+    test('good/excellent health produces no candidate', () => {
+      expect(healthCandidateDecisions('good')).toEqual([]);
+      expect(healthCandidateDecisions('excellent')).toEqual([]);
+      expect(healthCandidateDecisions(undefined)).toEqual([]);
+    });
+  });
+
+  describe('resolveExecutiveDecision — Blocker 3 (Executive Decision must never ignore Health)', () => {
+    test('critical health overrides an optimistic Scale verdict to PAUSE, with a real, auditable reason', () => {
+      const result = resolveExecutiveDecision({
+        panelStatus: 'Scale', healthStatus: 'critical', fatigue: { status: 'none' }, scores: { score_overall: 80 },
+        ruleEngineFindings: [],
+      });
+      expect(result.decision).toBe('PAUSE');
+      expect(result.base_from_advisor).toBe('SCALE');
+      expect(result.consistency_audit.signals_disagreed).toBe(true);
+      expect(result.consistency_audit.overrides[0].module).toBe('Health Score Engine');
+      expect(result.consistency_audit.overrides[0].because).toMatch(/critical/);
+    });
+
+    test('healthy status leaves an optimistic Scale verdict unchanged (no regression)', () => {
+      const result = resolveExecutiveDecision({
+        panelStatus: 'Scale', healthStatus: 'good', fatigue: { status: 'none' }, scores: { score_overall: 80 },
+        ruleEngineFindings: [],
+      });
+      expect(result.decision).toBe('SCALE');
+      expect(result.consistency_audit.agreement).toBe('unanimous');
+    });
+
+    test('warning health overrides an optimistic Scale verdict to OPTIMIZE', () => {
+      const result = resolveExecutiveDecision({
+        panelStatus: 'Scale', healthStatus: 'warning', fatigue: { status: 'none' }, scores: { score_overall: 80 },
+        ruleEngineFindings: [],
+      });
+      expect(result.decision).toBe('OPTIMIZE');
+      expect(result.consistency_audit.overrides[0].module).toBe('Health Score Engine');
+    });
+  });
+
+  describe('computeExecutiveConfidence — Blocker 3 (Business Risk must factor into confidence)', () => {
+    test('HIGH business_risk lowers confidence relative to an otherwise-identical LOW-risk case', () => {
+      const base = { consistencyAudit: { agreement: 'unanimous', overrides: [] }, fatigue: { status: 'none' }, latestRow: { spend: 100 } };
+      const highRisk = computeExecutiveConfidence({ ...base, businessRisk: 'HIGH' });
+      const lowRisk = computeExecutiveConfidence({ ...base, businessRisk: 'LOW' });
+      expect(highRisk.confidence_pct).toBeLessThan(lowRisk.confidence_pct);
+    });
+  });
+
+  describe('decisionToPriority — Blocker 4 (shared priority axis with Decision Center)', () => {
+    test('STOP and PAUSE are always critical, on the same scale Decision Center uses', () => {
+      expect(decisionToPriority('STOP', 90)).toBe('critical');
+      expect(decisionToPriority('PAUSE', 20)).toBe('critical');
+    });
+    test('SCALE is medium at high confidence, low otherwise', () => {
+      expect(decisionToPriority('SCALE', 80)).toBe('medium');
+      expect(decisionToPriority('SCALE', 30)).toBe('low');
+    });
+    test('MONITOR is always low', () => {
+      expect(decisionToPriority('MONITOR', 90)).toBe('low');
+    });
+  });
+
+  describe('buildExecutiveDecisionLayer — priority field', () => {
+    test('the returned layer includes a priority on the critical/high/medium/low scale', () => {
+      const layer = buildExecutiveDecisionLayer({
+        panel: { current_status: 'Pause', business_risk: 'LOW' },
+        priorities: [], fatigue: { status: 'severe' }, scores: { score_overall: 20 },
+        healthStatus: 'critical', ruleEngineFindings: [], latestRow: {},
+      });
+      expect(['critical', 'high', 'medium', 'low']).toContain(layer.priority);
+      expect(layer.priority).toBe('critical');
     });
   });
 
