@@ -11,6 +11,8 @@ const router  = express.Router();
 const campaignsRouter       = require('./routes/campaigns');
 const accountsRouter        = require('./routes/accounts');
 const syncRouter            = require('./routes/sync');
+// Phase 35.8 — temporary maintenance route, remove after use (see file header)
+const maintenancePhase358Router = require('./routes/maintenancePhase358');
 // Phase 2
 const insightsRouter        = require('./routes/insights');
 // Phase 3
@@ -52,6 +54,8 @@ router.get('/health', (req, res) => {
 
 // Phase 1
 router.use('/accounts',    accountsRouter);
+// Phase 35.8 — temporary maintenance route, remove after use (see file header)
+router.use('/maintenance', maintenancePhase358Router);
 router.use('/campaigns',   campaignsRouter);
 router.use('/sync',        syncRouter);
 // Phase 2
