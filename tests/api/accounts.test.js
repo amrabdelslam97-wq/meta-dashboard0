@@ -282,6 +282,53 @@ describe('API: /api/v1/accounts', () => {
     expect(res.status).toBe(404);
   });
 
+  describe('DELETE /accounts/:id/permanent (Phase 39)', () => {
+    test('permanently deletes the synthetic Test Ad Account (act_111111111) and its account-scoped rows', async () => {
+      nock(BASE).get(`/${VERSION}/act_111111111`).query(true)
+        .reply(200, { id: 'act_111111111', name: 'Test Ad Account', currency: 'USD', timezone_name: 'UTC' });
+      const createRes = await request(app).post('/api/v1/accounts')
+        .send({ meta_account_id: 'act_111111111', access_token: 'tok' });
+      const id = createRes.body.data.id;
+
+      // Give it a scoped child row to prove the delete actually reaches it.
+      testDb.db.run(
+        `INSERT INTO campaigns (id, ad_account_id, meta_campaign_id, name, objective, status, created_at, updated_at)
+         VALUES ('camp-test-1', ?, 'meta-camp-1', 'Test Campaign', 'unknown', 'active', datetime('now'), datetime('now'))`,
+        [id]
+      );
+
+      const delRes = await request(app).delete(`/api/v1/accounts/${id}/permanent`);
+      expect(delRes.status).toBe(200);
+      expect(delRes.body.success).toBe(true);
+      expect(delRes.body.deletion_counts.campaigns).toBe(1);
+      expect(delRes.body.deletion_counts.ad_accounts).toBe(1);
+
+      expect(testDb.db.get('SELECT id FROM ad_accounts WHERE id = ?', [id])).toBeNull();
+      expect(testDb.db.get('SELECT id FROM campaigns WHERE ad_account_id = ?', [id])).toBeNull();
+    });
+
+    test('rejects permanent deletion for any account that is not the Test Ad Account', async () => {
+      nock(BASE).get(`/${VERSION}/act_real_account`).query(true)
+        .reply(200, { id: 'act_real_account', name: 'Real Account', currency: 'USD', timezone_name: 'UTC' });
+      const createRes = await request(app).post('/api/v1/accounts')
+        .send({ meta_account_id: 'act_real_account', access_token: 'tok' });
+      const id = createRes.body.data.id;
+
+      const delRes = await request(app).delete(`/api/v1/accounts/${id}/permanent`);
+      expect(delRes.status).toBe(403);
+
+      // Untouched -- still exists, still a normal row.
+      const row = testDb.db.get('SELECT id, status FROM ad_accounts WHERE id = ?', [id]);
+      expect(row).not.toBeNull();
+      expect(row.status).toBe('active');
+    });
+
+    test('404s for an unknown account id', async () => {
+      const res = await request(app).delete('/api/v1/accounts/00000000-0000-0000-0000-000000000000/permanent');
+      expect(res.status).toBe(404);
+    });
+  });
+
   describe('POST /accounts/:id/test-connection', () => {
     test('reports account_exists/token_valid/currency/timezone/business_name/active_status/permissions on full success', async () => {
       nock(BASE).get(`/${VERSION}/act_testconn`).query(true)

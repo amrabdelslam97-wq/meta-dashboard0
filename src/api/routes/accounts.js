@@ -357,6 +357,91 @@ router.delete(
   })
 );
 
+// Phase 39 — permanent hard delete, intentionally restricted to the
+// synthetic Test Ad Account only. This is NOT a general-purpose delete:
+// every real connected account must keep going through the safe
+// DELETE /:id soft-remove above. Separate route, separate allowlist check,
+// so it can never be reached for any other account in this phase.
+const PERMANENTLY_DELETABLE_META_IDS = ['act_111111111'];
+
+/** Every table with an ad_account_id/account_id column, discovered fresh from the live schema (sqlite locally, postgres in production) -- never a hardcoded list. */
+async function discoverAccountScopedTables() {
+  if (process.env.DATABASE_URL) {
+    const cols = await db.all(
+      `SELECT table_name, column_name FROM information_schema.columns
+       WHERE table_schema = 'public' AND column_name IN ('ad_account_id', 'account_id') AND table_name != 'ad_accounts'`
+    );
+    return cols.map((c) => ({ table: c.table_name, column: c.column_name }));
+  }
+  const tables = (await db.all(`SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'`))
+    .map((r) => r.name)
+    .filter((t) => t !== 'ad_accounts');
+  const scoped = [];
+  for (const t of tables) {
+    const cols = (await db.all(`PRAGMA table_info(${t})`)).map((c) => c.name);
+    const col = cols.find((c) => c === 'ad_account_id' || c === 'account_id');
+    if (col) scoped.push({ table: t, column: col });
+  }
+  return scoped;
+}
+
+/**
+ * DELETE /accounts/:id/permanent
+ * True, irreversible deletion of the account row and every row in every
+ * account-scoped table belonging to it -- restricted to
+ * PERMANENTLY_DELETABLE_META_IDS (the synthetic Test Ad Account only, for
+ * this phase). Runs inside one transaction; any failure rolls back the
+ * entire operation, never leaving a partial delete.
+ */
+router.delete(
+  '/:id/permanent',
+  asyncHandler(async (req, res) => {
+    const { id } = req.params;
+    const account = await db.get('SELECT id, meta_account_id, account_name FROM ad_accounts WHERE id = ?', [id]);
+    if (!account) {
+      return res.status(404).json({ error: 'Account not found' });
+    }
+    if (!PERMANENTLY_DELETABLE_META_IDS.includes(account.meta_account_id)) {
+      return res.status(403).json({
+        error: 'Permanent deletion is not available for this account. Use Disconnect (Remove) instead.',
+        meta_account_id: account.meta_account_id,
+      });
+    }
+
+    const scopedTables = await discoverAccountScopedTables();
+
+    const preCounts = {};
+    for (const { table, column } of scopedTables) {
+      const r = await db.get(`SELECT COUNT(*) as c FROM ${table} WHERE ${column} = ?`, [account.id]);
+      preCounts[table] = parseInt(r.c, 10) || 0;
+    }
+
+    const deletionCounts = {};
+    await db.transaction(async (tx) => {
+      for (const { table, column } of scopedTables) {
+        if (preCounts[table] > 0) {
+          await tx.run(`DELETE FROM ${table} WHERE ${column} = ?`, [account.id]);
+          deletionCounts[table] = preCounts[table];
+        }
+      }
+      await tx.run(`DELETE FROM ad_accounts WHERE id = ?`, [account.id]);
+    });
+    deletionCounts.ad_accounts = 1;
+
+    const stillPresent = await db.get('SELECT id FROM ad_accounts WHERE id = ?', [account.id]);
+    if (stillPresent) {
+      return res.status(500).json({ error: 'Deletion did not verify cleanly -- account row still present after commit.' });
+    }
+
+    return res.json({
+      success: true,
+      message: `${account.account_name} permanently deleted.`,
+      meta_account_id: account.meta_account_id,
+      deletion_counts: deletionCounts,
+    });
+  })
+);
+
 /**
  * POST /accounts/:id/test-connection
  * Verifies the stored token against Meta Graph API in detail: account

@@ -2700,7 +2700,10 @@ function renderAccountCard(a, sched) {
           : a.status === 'paused'
           ? `<button class="btn btn-ghost btn-sm" onclick="setAccountStatus('${a.id}','active')">Enable</button>`
           : `<button class="btn btn-ghost btn-sm" onclick="setAccountStatus('${a.id}','active')">Reconnect</button>`}
-        <button class="btn btn-danger btn-sm" onclick="removeAccount('${a.id}')">Remove</button>
+        <button class="btn btn-danger btn-sm" onclick="removeAccount('${a.id}')">Disconnect</button>
+        ${a.meta_account_id === 'act_111111111'
+          ? `<button class="btn btn-danger btn-sm" onclick="permanentlyDeleteAccount('${a.id}')" title="Permanently deletes this account and all its data — cannot be undone">Delete Permanently</button>`
+          : ''}
       </div>
     </div>
   `;
@@ -2957,6 +2960,25 @@ async function removeAccount(id) {
     loadSettings();
   } catch (e) {
     showToast(e.message || 'Could not remove account.', 'error');
+  }
+}
+
+// Phase 39 — permanent delete, only ever shown/reachable for the synthetic
+// Test Ad Account (act_111111111 — enforced again server-side regardless of
+// what this button is bound to). Distinct from removeAccount() above, which
+// only disconnects.
+async function permanentlyDeleteAccount(id) {
+  const a = (window._settingsAccounts || []).find(x => x.id === id);
+  const name = a ? a.account_name : 'this account';
+  if (!confirm(`Permanently delete Test Ad Account?\n\nThis will remove "${name}" and all data belonging exclusively to it. This action cannot be undone.`)) return;
+  try {
+    await apiDelete(`/accounts/${id}/permanent`);
+    if (window._accountId === id) { window._accountId = ''; }
+    loadAccountSelector();
+    loadSettings();
+    showToast(`${name} permanently deleted.`, 'success');
+  } catch (e) {
+    showToast(e.message || 'Could not permanently delete account.', 'error');
   }
 }
 
