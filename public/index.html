@@ -1736,6 +1736,21 @@ async function icLoadDiagnosisView(el) {
   `;
 }
 
+// Phase 40: distinguishes a genuine "not yet analyzed" empty state from an
+// actual failed request (invalid token, real Meta API error, mock blocked
+// in production, network error). Previously any thrown fetch error was
+// silently discarded and every failure mode rendered the same generic
+// "Not analyzed yet" message -- hiding the real reason the backend already
+// provides (insights.js's 502/200-analyzed:false responses both carry a
+// `reason` string; only the throw path here was losing it).
+function icInsightsErrorMessage(err) {
+  const reason = err && err.body && err.body.reason;
+  if (reason) {
+    return `<div class="ic-empty">⚠ ${reason}<br><span style="font-size:11px;opacity:.7">Try a different date range, or verify the account's Meta access token.</span></div>`;
+  }
+  return '<div class="ic-empty">📊 Not analyzed yet<br><span style="font-size:11px;opacity:.7">Click ⚡ Analyze above to generate insights for this period</span></div>';
+}
+
 // ── CAMPAIGN OVERVIEW ──
 async function icLoadCampaignView(el) {
   const c = window.ic.selectedCampaign;
@@ -1743,10 +1758,12 @@ async function icLoadCampaignView(el) {
 
   // Use cached insights or fetch fresh
   let ins = window.ic.insights;
+  let fetchErr = null;
   if (!ins) {
-    try { ins = await api(addDateQ(insightsUrl(`/campaigns/${c.id}/insights`))); window.ic.insights = ins; icRefreshHeaderOnly(); } catch {}
+    try { ins = await api(addDateQ(insightsUrl(`/campaigns/${c.id}/insights`))); window.ic.insights = ins; icRefreshHeaderOnly(); }
+    catch (e) { fetchErr = e; }
   }
-  if (!ins) { el.innerHTML = '<div class="ic-empty">📊 Not analyzed yet<br><span style="font-size:11px;opacity:.7">Click ⚡ Analyze above to generate insights for this period</span></div>'; return; }
+  if (!ins) { el.innerHTML = icInsightsErrorMessage(fetchErr); return; }
 
   // Phase 8: backend now returns analyzed:false instead of fabricated zero metrics
   // when Meta has no insights for the period. Show that honestly, not a fake "0".
