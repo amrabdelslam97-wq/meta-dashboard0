@@ -27,8 +27,8 @@ function isInBackoff(account) {
   return !!(until && new Date(until).getTime() > Date.now());
 }
 
-function getBackoffUntil(accountId) {
-  const row = db.get('SELECT rate_limit_backoff_until FROM ad_accounts WHERE id = ?', [accountId]);
+async function getBackoffUntil(accountId) {
+  const row = await db.get('SELECT rate_limit_backoff_until FROM ad_accounts WHERE id = ?', [accountId]);
   return row?.rate_limit_backoff_until || null;
 }
 
@@ -37,13 +37,13 @@ function getBackoffUntil(accountId) {
  * sync time using exponential backoff (1m * 2^failCount, capped at 60m).
  * @returns {{ backoffMs: number, until: string }}
  */
-function recordRateLimitHit(accountId) {
-  const row = db.get('SELECT rate_limit_fail_count FROM ad_accounts WHERE id = ?', [accountId]);
+async function recordRateLimitHit(accountId) {
+  const row = await db.get('SELECT rate_limit_fail_count FROM ad_accounts WHERE id = ?', [accountId]);
   const failCount = row?.rate_limit_fail_count || 0;
   const backoffMs = Math.min(60_000 * Math.pow(2, failCount), MAX_BACKOFF_MS);
   const until = new Date(Date.now() + backoffMs).toISOString();
 
-  db.run(
+  await db.run(
     `UPDATE ad_accounts SET rate_limit_backoff_until = ?, rate_limit_fail_count = ? WHERE id = ?`,
     [until, failCount + 1, accountId]
   );
@@ -52,8 +52,8 @@ function recordRateLimitHit(accountId) {
 }
 
 /** Clear an account's backoff -- called after a successful sync. */
-function clearBackoff(accountId) {
-  db.run(
+async function clearBackoff(accountId) {
+  await db.run(
     `UPDATE ad_accounts SET rate_limit_backoff_until = NULL, rate_limit_fail_count = 0 WHERE id = ?`,
     [accountId]
   );

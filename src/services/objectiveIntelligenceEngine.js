@@ -91,7 +91,7 @@ function resolveReason(metricKey, benchmarkEntry, diagnosis) {
  *   alerts             - intelligence.alerts, or []
  *   executiveSummary   - executiveSummaryEngine.buildExecutiveSummary() output, already computed by the caller
  */
-function buildObjectiveIntelligence({
+async function buildObjectiveIntelligence({
   objective = null, adAccountId = null, currentMetrics = {},
   healthScore = null, healthStatus = null,
   benchmark = { metrics: {}, summary: {} },
@@ -102,9 +102,13 @@ function buildObjectiveIntelligence({
   const profile = resolveProfile(objective);
   const requiredMetrics = profile.benchmarkMetrics || [];
 
-  const kpis = requiredMetrics.map(metricKey => {
+  // Promise.all is safe here: each iteration's resolveBenchmark() read is
+  // independent (own metricKey, no shared mutable state, no write-before-
+  // read dependency between iterations), and Promise.all preserves the
+  // same output order as the .map() it replaces.
+  const kpis = await Promise.all(requiredMetrics.map(async metricKey => {
     const benchmarkEntry = benchmark.metrics?.[metricKey] || null;
-    const thresholds = resolveBenchmark(objective, metricKey, adAccountId);
+    const thresholds = await resolveBenchmark(objective, metricKey, adAccountId);
     const aggregationRule = profile.aggregation?.[metricKey] || null;
 
     return {
@@ -123,7 +127,7 @@ function buildObjectiveIntelligence({
       framework_reference: [...new Set(findRelatedRules(metricKey, { ruleEngineFired, recommendations, alerts }).map(r => r.framework).filter(Boolean))],
       maifs_governance_status: (findRelatedRules(metricKey, { ruleEngineFired, recommendations, alerts })[0] || {}).governance_state || 'not_applicable',
     };
-  });
+  }));
 
   return {
     detected_objective: objective,

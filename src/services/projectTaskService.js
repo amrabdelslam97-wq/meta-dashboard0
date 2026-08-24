@@ -18,11 +18,11 @@ function generateId(prefix) {
 /**
  * Create a new project
  */
-function createProject(workspaceId, projectData) {
+async function createProject(workspaceId, projectData) {
   const projectId = generateId('prj');
   const now = new Date().toISOString();
 
-  db.run(`
+  await db.run(`
     INSERT INTO projects (
       id, workspace_id, client_id, name, project_type, description,
       campaign_id, start_date, end_date, budget, status,
@@ -52,14 +52,14 @@ function createProject(workspaceId, projectData) {
 /**
  * Get project details with task counts
  */
-function getProject(projectId) {
-  const project = db.get(`
+async function getProject(projectId) {
+  const project = await db.get(`
     SELECT * FROM projects WHERE id = ?
   `, [projectId]);
 
   if (!project) return null;
 
-  const taskCounts = db.get(`
+  const taskCounts = await db.get(`
     SELECT
       COUNT(*) as total,
       SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END) as completed,
@@ -78,7 +78,7 @@ function getProject(projectId) {
 /**
  * List projects in workspace
  */
-function listProjects(workspaceId, filters = {}) {
+async function listProjects(workspaceId, filters = {}) {
   let query = `
     SELECT p.* FROM projects p
     WHERE p.workspace_id = ?
@@ -102,14 +102,17 @@ function listProjects(workspaceId, filters = {}) {
 
   query += ' ORDER BY p.updated_at DESC';
 
-  const projects = db.all(query, params);
-  return projects.map(p => getProject(p.id)).filter(p => p);
+  const projects = await db.all(query, params);
+  // Promise.all is safe here: each project's getProject() read is
+  // independent (own project id, no shared mutable state).
+  const withDetails = await Promise.all(projects.map(p => getProject(p.id)));
+  return withDetails.filter(p => p);
 }
 
 /**
  * Update project
  */
-function updateProject(projectId, projectData) {
+async function updateProject(projectId, projectData) {
   const now = new Date().toISOString();
   const updates = [];
   const params = [];
@@ -133,7 +136,7 @@ function updateProject(projectId, projectData) {
   params.push(now);
   params.push(projectId);
 
-  db.run(
+  await db.run(
     `UPDATE projects SET ${updates.join(', ')} WHERE id = ?`,
     params
   );
@@ -148,16 +151,16 @@ function updateProject(projectId, projectData) {
 /**
  * Create a new task
  */
-function createTask(projectId, taskData) {
+async function createTask(projectId, taskData) {
   const taskId = generateId('tsk');
   const now = new Date().toISOString();
 
-  const maxOrder = db.get(
+  const maxOrder = await db.get(
     'SELECT MAX(order_index) as max_order FROM project_tasks WHERE project_id = ?',
     [projectId]
   );
 
-  db.run(`
+  await db.run(`
     INSERT INTO project_tasks (
       id, project_id, title, description, priority, status,
       assigned_to_user_id, labels_json, due_date, start_date,
@@ -186,18 +189,18 @@ function createTask(projectId, taskData) {
 /**
  * Get task with subtasks and checklists
  */
-function getTask(taskId) {
-  const task = db.get(`
+async function getTask(taskId) {
+  const task = await db.get(`
     SELECT * FROM project_tasks WHERE id = ?
   `, [taskId]);
 
   if (!task) return null;
 
-  const subtasks = db.all(`
+  const subtasks = await db.all(`
     SELECT * FROM task_subtasks WHERE task_id = ? ORDER BY order_index
   `, [taskId]);
 
-  const checklists = db.all(`
+  const checklists = await db.all(`
     SELECT * FROM task_checklists WHERE task_id = ? ORDER BY order_index
   `, [taskId]);
 
@@ -217,7 +220,7 @@ function getTask(taskId) {
 /**
  * List tasks in project
  */
-function listTasks(projectId, filters = {}) {
+async function listTasks(projectId, filters = {}) {
   let query = `
     SELECT * FROM project_tasks
     WHERE project_id = ?
@@ -241,14 +244,16 @@ function listTasks(projectId, filters = {}) {
 
   query += ' ORDER BY order_index, due_date, status';
 
-  const tasks = db.all(query, params);
-  return tasks.map(t => getTask(t.id));
+  const tasks = await db.all(query, params);
+  // Promise.all is safe here: each task's getTask() read is independent
+  // (own task id, no shared mutable state).
+  return Promise.all(tasks.map(t => getTask(t.id)));
 }
 
 /**
  * Update task
  */
-function updateTask(taskId, taskData) {
+async function updateTask(taskId, taskData) {
   const now = new Date().toISOString();
   const updates = [];
   const params = [];
@@ -276,7 +281,7 @@ function updateTask(taskId, taskData) {
   params.push(now);
   params.push(taskId);
 
-  db.run(
+  await db.run(
     `UPDATE project_tasks SET ${updates.join(', ')} WHERE id = ?`,
     params
   );
@@ -287,9 +292,9 @@ function updateTask(taskId, taskData) {
 /**
  * Move task to new position
  */
-function moveTask(taskId, newOrder) {
+async function moveTask(taskId, newOrder) {
   const now = new Date().toISOString();
-  db.run(
+  await db.run(
     'UPDATE project_tasks SET order_index = ?, updated_at = ? WHERE id = ?',
     [newOrder, now, taskId]
   );
@@ -303,16 +308,16 @@ function moveTask(taskId, newOrder) {
 /**
  * Add subtask to task
  */
-function addSubtask(taskId, title) {
+async function addSubtask(taskId, title) {
   const subtaskId = generateId('sub');
   const now = new Date().toISOString();
 
-  const maxOrder = db.get(
+  const maxOrder = await db.get(
     'SELECT MAX(order_index) as max_order FROM task_subtasks WHERE task_id = ?',
     [taskId]
   );
 
-  db.run(`
+  await db.run(`
     INSERT INTO task_subtasks (
       id, task_id, title, completed, order_index, created_at, updated_at
     ) VALUES (?, ?, ?, ?, ?, ?, ?)
@@ -332,12 +337,12 @@ function addSubtask(taskId, title) {
 /**
  * Toggle subtask completion
  */
-function toggleSubtask(subtaskId) {
-  const subtask = db.get('SELECT completed FROM task_subtasks WHERE id = ?', [subtaskId]);
+async function toggleSubtask(subtaskId) {
+  const subtask = await db.get('SELECT completed FROM task_subtasks WHERE id = ?', [subtaskId]);
   if (!subtask) return null;
 
   const now = new Date().toISOString();
-  db.run(
+  await db.run(
     'UPDATE task_subtasks SET completed = ?, updated_at = ? WHERE id = ?',
     [1 - subtask.completed, now, subtaskId]
   );
@@ -352,16 +357,16 @@ function toggleSubtask(subtaskId) {
 /**
  * Add checklist item to task
  */
-function addChecklistItem(taskId, title) {
+async function addChecklistItem(taskId, title) {
   const checklistId = generateId('chk');
   const now = new Date().toISOString();
 
-  const maxOrder = db.get(
+  const maxOrder = await db.get(
     'SELECT MAX(order_index) as max_order FROM task_checklists WHERE task_id = ?',
     [taskId]
   );
 
-  db.run(`
+  await db.run(`
     INSERT INTO task_checklists (
       id, task_id, title, completed, order_index, created_at, updated_at
     ) VALUES (?, ?, ?, ?, ?, ?, ?)
@@ -381,12 +386,12 @@ function addChecklistItem(taskId, title) {
 /**
  * Toggle checklist item
  */
-function toggleChecklistItem(checklistId) {
-  const item = db.get('SELECT completed FROM task_checklists WHERE id = ?', [checklistId]);
+async function toggleChecklistItem(checklistId) {
+  const item = await db.get('SELECT completed FROM task_checklists WHERE id = ?', [checklistId]);
   if (!item) return null;
 
   const now = new Date().toISOString();
-  db.run(
+  await db.run(
     'UPDATE task_checklists SET completed = ?, updated_at = ? WHERE id = ?',
     [1 - item.completed, now, checklistId]
   );

@@ -54,10 +54,10 @@ function calculateHealthScore(campaign, metrics, adAccountId, optimizationGoal =
 // ─────────────────────────────────────────────────────────────
 const UNCHANGED_SCORE_SKIP_WINDOW_MS = 10 * 60 * 1000;
 
-function saveHealthScore(campaign, adAccountId, scoreResult, entityType = 'campaign') {
+async function saveHealthScore(campaign, adAccountId, scoreResult, entityType = 'campaign') {
   const now = new Date().toISOString();
 
-  const last = db.get(
+  const last = await db.get(
     `SELECT health_score, calculated_at FROM health_score_history
      WHERE entity_meta_id = ? AND entity_type = ?
      ORDER BY calculated_at DESC LIMIT 1`,
@@ -71,7 +71,7 @@ function saveHealthScore(campaign, adAccountId, scoreResult, entityType = 'campa
     }
   }
 
-  db.run(
+  await db.run(
     `INSERT INTO health_score_history
        (id, ad_account_id, entity_type, entity_meta_id, entity_label,
         objective, health_score, health_status, score_reference,
@@ -96,15 +96,16 @@ function saveHealthScore(campaign, adAccountId, scoreResult, entityType = 'campa
 // ─────────────────────────────────────────────────────────────
 // Get health score trend for a campaign (last N records)
 // ─────────────────────────────────────────────────────────────
-function getHealthScoreTrend(metaCampaignId, limit = 30, entityType = 'campaign') {
-  return db.all(
+async function getHealthScoreTrend(metaCampaignId, limit = 30, entityType = 'campaign') {
+  const rows = await db.all(
     `SELECT health_score, health_status, calculated_at
      FROM health_score_history
      WHERE entity_meta_id = ? AND entity_type = ?
      ORDER BY calculated_at DESC
      LIMIT ?`,
     [metaCampaignId, entityType, limit]
-  ).reverse(); // chronological order
+  );
+  return rows.reverse(); // chronological order
 }
 
 module.exports = {

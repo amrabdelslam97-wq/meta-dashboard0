@@ -88,7 +88,7 @@ describe('customerJourneyEngine', () => {
   });
 
   describe('getCustomerJourney (read side, no Meta calls)', () => {
-    test('computes real conversion rates between stages from a persisted funnel row', () => {
+    test('computes real conversion rates between stages from a persisted funnel row', async () => {
       const account = insertAccount(testDb);
       const range = { since: '2026-06-01', until: '2026-06-07' };
       testDb.db.run(
@@ -97,7 +97,7 @@ describe('customerJourneyEngine', () => {
         [uuidv4(), account.id, range.since, range.until]
       );
 
-      const result = engine.getCustomerJourney('camp_journey_read', range);
+      const result = await engine.getCustomerJourney('camp_journey_read', range);
       expect(result.funnel.conversations).toBe(40);
       expect(result.funnel.purchases).toBe(15);
       const clicksStage = result.stages.find(s => s.stage === 'clicks');

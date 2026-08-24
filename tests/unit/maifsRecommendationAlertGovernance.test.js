@@ -82,7 +82,7 @@ describe('decisionEngine.persistGovernanceState', () => {
     testDb.cleanup();
   });
 
-  test('persists governance_state onto the matching recommendation_log row, keyed by rule_code + entity_meta_id', () => {
+  test('persists governance_state onto the matching recommendation_log row, keyed by rule_code + entity_meta_id', async () => {
     const recId = uuidv4();
     testDb.db.run(
       `INSERT INTO recommendation_log
@@ -95,13 +95,13 @@ describe('decisionEngine.persistGovernanceState', () => {
       [recId, accountId]
     );
 
-    persistGovernanceState('recommendation_log', 'rule_code', 'LOW_ROAS', 'camp_gov_1', 'failed');
+    await persistGovernanceState('recommendation_log', 'rule_code', 'LOW_ROAS', 'camp_gov_1', 'failed');
 
     const row = testDb.db.get('SELECT governance_state FROM recommendation_log WHERE id = ?', [recId]);
     expect(row.governance_state).toBe('failed');
   });
 
-  test('persists governance_state onto the matching active_alerts row, keyed by alert_code + entity_meta_id', () => {
+  test('persists governance_state onto the matching active_alerts row, keyed by alert_code + entity_meta_id', async () => {
     const alertId = uuidv4();
     testDb.db.run(
       `INSERT INTO active_alerts
@@ -112,13 +112,13 @@ describe('decisionEngine.persistGovernanceState', () => {
       [alertId, accountId]
     );
 
-    persistGovernanceState('active_alerts', 'alert_code', 'CPM_SPIKE', 'camp_gov_2', 'passed');
+    await persistGovernanceState('active_alerts', 'alert_code', 'CPM_SPIKE', 'camp_gov_2', 'passed');
 
     const row = testDb.db.get('SELECT governance_state FROM active_alerts WHERE id = ?', [alertId]);
     expect(row.governance_state).toBe('passed');
   });
 
-  test('decisionsFromRecommendations() downgrades priority to observation_only when governance_state is failed', () => {
+  test('decisionsFromRecommendations() downgrades priority to observation_only when governance_state is failed', async () => {
     const recId = uuidv4();
     testDb.db.run(
       `INSERT INTO recommendation_log
@@ -131,7 +131,7 @@ describe('decisionEngine.persistGovernanceState', () => {
       [recId, accountId]
     );
 
-    const decisions = decisionsFromRecommendations(accountId);
+    const decisions = await decisionsFromRecommendations(accountId);
     const d = decisions.find(x => x.meta_campaign_id === 'camp_gov_3');
     expect(d).toBeDefined();
     expect(d.priority).toBe('observation_only');
@@ -139,7 +139,7 @@ describe('decisionEngine.persistGovernanceState', () => {
     expect(d.governance_state).toBe('failed');
   });
 
-  test('decisionsFromAlerts() downgrades priority to observation_only when governance_state is failed', () => {
+  test('decisionsFromAlerts() downgrades priority to observation_only when governance_state is failed', async () => {
     const alertId = uuidv4();
     testDb.db.run(
       `INSERT INTO active_alerts
@@ -150,7 +150,7 @@ describe('decisionEngine.persistGovernanceState', () => {
       [alertId, accountId]
     );
 
-    const decisions = decisionsFromAlerts(accountId);
+    const decisions = await decisionsFromAlerts(accountId);
     const d = decisions.find(x => x.meta_campaign_id === 'camp_gov_4');
     expect(d).toBeDefined();
     expect(d.priority).toBe('observation_only');

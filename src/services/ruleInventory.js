@@ -44,8 +44,8 @@ function buildNativeEntries() {
   }));
 }
 
-function buildAlertRuleEntries() {
-  const rows = db.all(
+async function buildAlertRuleEntries() {
+  const rows = await db.all(
     `SELECT id, alert_code, alert_name, metric_key, trigger_type, trigger_value, severity, is_active
      FROM alert_rules`
   );
@@ -64,8 +64,8 @@ function buildAlertRuleEntries() {
   }));
 }
 
-function buildRecommendationRuleEntries() {
-  const rows = db.all(
+async function buildRecommendationRuleEntries() {
+  const rows = await db.all(
     `SELECT id, rule_code, rule_name, objective, priority, condition_logic, severity, is_active
      FROM recommendation_rules`
   );
@@ -121,10 +121,10 @@ function buildOpportunityEngineEntries() {
  * a read model over every engine's rules/thresholds, so "what rules exist"
  * has one place to look regardless of which engine evaluates them.
  */
-function getBusinessLogicInventory() {
+async function getBusinessLogicInventory() {
   const native = buildNativeEntries();
-  const alertRules = buildAlertRuleEntries();
-  const recommendationRules = buildRecommendationRuleEntries();
+  const alertRules = await buildAlertRuleEntries();
+  const recommendationRules = await buildRecommendationRuleEntries();
   const diagnosisThresholds = buildDiagnosisEngineEntries();
   const opportunityChecks = buildOpportunityEngineEntries();
 

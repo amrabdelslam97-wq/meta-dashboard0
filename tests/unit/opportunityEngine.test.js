@@ -58,29 +58,29 @@ describe('opportunityEngine.detectAllOpportunities (resolver-driven thresholds, 
   // Exactly the old hardcoded literals (health >= 70, frequency < 3.5) --
   // this proves the resolver-driven default preserves identical behavior
   // to what opportunityEngine.js used before this refactor.
-  test('a campaign at the exact old Ready To Scale boundary still qualifies', () => {
+  test('a campaign at the exact old Ready To Scale boundary still qualifies', async () => {
     insertCampaign('camp_opp_scale', 'traffic');
     insertHealthScore('camp_opp_scale', 'traffic', 70, 3.4);
 
-    const opportunities = detectAllOpportunities(50);
+    const opportunities = await detectAllOpportunities(50);
     const found = opportunities.find(o => o.meta_campaign_id === 'camp_opp_scale' && o.type === 'Ready To Scale');
     expect(found).toBeDefined();
   });
 
-  test('a campaign just below the Ready To Scale health boundary does not qualify', () => {
+  test('a campaign just below the Ready To Scale health boundary does not qualify', async () => {
     insertCampaign('camp_opp_no_scale', 'traffic');
     insertHealthScore('camp_opp_no_scale', 'traffic', 69, 3.0);
 
-    const opportunities = detectAllOpportunities(50);
+    const opportunities = await detectAllOpportunities(50);
     const found = opportunities.find(o => o.meta_campaign_id === 'camp_opp_no_scale' && o.type === 'Ready To Scale');
     expect(found).toBeUndefined();
   });
 
-  test('a campaign with frequency 4.0 (between 3.5 and 6.0) qualifies for Audience Expansion, not Ready To Scale', () => {
+  test('a campaign with frequency 4.0 (between 3.5 and 6.0) qualifies for Audience Expansion, not Ready To Scale', async () => {
     insertCampaign('camp_opp_expand', 'leads');
     insertHealthScore('camp_opp_expand', 'leads', 68, 4.0);
 
-    const opportunities = detectAllOpportunities(50);
+    const opportunities = await detectAllOpportunities(50);
     const types = opportunities.filter(o => o.meta_campaign_id === 'camp_opp_expand').map(o => o.type);
     expect(types).toContain('Audience Expansion');
     expect(types).not.toContain('Ready To Scale');

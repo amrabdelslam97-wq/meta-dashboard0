@@ -149,7 +149,7 @@ async function syncCampaignAnalyticsForRange(adAccountId, metaCampaignId, access
   try {
     summary.apiCalls++;
     const ageGender = await fetchBreakdown(metaCampaignId, accessToken, dateRange.since, dateRange.until, 'age_gender');
-    db.transaction(tx => {
+    await db.transaction(tx => {
       persistBreakdownRows(tx, adAccountId, metaCampaignId, 'age_gender', ageGender.data, dateRange);
       persistBreakdownRows(tx, adAccountId, metaCampaignId, 'age', deriveSingleDimension(ageGender.data, 'age'), dateRange);
       persistBreakdownRows(tx, adAccountId, metaCampaignId, 'gender', deriveSingleDimension(ageGender.data, 'gender'), dateRange);
@@ -166,7 +166,7 @@ async function syncCampaignAnalyticsForRange(adAccountId, metaCampaignId, access
       try {
         summary.apiCalls++;
         const result = await fetchBreakdown(metaCampaignId, accessToken, dateRange.since, dateRange.until, breakdownType);
-        db.transaction(tx => persistBreakdownRows(tx, adAccountId, metaCampaignId, breakdownType, result.data, dateRange));
+        await db.transaction(tx => persistBreakdownRows(tx, adAccountId, metaCampaignId, breakdownType, result.data, dateRange));
         summary.breakdownsSynced++;
       } catch (err) {
         summary.breakdownsFailed++;
@@ -188,7 +188,7 @@ async function syncAccountAnalytics(account, dateRange = defaultRange()) {
   const accessToken = decryptToken(account.access_token_encrypted);
   const prior = priorPeriod(dateRange.since, dateRange.until);
 
-  const campaigns = db.all(
+  const campaigns = await db.all(
     `SELECT c.meta_campaign_id,
             (SELECT MAX(calculated_at) FROM analytics_breakdown_history h WHERE h.entity_meta_id = c.meta_campaign_id) as last_analytics_at
      FROM campaigns c
@@ -230,16 +230,16 @@ async function syncAccountAnalytics(account, dateRange = defaultRange()) {
  * @param {{since:string, until:string}} [dateRange]
  * @returns {{ current: object[], previous: object[], date_range, prior_range, insight }}
  */
-function getBreakdownAnalytics(metaCampaignId, breakdownType, dateRange = defaultRange()) {
+async function getBreakdownAnalytics(metaCampaignId, breakdownType, dateRange = defaultRange()) {
   const prior = priorPeriod(dateRange.since, dateRange.until);
 
-  const current = db.all(
+  const current = await db.all(
     `SELECT * FROM analytics_breakdown_history
      WHERE entity_meta_id = ? AND breakdown_type = ? AND date_since = ? AND date_until = ?
      ORDER BY spend DESC`,
     [metaCampaignId, breakdownType, dateRange.since, dateRange.until]
   );
-  const previous = db.all(
+  const previous = await db.all(
     `SELECT * FROM analytics_breakdown_history
      WHERE entity_meta_id = ? AND breakdown_type = ? AND date_since = ? AND date_until = ?
      ORDER BY spend DESC`,

@@ -43,6 +43,7 @@ function displayBanner(config = {}) {
   const PORT = config.port || 3000;
   const NODE_ENV = config.environment || process.env.NODE_ENV || 'development';
   const DB_PATH = config.dbPath || './data/meta_ads.db';
+  const usingPostgres = !!config.usingPostgres;
   const startTime = config.startTime || new Date();
   const memory = getMemoryUsage();
 
@@ -61,8 +62,12 @@ function displayBanner(config = {}) {
   // Database Status
   console.log('');
   console.log('  DATABASE');
-  console.log('  ✓ SQLite Connected');
-  console.log(`  ✓ Path: ${DB_PATH}`);
+  if (usingPostgres) {
+    console.log('  ✓ PostgreSQL Connected (DATABASE_URL)');
+  } else {
+    console.log('  ✓ SQLite Connected');
+    console.log(`  ✓ Path: ${DB_PATH}`);
+  }
   console.log('  ✓ Migrations Complete');
   console.log('  ✓ Seeds Loaded');
 

@@ -49,7 +49,7 @@ function buildDateFilter(dateRange) {
 // ─────────────────────────────────────────────
 // Get latest health score per entity for one account
 // ─────────────────────────────────────────────
-function getLatestScoresForAccount(accountId, entityType, dateFilter) {
+async function getLatestScoresForAccount(accountId, entityType, dateFilter) {
   const { clause, params } = dateFilter;
   return db.all(
     `SELECT h.entity_meta_id, h.entity_label, h.health_score, h.health_status,
@@ -100,13 +100,13 @@ function weightedScore(entities) {
 // ─────────────────────────────────────────────
 // 1. Portfolio Health Score (across all accounts, campaigns only)
 // ─────────────────────────────────────────────
-function getPortfolioHealth(dateRange) {
-  const accounts   = db.all("SELECT id, meta_account_id, account_name, currency FROM ad_accounts WHERE status='active'");
+async function getPortfolioHealth(dateRange) {
+  const accounts   = await db.all("SELECT id, meta_account_id, account_name, currency FROM ad_accounts WHERE status='active'");
   const df         = buildDateFilter(dateRange);
   const allEntities = [];
 
   for (const acct of accounts) {
-    const scores = getLatestScoresForAccount(acct.id, 'campaign', df);
+    const scores = await getLatestScoresForAccount(acct.id, 'campaign', df);
     allEntities.push(...scores);
   }
 
@@ -127,8 +127,8 @@ function getPortfolioHealth(dateRange) {
 // ─────────────────────────────────────────────
 // 2. Account Rankings (sorted by account health score desc)
 // ─────────────────────────────────────────────
-function getAccountRankings(dateRange) {
-  const accounts = db.all("SELECT id, meta_account_id, account_name, client_label, currency, status FROM ad_accounts ORDER BY account_name");
+async function getAccountRankings(dateRange) {
+  const accounts = await db.all("SELECT id, meta_account_id, account_name, client_label, currency, status FROM ad_accounts ORDER BY account_name");
   const df       = buildDateFilter(dateRange);
 
   // Alert/campaign counts are grouped across ALL accounts in 2 queries
@@ -139,16 +139,19 @@ function getAccountRankings(dateRange) {
   // clause, a snoozed alert still counted here, so the Portfolio page's
   // per-account alert count could exceed the Dashboard's for the same
   // account the moment anyone used the existing Snooze action.
-  for (const row of db.all("SELECT ad_account_id, COUNT(*) as c FROM active_alerts WHERE status='active' AND (snoozed_until IS NULL OR snoozed_until < datetime('now')) GROUP BY ad_account_id")) {
+  for (const row of await db.all("SELECT ad_account_id, COUNT(*) as c FROM active_alerts WHERE status='active' AND (snoozed_until IS NULL OR snoozed_until < datetime('now')) GROUP BY ad_account_id")) {
     alertCountsByAccount.set(row.ad_account_id, row.c);
   }
   const campCountsByAccount = new Map();
-  for (const row of db.all("SELECT ad_account_id, COUNT(*) as total, SUM(CASE WHEN status='active' THEN 1 ELSE 0 END) as active FROM campaigns GROUP BY ad_account_id")) {
+  for (const row of await db.all("SELECT ad_account_id, COUNT(*) as total, SUM(CASE WHEN status='active' THEN 1 ELSE 0 END) as active FROM campaigns GROUP BY ad_account_id")) {
     campCountsByAccount.set(row.ad_account_id, row);
   }
 
-  return accounts.map(acct => {
-    const scores = getLatestScoresForAccount(acct.id, 'campaign', df);
+  // Promise.all is safe here: each account's getLatestScoresForAccount()
+  // read is independent (own account id, no shared mutable state), and
+  // Promise.all preserves the same output order as the .map() it replaces.
+  const rankings = await Promise.all(accounts.map(async acct => {
+    const scores = await getLatestScoresForAccount(acct.id, 'campaign', df);
 
     const alertCount = { c: alertCountsByAccount.get(acct.id) || 0 };
     const campCount = campCountsByAccount.get(acct.id) || { total: 0, active: 0 };
@@ -176,14 +179,16 @@ function getAccountRankings(dateRange) {
         critical:  scores.filter(s => s.health_score  < 40).length,
       },
     };
-  }).sort((a, b) => (b.health_score ?? -1) - (a.health_score ?? -1));
+  }));
+
+  return rankings.sort((a, b) => (b.health_score ?? -1) - (a.health_score ?? -1));
 }
 
 // ─────────────────────────────────────────────
 // 3. Portfolio Summary (counts + distributions)
 // ─────────────────────────────────────────────
-function getPortfolioSummary(dateRange) {
-  const accounts = db.all("SELECT id, meta_account_id, account_name FROM ad_accounts WHERE status='active'");
+async function getPortfolioSummary(dateRange) {
+  const accounts = await db.all("SELECT id, meta_account_id, account_name FROM ad_accounts WHERE status='active'");
   const df       = buildDateFilter(dateRange);
 
   let totalCampaigns   = 0;
@@ -194,11 +199,11 @@ function getPortfolioSummary(dateRange) {
   const worstCampaigns = [];
 
   for (const acct of accounts) {
-    const cc = db.get("SELECT COUNT(*) as t, SUM(CASE WHEN status='active' THEN 1 ELSE 0 END) as a FROM campaigns WHERE ad_account_id=?", [acct.id]);
+    const cc = await db.get("SELECT COUNT(*) as t, SUM(CASE WHEN status='active' THEN 1 ELSE 0 END) as a FROM campaigns WHERE ad_account_id=?", [acct.id]);
     totalCampaigns  += cc?.t || 0;
     activeCampaigns += cc?.a || 0;
 
-    const scores = getLatestScoresForAccount(acct.id, 'campaign', df);
+    const scores = await getLatestScoresForAccount(acct.id, 'campaign', df);
     scoredCampaigns += scores.length;
 
     scores.forEach(s => {
@@ -245,7 +250,7 @@ function getPortfolioSummary(dateRange) {
 // ─────────────────────────────────────────────
 // 4. Cross-Account Alerts
 // ─────────────────────────────────────────────
-function getCrossAccountAlerts() {
+async function getCrossAccountAlerts() {
   return db.all(
     `SELECT a.id, a.alert_code, a.severity, a.entity_label, a.alert_message,
             a.first_detected_at, a.last_detected_at, a.occurrence_count,
@@ -265,10 +270,10 @@ function getCrossAccountAlerts() {
 // ─────────────────────────────────────────────
 // 5. Portfolio Objective Summary
 // ─────────────────────────────────────────────
-function getPortfolioObjectiveSummary(dateRange) {
+async function getPortfolioObjectiveSummary(dateRange) {
   const df      = buildDateFilter(dateRange);
   const { clause, params } = df;
-  const accounts = db.all("SELECT id FROM ad_accounts WHERE status='active'");
+  const accounts = await db.all("SELECT id FROM ad_accounts WHERE status='active'");
 
   // Regression fix: this list still held the pre-taxonomy 5 values
   // ('messaging' instead of 'engagement', no 'app_promotion') after
@@ -283,7 +288,7 @@ function getPortfolioObjectiveSummary(dateRange) {
     const allScores = [];
 
     for (const acct of accounts) {
-      const scores = db.all(
+      const scores = await db.all(
         `SELECT h.entity_meta_id, h.entity_label, h.health_score, h.health_status,
                 h.objective, h.score_breakdown
          FROM health_score_history h

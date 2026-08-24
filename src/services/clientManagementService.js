@@ -14,11 +14,11 @@ function generateId(prefix) {
 /**
  * Create a new client
  */
-function createClient(workspaceId, clientData) {
+async function createClient(workspaceId, clientData) {
   const clientId = generateId('cli');
   const now = new Date().toISOString();
 
-  db.run(`
+  await db.run(`
     INSERT INTO clients (
       id, workspace_id, company_name, logo_url, industry, country,
       currency, timezone, primary_contact, email, phone,
@@ -55,8 +55,8 @@ function createClient(workspaceId, clientData) {
 /**
  * Get client details
  */
-function getClient(clientId) {
-  const client = db.get(`
+async function getClient(clientId) {
+  const client = await db.get(`
     SELECT * FROM clients WHERE id = ?
   `, [clientId]);
 
@@ -73,7 +73,7 @@ function getClient(clientId) {
 /**
  * List clients in workspace
  */
-function listClients(workspaceId, filters = {}) {
+async function listClients(workspaceId, filters = {}) {
   let query = 'SELECT * FROM clients WHERE workspace_id = ?';
   const params = [workspaceId];
 
@@ -95,7 +95,7 @@ function listClients(workspaceId, filters = {}) {
 
   query += ' ORDER BY company_name ASC';
 
-  const clients = db.all(query, params);
+  const clients = await db.all(query, params);
   return clients.map(c => ({
     ...c,
     meta_accounts: c.meta_accounts_json ? JSON.parse(c.meta_accounts_json) : [],
@@ -107,7 +107,7 @@ function listClients(workspaceId, filters = {}) {
 /**
  * Update client
  */
-function updateClient(clientId, clientData) {
+async function updateClient(clientId, clientData) {
   const now = new Date().toISOString();
   const updates = [];
   const params = [];
@@ -146,7 +146,7 @@ function updateClient(clientId, clientData) {
   params.push(now);
   params.push(clientId);
 
-  db.run(
+  await db.run(
     `UPDATE clients SET ${updates.join(', ')} WHERE id = ?`,
     params
   );
@@ -157,8 +157,8 @@ function updateClient(clientId, clientData) {
 /**
  * Add Meta account to client
  */
-function addMetaAccount(clientId, metaAccount) {
-  const client = getClient(clientId);
+async function addMetaAccount(clientId, metaAccount) {
+  const client = await getClient(clientId);
   if (!client) return { error: 'Client not found' };
 
   const accounts = client.meta_accounts || [];
@@ -179,8 +179,8 @@ function addMetaAccount(clientId, metaAccount) {
 /**
  * Add pixel to client
  */
-function addPixel(clientId, pixel) {
-  const client = getClient(clientId);
+async function addPixel(clientId, pixel) {
+  const client = await getClient(clientId);
   if (!client) return { error: 'Client not found' };
 
   const pixels = client.pixels || [];
@@ -200,8 +200,8 @@ function addPixel(clientId, pixel) {
 /**
  * Add domain to client
  */
-function addDomain(clientId, domain) {
-  const client = getClient(clientId);
+async function addDomain(clientId, domain) {
+  const client = await getClient(clientId);
   if (!client) return { error: 'Client not found' };
 
   const domains = client.domains || [];
@@ -222,11 +222,11 @@ function addDomain(clientId, domain) {
 /**
  * Get client statistics
  */
-function getClientStats(clientId) {
-  const client = getClient(clientId);
+async function getClientStats(clientId) {
+  const client = await getClient(clientId);
   if (!client) return null;
 
-  const projects = db.all(
+  const projects = await db.all(
     'SELECT id, status FROM projects WHERE client_id = ?',
     [clientId]
   );
@@ -238,7 +238,7 @@ function getClientStats(clientId) {
     cancelled: projects.filter(p => p.status === 'cancelled').length,
   };
 
-  const campaigns = db.all(`
+  const campaigns = await db.all(`
     SELECT c.id, c.status FROM campaigns c
     INNER JOIN projects p ON c.id = p.campaign_id
     WHERE p.client_id = ?

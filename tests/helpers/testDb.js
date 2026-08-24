@@ -31,6 +31,10 @@ const { runPhase28Migrations } = require('../../src/db/schema.phase28');
 const { runPhase29Migrations } = require('../../src/db/schema.phase29');
 const { runPhase30Migrations } = require('../../src/db/schema.phase30');
 const { runPhase31Migrations } = require('../../src/db/schema.phase31');
+const { runPhase32Migrations } = require('../../src/db/schema.phase32');
+const { runPhase33Migrations } = require('../../src/db/schema.phase33');
+const { runPhase34Migrations } = require('../../src/db/schema.phase34');
+const { runPhase35Migrations } = require('../../src/db/schema.phase35');
 const { seedIntelligenceConfig } = require('../../src/db/seedIntelligence');
 
 /**
@@ -48,32 +52,36 @@ async function createTestDb() {
   );
 
   await database.initializeDatabase(dbPath);
-  runMigrations();
-  runPhase2Migrations();
-  runPhase5Migrations();
-  runPhase6Migrations();
-  runPhase7BMigrations();
-  runPhase8Migrations();
-  runUniqueConstraintsMigration();
-  runPhase11Migrations();
-  runPhase12Migrations();
-  runPhase13Migrations();
-  runPhase14Migrations();
-  runPhase15Migrations();
-  runPhase16Migrations();
-  runPhase17Migrations();
-  runPhase18Migrations();
-  runPhase19Migrations();
-  runPhase20Migrations();
-  runPhase21Migrations();
-  runPhase22Migrations();
-  runPhase23Migrations();
-  runPhase24Migrations();
-  runPhase28Migrations();
-  runPhase29Migrations();
-  runPhase30Migrations();
-  runPhase31Migrations();
-  seedIntelligenceConfig();
+  await runMigrations();
+  await runPhase2Migrations();
+  await runPhase5Migrations();
+  await runPhase6Migrations();
+  await runPhase7BMigrations();
+  await runPhase8Migrations();
+  await runUniqueConstraintsMigration();
+  await runPhase11Migrations();
+  await runPhase12Migrations();
+  await runPhase13Migrations();
+  await runPhase14Migrations();
+  await runPhase15Migrations();
+  await runPhase16Migrations();
+  await runPhase17Migrations();
+  await runPhase18Migrations();
+  await runPhase19Migrations();
+  await runPhase20Migrations();
+  await runPhase21Migrations();
+  await runPhase22Migrations();
+  await runPhase23Migrations();
+  await runPhase24Migrations();
+  await runPhase28Migrations();
+  await runPhase29Migrations();
+  await runPhase30Migrations();
+  await runPhase31Migrations();
+  await runPhase32Migrations();
+  await runPhase33Migrations();
+  await runPhase34Migrations();
+  await runPhase35Migrations();
+  await seedIntelligenceConfig();
 
   return {
     dbPath,

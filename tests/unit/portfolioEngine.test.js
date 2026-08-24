@@ -64,16 +64,16 @@ describe('portfolioEngine', () => {
     testDb.cleanup();
   });
 
-  test('getPortfolioHealth computes a spend-weighted score across all accounts', () => {
-    const result = getPortfolioHealth();
+  test('getPortfolioHealth computes a spend-weighted score across all accounts', async () => {
+    const result = await getPortfolioHealth();
     // Weighted: (90*1000 + 30*500) / 1500 = 70
     expect(result.score).toBe(70);
     expect(result.weighting).toBe('spend_weighted');
     expect(result.status).toBe('good'); // uses the shared scoreToStatus from healthScoreEngine.js (T4-09)
   });
 
-  test('getAccountRankings sorts accounts by health score descending and attaches alert/campaign counts', () => {
-    const rankings = getAccountRankings();
+  test('getAccountRankings sorts accounts by health score descending and attaches alert/campaign counts', async () => {
+    const rankings = await getAccountRankings();
     expect(rankings[0].meta_account_id).toBe('act_portfolio_a'); // 90 > 30
     expect(rankings[0].health_score).toBe(90);
     expect(rankings[0].active_alerts).toBe(0);
@@ -84,7 +84,7 @@ describe('portfolioEngine', () => {
     expect(b.total_campaigns).toBe(1);
   });
 
-  test('getAccountRankings excludes snoozed alerts from active_alerts, matching dashboard.js/alerts.js', () => {
+  test('getAccountRankings excludes snoozed alerts from active_alerts, matching dashboard.js/alerts.js', async () => {
     // Phase 38 -- this query previously counted status='active' alone, so a
     // snoozed alert (still status='active', just temporarily silenced)
     // inflated this count relative to the Dashboard's own alert count for
@@ -96,13 +96,13 @@ describe('portfolioEngine', () => {
       [uuidv4(), accountB]
     );
 
-    const rankings = getAccountRankings();
+    const rankings = await getAccountRankings();
     const b = rankings.find(r => r.meta_account_id === 'act_portfolio_b');
     expect(b.active_alerts).toBe(1); // still 1, not 2 -- the snoozed alert must not count
   });
 
-  test('getPortfolioSummary aggregates health distribution and top/worst campaigns across accounts', () => {
-    const summary = getPortfolioSummary();
+  test('getPortfolioSummary aggregates health distribution and top/worst campaigns across accounts', async () => {
+    const summary = await getPortfolioSummary();
     expect(summary.campaigns.total).toBe(2);
     expect(summary.health_distribution.excellent).toBe(1); // camp_pf_a1 (90)
     expect(summary.health_distribution.critical).toBe(1);  // camp_pf_b1 (30)
@@ -144,16 +144,16 @@ describe('portfolioEngine', () => {
       );
     });
 
-    test('includes a real engagement campaign (not silently dropped under the old "messaging" key)', () => {
-      const summary = getPortfolioObjectiveSummary();
+    test('includes a real engagement campaign (not silently dropped under the old "messaging" key)', async () => {
+      const summary = await getPortfolioObjectiveSummary();
       expect(summary.engagement).toBeDefined();
       expect(summary.engagement.campaign_count).toBe(1);
       expect(summary.engagement.health_score).toBe(75);
       expect(summary.messaging).toBeUndefined();
     });
 
-    test('primary_kpi for engagement/sales is sourced correctly (Conversations/ROAS, not a generic fallback)', () => {
-      const summary = getPortfolioObjectiveSummary();
+    test('primary_kpi for engagement/sales is sourced correctly (Conversations/ROAS, not a generic fallback)', async () => {
+      const summary = await getPortfolioObjectiveSummary();
       expect(summary.engagement.primary_kpi).toEqual({ key: 'results', label: 'Conversations', costKey: 'cpr', costLabel: 'Cost Per Conversation' });
       expect(summary.sales.primary_kpi).toEqual({ key: 'roas', label: 'ROAS', costKey: 'cpa', costLabel: 'Cost Per Purchase' });
     });

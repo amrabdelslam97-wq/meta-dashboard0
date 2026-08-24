@@ -130,7 +130,7 @@ const ALERT_RULES = [
   },
 ];
 
-function seedIntelligenceConfig() {
+async function seedIntelligenceConfig() {
   console.log('[Seed] Seeding intelligence configuration...');
   const now = new Date().toISOString();
 
@@ -144,18 +144,18 @@ function seedIntelligenceConfig() {
   // thresholds are unchanged (kpiProfileResolver.js's engagement profile
   // preserves the old messaging values exactly), so a straight rename is
   // correct. No-ops once already applied (finds zero 'messaging' rows).
-  db.run(`UPDATE objective_scoring_configs SET objective = 'engagement' WHERE objective = 'messaging'`);
+  await db.run(`UPDATE objective_scoring_configs SET objective = 'engagement' WHERE objective = 'messaging'`);
 
   // Idempotent repair: ROAS_BELOW_ONE was originally seeded with
   // objective_scope=NULL (fires on every objective). INSERT OR IGNORE can't
   // fix an already-seeded row's column, so scope it to 'sales' directly --
   // ROAS is only ever a real metric for revenue-tracking campaigns. No-ops
   // once already applied (finds zero remaining NULL-scoped rows).
-  db.run(`UPDATE alert_rules SET objective_scope = 'sales' WHERE alert_code = 'ROAS_BELOW_ONE' AND objective_scope IS NULL`);
+  await db.run(`UPDATE alert_rules SET objective_scope = 'sales' WHERE alert_code = 'ROAS_BELOW_ONE' AND objective_scope IS NULL`);
 
   // ── Scoring Configs ──
   for (const cfg of SCORING_CONFIGS) {
-    db.run(
+    await db.run(
       `INSERT OR IGNORE INTO objective_scoring_configs
         (id, objective, metric_key, weight, comparison_direction,
          excellent_threshold, good_threshold, warning_threshold, critical_threshold,
@@ -173,7 +173,7 @@ function seedIntelligenceConfig() {
 
   // ── Recommendation Rules ──
   for (const rule of RECOMMENDATION_RULES) {
-    db.run(
+    await db.run(
       `INSERT OR IGNORE INTO recommendation_rules
         (id, rule_code, objective, rule_name, priority, condition_logic,
          recommendation_title, recommendation_body, recommendation_type,
@@ -192,7 +192,7 @@ function seedIntelligenceConfig() {
 
   // ── Alert Rules ──
   for (const rule of ALERT_RULES) {
-    db.run(
+    await db.run(
       `INSERT OR IGNORE INTO alert_rules
         (id, alert_code, alert_name, description, metric_key,
          trigger_type, trigger_value, comparison_period,

@@ -44,8 +44,8 @@ const NOT_AVAILABLE_REASON = 'Meta\'s Marketing API exposes only aggregate messa
  * @param {string} metaCampaignId
  * @param {{since:string, until:string}} [dateRange]
  */
-function getConversationAttribution(metaCampaignId, dateRange = defaultRange()) {
-  const { destinations, date_range, note } = getDestinationAttribution(metaCampaignId, dateRange);
+async function getConversationAttribution(metaCampaignId, dateRange = defaultRange()) {
+  const { destinations, date_range, note } = await getDestinationAttribution(metaCampaignId, dateRange);
   const conversationDestinations = destinations.filter(d => CONVERSATION_DESTINATIONS.has(d.destination_type));
 
   if (conversationDestinations.length === 0) {

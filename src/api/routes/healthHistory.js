@@ -26,7 +26,7 @@ router.get('/', asyncHandler(async (req, res) => {
 
   if (entity_meta_id) {
     const acctFilter = account_id ? 'AND ad_account_id = ?' : '';
-    const rows = db.all(
+    const rows = await db.all(
       `SELECT health_score, health_status, score_reference, calculated_at
        FROM health_score_history
        WHERE entity_meta_id = ? AND entity_type = ? ${dateFilter} ${acctFilter}
@@ -38,7 +38,7 @@ router.get('/', asyncHandler(async (req, res) => {
 
   // All campaigns — return latest per campaign for overview
   const acctFilter = account_id ? 'AND h.ad_account_id = ?' : '';
-  const latest = db.all(`
+  const latest = await db.all(`
     SELECT h.entity_meta_id, h.entity_label, h.health_score, h.health_status,
            h.calculated_at, c.name, c.objective
     FROM health_score_history h

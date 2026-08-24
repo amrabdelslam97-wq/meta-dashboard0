@@ -176,25 +176,25 @@ describe('autoSyncScheduler.runDueAccounts', () => {
   // Executive Sync Status per-account breakdown (Task 5 / Task 6)
   // ═══════════════════════════════════════════════════════════════════
   describe('per-account status', () => {
-    test('a disabled account reports scheduler_state "disabled" with no next_scheduled_sync_at', () => {
+    test('a disabled account reports scheduler_state "disabled" with no next_scheduled_sync_at', async () => {
       const account = insertAccount(testDb, { auto_sync_enabled: false });
-      const rows = getPerAccountStatus();
+      const rows = await getPerAccountStatus();
       const row = rows.find(r => r.id === account.id);
       expect(row.auto_sync_enabled).toBe(false);
       expect(row.scheduler_state).toBe('disabled');
       expect(row.next_scheduled_sync_at).toBeNull();
     });
 
-    test('a disconnected account reports scheduler_state "disconnected" even if auto_sync_enabled=1', () => {
+    test('a disconnected account reports scheduler_state "disconnected" even if auto_sync_enabled=1', async () => {
       const account = insertAccount(testDb, { auto_sync_enabled: true });
       testDb.db.run(`UPDATE ad_accounts SET status = 'disconnected' WHERE id = ?`, [account.id]);
-      const row = getPerAccountStatus().find(r => r.id === account.id);
+      const row = (await getPerAccountStatus()).find(r => r.id === account.id);
       expect(row.scheduler_state).toBe('disconnected');
     });
 
-    test('an enabled, never-synced account reports "due now" and is discoverable via getSchedulerStatus().per_account', () => {
+    test('an enabled, never-synced account reports "due now" and is discoverable via getSchedulerStatus().per_account', async () => {
       const account = insertAccount(testDb, { auto_sync_enabled: true, auto_sync_interval_minutes: 60, last_sync_completed_at: null });
-      const status = getSchedulerStatus();
+      const status = await getSchedulerStatus();
       const row = status.per_account.find(r => r.id === account.id);
       expect(row).toBeDefined();
       expect(row.auto_sync_enabled).toBe(true);
@@ -205,11 +205,11 @@ describe('autoSyncScheduler.runDueAccounts', () => {
     test('an account currently mid-sync reports scheduler_state "syncing" and its current tier', async () => {
       const account = insertAccount(testDb, { auto_sync_enabled: true, auto_sync_interval_minutes: 5, last_sync_completed_at: null });
       nock(BASE).get(`/${VERSION}/${account.meta_account_id}/campaigns`).query(true)
-        .reply(function () {
+        .reply(async function () {
           // Snapshot per-account status WHILE this request is in flight --
           // proves scheduler_state/current_sync_tier reflect the live cycle,
           // not just a post-hoc read.
-          const row = getPerAccountStatus().find(r => r.id === account.id);
+          const row = (await getPerAccountStatus()).find(r => r.id === account.id);
           expect(row.scheduler_state).toBe('syncing');
           expect(row.current_sync_tier).toBe('campaigns');
           return [200, { data: [] }];
@@ -221,7 +221,7 @@ describe('autoSyncScheduler.runDueAccounts', () => {
       await runDueAccounts();
 
       // After the cycle completes, no longer "syncing".
-      const after = getPerAccountStatus().find(r => r.id === account.id);
+      const after = (await getPerAccountStatus()).find(r => r.id === account.id);
       expect(after.scheduler_state).not.toBe('syncing');
     });
   });

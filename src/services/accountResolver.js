@@ -14,7 +14,7 @@
 
 const db = require('../db/database');
 
-function resolveAccount(req) {
+async function resolveAccount(req) {
   const accountId = req.query?.account_id || req.body?.account_id;
   if (accountId) return db.get('SELECT id FROM ad_accounts WHERE id = ?', [accountId]);
   return db.get("SELECT id FROM ad_accounts WHERE status = 'active' LIMIT 1");

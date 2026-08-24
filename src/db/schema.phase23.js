@@ -15,11 +15,11 @@ const { ensureMigrationsTable, markMigrationApplied, isMigrationApplied } = requ
 
 const MIGRATION_NAME = 'phase23_audience_intelligence_scoring';
 
-function runPhase23Migrations() {
-  ensureMigrationsTable();
-  const alreadyApplied = isMigrationApplied(MIGRATION_NAME);
+async function runPhase23Migrations() {
+  await ensureMigrationsTable();
+  const alreadyApplied = await isMigrationApplied(MIGRATION_NAME);
 
-  db.run(`
+  await db.run(`
     CREATE TABLE IF NOT EXISTS audience_score_history (
       id                   TEXT PRIMARY KEY,
       ad_account_id        TEXT NOT NULL,
@@ -47,10 +47,10 @@ function runPhase23Migrations() {
       UNIQUE(ad_account_id, meta_campaign_id, dimension, segment_value, date_since, date_until)
     )
   `);
-  db.run(`CREATE INDEX IF NOT EXISTS idx_audience_score_lookup ON audience_score_history(ad_account_id, meta_campaign_id, dimension, date_since)`);
-  db.run(`CREATE INDEX IF NOT EXISTS idx_audience_score_ranking ON audience_score_history(meta_campaign_id, dimension, overall_score DESC)`);
+  await db.run(`CREATE INDEX IF NOT EXISTS idx_audience_score_lookup ON audience_score_history(ad_account_id, meta_campaign_id, dimension, date_since)`);
+  await db.run(`CREATE INDEX IF NOT EXISTS idx_audience_score_ranking ON audience_score_history(meta_campaign_id, dimension, overall_score DESC)`);
 
-  db.run(`
+  await db.run(`
     CREATE TABLE IF NOT EXISTS audience_diagnostics (
       id                   TEXT PRIMARY KEY,
       ad_account_id        TEXT NOT NULL,
@@ -65,9 +65,9 @@ function runPhase23Migrations() {
       UNIQUE(ad_account_id, meta_campaign_id, dimension, date_since, date_until)
     )
   `);
-  db.run(`CREATE INDEX IF NOT EXISTS idx_audience_diagnostics_lookup ON audience_diagnostics(ad_account_id, meta_campaign_id, date_since)`);
+  await db.run(`CREATE INDEX IF NOT EXISTS idx_audience_diagnostics_lookup ON audience_diagnostics(ad_account_id, meta_campaign_id, date_since)`);
 
-  db.run(`
+  await db.run(`
     CREATE TABLE IF NOT EXISTS audience_opportunities (
       id                   TEXT PRIMARY KEY,
       ad_account_id        TEXT NOT NULL,
@@ -83,12 +83,12 @@ function runPhase23Migrations() {
       UNIQUE(ad_account_id, meta_campaign_id, date_since, date_until)
     )
   `);
-  db.run(`CREATE INDEX IF NOT EXISTS idx_audience_opportunities_lookup ON audience_opportunities(ad_account_id, meta_campaign_id, date_since)`);
+  await db.run(`CREATE INDEX IF NOT EXISTS idx_audience_opportunities_lookup ON audience_opportunities(ad_account_id, meta_campaign_id, date_since)`);
 
-  markMigrationApplied(MIGRATION_NAME);
+  await markMigrationApplied(MIGRATION_NAME);
 
   if (!alreadyApplied) {
-    db.persist();
+    await db.persist();
     console.log('[DB] Phase 23 migration complete — audience scoring and diagnostics tables created.');
   } else {
     console.log('[DB] Phase 23 schema: audience tables already present, skipping.');

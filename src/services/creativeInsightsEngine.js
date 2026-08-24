@@ -40,8 +40,8 @@ const COMPONENT_LABELS = {
 /**
  * Generate comprehensive AI insights for a creative.
  */
-function generateCreativeInsights(metaAdId) {
-  const analytics = db.get(
+async function generateCreativeInsights(metaAdId) {
+  const analytics = await db.get(
     `SELECT * FROM creative_analytics WHERE meta_ad_id = ? ORDER BY date_until DESC LIMIT 1`,
     [metaAdId]
   );
@@ -53,8 +53,8 @@ function generateCreativeInsights(metaAdId) {
     };
   }
 
-  const score = calculateCreativeScore(metaAdId);
-  const fatigue = detectCreativeFatigue(metaAdId);
+  const score = await calculateCreativeScore(metaAdId);
+  const fatigue = await detectCreativeFatigue(metaAdId);
 
   const insights = {
     meta_ad_id: metaAdId,
@@ -159,15 +159,15 @@ function generateCreativeInsights(metaAdId) {
 /**
  * Compare two creatives within a campaign.
  */
-function compareCreatives(metaAdId1, metaAdId2) {
-  const creative1 = db.get(
+async function compareCreatives(metaAdId1, metaAdId2) {
+  const creative1 = await db.get(
     `SELECT ca.*, a.name FROM creative_analytics ca
      JOIN ads a ON a.meta_ad_id = ca.meta_ad_id
      WHERE ca.meta_ad_id = ? ORDER BY ca.date_until DESC LIMIT 1`,
     [metaAdId1]
   );
 
-  const creative2 = db.get(
+  const creative2 = await db.get(
     `SELECT ca.*, a.name FROM creative_analytics ca
      JOIN ads a ON a.meta_ad_id = ca.meta_ad_id
      WHERE ca.meta_ad_id = ? ORDER BY ca.date_until DESC LIMIT 1`,

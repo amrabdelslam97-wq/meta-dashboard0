@@ -49,7 +49,7 @@ async function syncAccountCustomerJourney(account, dateRange = defaultRange()) {
   const accessToken = decryptToken(account.access_token_encrypted);
   const summary = { campaignsProcessed: 0, apiCalls: 0, errors: [] };
 
-  const campaigns = db.all(
+  const campaigns = await db.all(
     `SELECT meta_campaign_id FROM campaigns WHERE ad_account_id = ? AND status = 'active'`,
     [account.id]
   );
@@ -75,7 +75,7 @@ async function syncAccountCustomerJourney(account, dateRange = defaultRange()) {
       // metricsFetcher.parseActions()'s goal-aware resolution). Purchases
       // is a genuinely separate, independently-resolved bucket from the
       // same Meta response, not a duplicate of results.
-      db.transaction(tx => tx.run(
+      await db.transaction(tx => tx.run(
         `INSERT INTO customer_journey_funnel (id, ad_account_id, meta_campaign_id, date_since, date_until, impressions, reach, clicks, landing_page_views, conversations, purchases, revenue, calculated_at)
          VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
          ON CONFLICT(ad_account_id, meta_campaign_id, date_since, date_until) DO UPDATE SET
@@ -104,8 +104,8 @@ async function syncAccountCustomerJourney(account, dateRange = defaultRange()) {
  * Read side: get funnel data for a campaign. Returns aggregate funnel
  * counts and conversion rates between each stage.
  */
-function getCustomerJourney(metaCampaignId, dateRange = defaultRange()) {
-  const row = db.get(
+async function getCustomerJourney(metaCampaignId, dateRange = defaultRange()) {
+  const row = await db.get(
     `SELECT * FROM customer_journey_funnel
      WHERE meta_campaign_id = ? AND date_since = ? AND date_until = ?`,
     [metaCampaignId, dateRange.since, dateRange.until]

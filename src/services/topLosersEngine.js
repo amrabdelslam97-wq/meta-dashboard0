@@ -81,12 +81,12 @@ function buildProblems(score, trend, alerts, frequency, recCount) {
  * for every campaign, instead of 3-4 queries PER campaign) -- see the
  * loaders' own comments in topWinnersEngine.js for why.
  */
-function getTopLosers(limit = 5, accountId = null) {
+async function getTopLosers(limit = 5, accountId = null) {
   // effective_status included for display only (not filtered on) -- a
   // paused/non-delivering campaign remains legitimately informative here
   // (e.g. "this is why it was paused"), unlike Winners which implies an
   // active scale/reallocate-budget candidate.
-  const campaigns = db.all(`
+  const campaigns = await db.all(`
     SELECT c.id, c.meta_campaign_id, c.name, c.objective, c.status, c.effective_status,
            c.ad_account_id, a.account_name, a.currency
     FROM campaigns c
@@ -95,11 +95,11 @@ function getTopLosers(limit = 5, accountId = null) {
     ${accountId ? 'AND c.ad_account_id = ?' : ''}
   `, accountId ? [accountId] : []);
 
-  const latestScores = loadLatestScoresMap('campaign');
-  const scoreHistories = loadScoreHistoryMap('campaign', 10);
-  const alertCountsByEntity = loadAlertCountsMap();
+  const latestScores = await loadLatestScoresMap('campaign');
+  const scoreHistories = await loadScoreHistoryMap('campaign', 10);
+  const alertCountsByEntity = await loadAlertCountsMap();
   // Losers additionally exclude recommendations already marked action_taken.
-  const recCountsByEntity = loadRecommendationCountsMap({ excludeActionTaken: true });
+  const recCountsByEntity = await loadRecommendationCountsMap({ excludeActionTaken: true });
 
   const results = [];
 

@@ -18,24 +18,24 @@ const { ensureMigrationsTable, markMigrationApplied } = require('./migrationTrac
 
 const MIGRATION_NAME = 'phase17_lifecycle_backfill_tracking';
 
-function runPhase17Migrations() {
-  ensureMigrationsTable();
-  const existingCols = db.all("PRAGMA table_info(ad_accounts)").map(c => c.name);
+async function runPhase17Migrations() {
+  await ensureMigrationsTable();
+  const existingCols = (await db.all("PRAGMA table_info(ad_accounts)")).map(c => c.name);
 
   let added = 0;
   if (!existingCols.includes('lifecycle_backfill_completed_at')) {
     try {
-      db.run(`ALTER TABLE ad_accounts ADD COLUMN lifecycle_backfill_completed_at TEXT`);
+      await db.run(`ALTER TABLE ad_accounts ADD COLUMN lifecycle_backfill_completed_at TEXT`);
       added++;
     } catch (err) {
       console.warn('[DB] Phase 17: could not add lifecycle_backfill_completed_at column:', err.message);
     }
   }
 
-  markMigrationApplied(MIGRATION_NAME);
+  await markMigrationApplied(MIGRATION_NAME);
 
   if (added > 0) {
-    db.persist();
+    await db.persist();
     console.log('[DB] Phase 17 migration complete — added lifecycle_backfill_completed_at to ad_accounts.');
   } else {
     console.log('[DB] Phase 17 schema: lifecycle_backfill_completed_at already present, skipping.');

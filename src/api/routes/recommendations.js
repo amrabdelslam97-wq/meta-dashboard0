@@ -47,11 +47,11 @@ router.get('/', asyncHandler(async (req, res) => {
 
   const where = conditions.length ? 'WHERE ' + conditions.join(' AND ') : '';
 
-  const total = db.get(
+  const total = await db.get(
     `SELECT COUNT(*) as c FROM recommendation_log r ${where}`, params
   );
 
-  const rows = db.all(
+  const rows = await db.all(
     `SELECT
        r.id, r.rule_code, r.entity_meta_id, r.entity_label,
        r.objective, r.severity, r.recommendation_title, r.recommendation_body,
@@ -89,7 +89,7 @@ router.patch('/:id', asyncHandler(async (req, res) => {
   const { action_taken, action_notes, dismiss } = req.body || {};
   const now = new Date().toISOString();
 
-  const rec = db.get('SELECT id FROM recommendation_log WHERE id = ?', [id]);
+  const rec = await db.get('SELECT id FROM recommendation_log WHERE id = ?', [id]);
   if (!rec) return res.status(404).json({ error: 'Recommendation not found' });
 
   // Accept both a real boolean (JSON body) and the string "true" (a
@@ -105,22 +105,22 @@ router.patch('/:id', asyncHandler(async (req, res) => {
   // with "no such column: updated_at" (found via live verification against
   // a real database, not part of the original audit findings).
   if (dismiss === true || dismiss === 'true') {
-    db.run('UPDATE recommendation_log SET dismissed_at = ? WHERE id = ?',
+    await db.run('UPDATE recommendation_log SET dismissed_at = ? WHERE id = ?',
       [now, id]);
   }
   if (action_taken !== undefined) {
-    db.run(
+    await db.run(
       `UPDATE recommendation_log
        SET action_taken = ?, action_taken_at = ? WHERE id = ?`,
       [action_taken ? 1 : 0, action_taken ? now : null, id]
     );
   }
   if (action_notes !== undefined) {
-    db.run('UPDATE recommendation_log SET action_notes = ? WHERE id = ?',
+    await db.run('UPDATE recommendation_log SET action_notes = ? WHERE id = ?',
       [action_notes, id]);
   }
 
-  const updated = db.get('SELECT * FROM recommendation_log WHERE id = ?', [id]);
+  const updated = await db.get('SELECT * FROM recommendation_log WHERE id = ?', [id]);
   return res.json({ data: { ...updated, action_taken: Boolean(updated.action_taken) } });
 }));
 

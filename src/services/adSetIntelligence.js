@@ -34,9 +34,9 @@ function stableIndexFromId(id) {
 // ─────────────────────────────────────────────
 // Load ad set + parent campaign from DB
 // ─────────────────────────────────────────────
-function loadAdSetWithParent(id) {
+async function loadAdSetWithParent(id) {
   // Accept internal UUID or meta_adset_id
-  const adSet = db.get(
+  const adSet = await db.get(
     `SELECT s.*, a.access_token_encrypted, a.id as internal_account_id,
             a.meta_account_id, a.account_name, a.currency, a.attribution_window_days
      FROM ad_sets s
@@ -45,9 +45,18 @@ function loadAdSetWithParent(id) {
     [id, id]
   );
   if (!adSet) return null;
-  adSet.access_token_encrypted = decryptToken(adSet.access_token_encrypted);
+  // See adIntelligence.js's loadAdWithParent() for the full explanation --
+  // same eager, unconditional decrypt (previously ran before useMock was
+  // even checked, crashing mock-mode callers too), same fix: a failed
+  // decrypt degrades exactly like "no token stored" rather than throwing.
+  try {
+    adSet.access_token_encrypted = decryptToken(adSet.access_token_encrypted);
+  } catch (err) {
+    console.warn(`[AdSetIntelligence] Failed to decrypt access token for ad set ${adSet.meta_adset_id}: ${err.message}`);
+    adSet.access_token_encrypted = null;
+  }
 
-  const campaign = db.get(
+  const campaign = await db.get(
     `SELECT id, meta_campaign_id, name, objective, status
      FROM campaigns WHERE id = ?`,
     [adSet.campaign_id]
@@ -87,7 +96,7 @@ function getMockAdSetMetrics(objective, index = 0) {
 async function runAdSetIntelligence(adSetId, options = {}) {
   const { useMock = false, dateRange } = options;
 
-  const loaded = loadAdSetWithParent(adSetId);
+  const loaded = await loadAdSetWithParent(adSetId);
   if (!loaded) return null;
 
   const { adSet, campaign } = loaded;
@@ -195,7 +204,7 @@ async function runAdSetIntelligence(adSetId, options = {}) {
   // runScoringPipeline unchanged.
   const {
     intelligence, diagnosis, ruleEngineResult, governance,
-  } = orchestrateIntelligence({
+  } = await orchestrateIntelligence({
     campaign: entity,
     entityType: 'ad_set',
     adAccountId,
@@ -256,7 +265,7 @@ async function runAdSetIntelligence(adSetId, options = {}) {
 // ─────────────────────────────────────────────
 // Get ad sets list with latest health scores
 // ─────────────────────────────────────────────
-function getAdSetsList(filters = {}) {
+async function getAdSetsList(filters = {}) {
   const { campaign_id, account_id, status, optimization_goal } = filters;
 
   const conditions = [];
@@ -264,7 +273,7 @@ function getAdSetsList(filters = {}) {
 
   if (campaign_id) {
     // Accept internal UUID or meta_campaign_id
-    const camp = db.get('SELECT id FROM campaigns WHERE id = ? OR meta_campaign_id = ?', [campaign_id, campaign_id]);
+    const camp = await db.get('SELECT id FROM campaigns WHERE id = ? OR meta_campaign_id = ?', [campaign_id, campaign_id]);
     if (camp) { conditions.push('s.campaign_id = ?'); params.push(camp.id); }
   }
   if (account_id) { conditions.push('s.ad_account_id = ?'); params.push(account_id); }
@@ -275,7 +284,7 @@ function getAdSetsList(filters = {}) {
 
   // Latest health score is joined in-query instead of one extra db.get()
   // per row in a .map() (same N+1 fix as adIntelligence.getAdsList).
-  const adSets = db.all(
+  const adSets = await db.all(
     `SELECT
        s.id, s.meta_adset_id, s.name, s.status, s.effective_status,
        s.daily_budget, s.lifetime_budget, s.optimization_goal,

@@ -7,7 +7,6 @@
 require('dotenv').config();
 
 const express = require('express');
-const session = require('express-session');
 const helmet  = require('helmet');
 const cors    = require('cors');
 const rateLimit = require('express-rate-limit');
@@ -38,6 +37,10 @@ const { runPhase28Migrations } = require('./db/schema.phase28');
 const { runPhase29Migrations } = require('./db/schema.phase29');
 const { runPhase30Migrations } = require('./db/schema.phase30');
 const { runPhase31Migrations } = require('./db/schema.phase31');
+const { runPhase32Migrations } = require('./db/schema.phase32');
+const { runPhase33Migrations } = require('./db/schema.phase33');
+const { runPhase34Migrations } = require('./db/schema.phase34');
+const { runPhase35Migrations } = require('./db/schema.phase35');
 const { seedIntelligenceConfig } = require('./db/seedIntelligence');
 const { startAutoSyncScheduler } = require('./services/autoSyncScheduler');
 const { recoverInterruptedSyncs } = require('./services/syncService');
@@ -45,6 +48,7 @@ const { encryptLegacyTokens }    = require('./db/encryptLegacyTokens');
 const { requireEncryptionKey }   = require('./services/tokenCrypto');
 const { requireAuth, requireSessionSecret } = require('./middleware/auth');
 const authRouter                 = require('./api/routes/auth');
+const cronRouter                 = require('./api/routes/cron');
 const apiRouter                  = require('./api/router');
 const { errorHandler }           = require('./middleware/errorHandler');
 const { parseAllowedOrigins, requestOrigin, isOriginAllowed } = require('./middleware/corsOriginPolicy');
@@ -79,39 +83,43 @@ async function initializeApp(dbPath = DB_PATH) {
   requireEncryptionKey();
   requireSessionSecret();
   await initializeDatabase(dbPath);
-  runMigrations();
-  runPhase2Migrations();
-  runPhase5Migrations();
-  runPhase6Migrations();
-  runPhase7BMigrations();
-  runPhase8Migrations();
-  runUniqueConstraintsMigration();
-  runPhase11Migrations();
-  runPhase12Migrations();
-  runPhase13Migrations();
-  runPhase14Migrations();
-  runPhase15Migrations();
-  runPhase16Migrations();
-  runPhase17Migrations();
-  runPhase18Migrations();
-  runPhase19Migrations();
-  runPhase20Migrations();
-  runPhase21Migrations();
-  runPhase22Migrations();
-  runPhase23Migrations();
-  runPhase24Migrations();
-  runPhase28Migrations();
-  runPhase29Migrations();
-  runPhase30Migrations();
-  runPhase31Migrations();
-  encryptLegacyTokens();
-  seedIntelligenceConfig();
+  await runMigrations();
+  await runPhase2Migrations();
+  await runPhase5Migrations();
+  await runPhase6Migrations();
+  await runPhase7BMigrations();
+  await runPhase8Migrations();
+  await runUniqueConstraintsMigration();
+  await runPhase11Migrations();
+  await runPhase12Migrations();
+  await runPhase13Migrations();
+  await runPhase14Migrations();
+  await runPhase15Migrations();
+  await runPhase16Migrations();
+  await runPhase17Migrations();
+  await runPhase18Migrations();
+  await runPhase19Migrations();
+  await runPhase20Migrations();
+  await runPhase21Migrations();
+  await runPhase22Migrations();
+  await runPhase23Migrations();
+  await runPhase24Migrations();
+  await runPhase28Migrations();
+  await runPhase29Migrations();
+  await runPhase30Migrations();
+  await runPhase31Migrations();
+  await runPhase32Migrations();
+  await runPhase33Migrations();
+  await runPhase34Migrations();
+  await runPhase35Migrations();
+  await encryptLegacyTokens();
+  await seedIntelligenceConfig();
 
   // Task 2 — Automatic Recovery For Interrupted Sync. Must run after every
   // migration (needs the full ad_accounts column set) and before the
   // scheduler starts (start(), below) so no account is ever left stuck in
   // last_sync_status='running' from a prior ungraceful shutdown.
-  const recovery = recoverInterruptedSyncs();
+  const recovery = await recoverInterruptedSyncs();
   if (recovery.recovered > 0) {
     console.log(`[Sync] Recovered ${recovery.recovered} interrupted sync(s) on startup.`);
   }
@@ -163,22 +171,15 @@ function createApp() {
     });
   }));
 
-  // Session cookie (Phase 48 — Authentication). In-memory store is a
-  // deliberate, accepted tradeoff: this is a single-user system by design
-  // (see CLAUDE.md) so there is only ever 0-1 active sessions, and a
-  // restart simply requires logging in again -- not a real cost here.
-  app.use(session({
-    name: 'sid',
-    secret: process.env.SESSION_SECRET,
-    resave: false,
-    saveUninitialized: false,
-    cookie: {
-      httpOnly: true,
-      secure: process.env.NODE_ENV === 'production',
-      sameSite: 'lax',
-      maxAge: 30 * 24 * 60 * 60 * 1000, // 30 days
-    },
-  }));
+  // Auth cookie (Phase 48 — Authentication; stateless since the Vercel
+  // migration work). No session middleware is mounted here: login/logout/
+  // status (auth.js routes) and requireAuth (middleware/auth.js) manage a
+  // stateless, HMAC-signed cookie directly via middleware/statelessAuth.js
+  // -- see that file's header for why server-side session storage was
+  // never actually required (req.session held exactly one boolean
+  // anywhere in this codebase). Same cookie name ('sid'), same 30-day
+  // expiry, same httpOnly/secure/sameSite flags as the previous
+  // express-session config -- no client-visible behavior change.
 
   // Rate limiting: general API traffic gets a generous ceiling; the
   // Meta sync endpoint (which fans out into many Graph API calls per
@@ -222,6 +223,10 @@ function createApp() {
   // healthcheck target -- excluded inside requireAuth itself).
   app.use('/api/v1/sync', syncLimiter);
   app.use('/api/v1/auth', authRouter);
+  // /api/cron is authenticated by its own Bearer-token check (cronAuth.js),
+  // never by the cookie-based requireAuth below -- a Vercel Cron invocation
+  // has no browser session. See api/routes/cron.js's header.
+  app.use('/api/cron', cronRouter);
   app.use('/api/v1', apiLimiter, requireAuth, apiRouter);
 
   // SPA fallback — all non-API routes serve index.html
@@ -249,6 +254,7 @@ async function start() {
       port: PORT,
       environment: process.env.NODE_ENV || 'development',
       dbPath: DB_PATH,
+      usingPostgres: !!process.env.DATABASE_URL,
       startTime: new Date(),
     });
   });

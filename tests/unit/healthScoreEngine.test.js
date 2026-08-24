@@ -79,10 +79,10 @@ describe('healthScoreEngine.calculateHealthScore', () => {
     testDb.cleanup();
   });
 
-  test('all engagement metrics present and excellent -> perfect score', () => {
+  test('all engagement metrics present and excellent -> perfect score', async () => {
     const campaign = { meta_campaign_id: 'camp_test_1', name: 'Test Campaign', objective: 'engagement' };
     const metrics = { cpr: 5, ctr: 3, frequency: 2.5, reach: 5000 };
-    const result = calculateHealthScore(campaign, metrics, 'test-account-id');
+    const result = await calculateHealthScore(campaign, metrics, 'test-account-id');
     expect(result.health_score).toBe(100);
     expect(result.health_status).toBe('excellent');
     expect(result.score_reference).toBe('platform_default');
@@ -97,36 +97,36 @@ describe('healthScoreEngine.calculateHealthScore', () => {
   // 30/0.3 = 100, identical to full coverage). The fixed formula blends
   // toward neutral (50) proportional to the *missing* 0.70 of weight,
   // producing 65 instead -- this is the exact bug this test guards against.
-  test('partial metric coverage blends toward neutral instead of extrapolating from one metric (T4-01)', () => {
+  test('partial metric coverage blends toward neutral instead of extrapolating from one metric (T4-01)', async () => {
     const campaign = { meta_campaign_id: 'camp_test_2', name: 'Partial Data Campaign', objective: 'engagement' };
     const metrics = { ctr: 3 }; // only CTR present; cpr/frequency/reach missing
-    const result = calculateHealthScore(campaign, metrics, 'test-account-id');
+    const result = await calculateHealthScore(campaign, metrics, 'test-account-id');
     expect(result.health_score).toBe(65);
     expect(result.health_status).toBe('good');
     expect(result.breakdown.cpr).toEqual({ value: null, normalized: null, weight: 0.40 });
   });
 
-  test('no metrics at all yields the fully neutral 50 score', () => {
+  test('no metrics at all yields the fully neutral 50 score', async () => {
     const campaign = { meta_campaign_id: 'camp_test_3', name: 'No Data Campaign', objective: 'leads' };
-    const result = calculateHealthScore(campaign, {}, 'test-account-id');
+    const result = await calculateHealthScore(campaign, {}, 'test-account-id');
     expect(result.health_score).toBe(50);
     expect(result.health_status).toBe('warning');
   });
 
-  test('unknown objective with no scoring config returns neutral score with a note', () => {
+  test('unknown objective with no scoring config returns neutral score with a note', async () => {
     const campaign = { meta_campaign_id: 'camp_test_4', name: 'Unknown Objective', objective: 'not_a_real_objective' };
-    const result = calculateHealthScore(campaign, { ctr: 5 }, 'test-account-id');
+    const result = await calculateHealthScore(campaign, { ctr: 5 }, 'test-account-id');
     expect(result.health_score).toBe(50);
     expect(result.health_status).toBe('warning');
     expect(result.note).toMatch(/No scoring config found/);
   });
 
-  test('worst-case metrics across the board produce a critical score', () => {
+  test('worst-case metrics across the board produce a critical score', async () => {
     const campaign = { meta_campaign_id: 'camp_test_5', name: 'Bad Campaign', objective: 'sales' };
     // sales: roas (higher, excellent 4/critical 0.5), cpa (lower, excellent 20/critical 250),
     // purchases (higher, excellent 20/critical 0), ctr (higher, excellent 3/critical 0.5)
     const metrics = { roas: 0.1, cpa: 500, purchases: 0, ctr: 0 };
-    const result = calculateHealthScore(campaign, metrics, 'test-account-id');
+    const result = await calculateHealthScore(campaign, metrics, 'test-account-id');
     expect(result.health_score).toBe(0);
     expect(result.health_status).toBe('critical');
   });
@@ -145,29 +145,29 @@ describe('healthScoreEngine.saveHealthScore + getHealthScoreTrend', () => {
 
   const campaign = { meta_campaign_id: 'camp_trend_test', name: 'Trend Campaign', objective: 'engagement' };
 
-  test('saveHealthScore writes a new row and getHealthScoreTrend reads it back', () => {
+  test('saveHealthScore writes a new row and getHealthScoreTrend reads it back', async () => {
     const result = { health_score: 72, health_status: 'good', score_reference: 'platform_default', breakdown: {} };
-    saveHealthScore(campaign, 'acct-1', result, 'campaign');
+    await saveHealthScore(campaign, 'acct-1', result, 'campaign');
 
-    const trend = getHealthScoreTrend('camp_trend_test', 30, 'campaign');
+    const trend = await getHealthScoreTrend('camp_trend_test', 30, 'campaign');
     expect(trend.length).toBe(1);
     expect(trend[0].health_score).toBe(72);
     expect(trend[0].health_status).toBe('good');
   });
 
-  test('saveHealthScore dedups an identical score recorded within the skip window', () => {
+  test('saveHealthScore dedups an identical score recorded within the skip window', async () => {
     const result = { health_score: 72, health_status: 'good', score_reference: 'platform_default', breakdown: {} };
-    saveHealthScore(campaign, 'acct-1', result, 'campaign'); // identical to the row already written above
+    await saveHealthScore(campaign, 'acct-1', result, 'campaign'); // identical to the row already written above
 
-    const trend = getHealthScoreTrend('camp_trend_test', 30, 'campaign');
+    const trend = await getHealthScoreTrend('camp_trend_test', 30, 'campaign');
     expect(trend.length).toBe(1); // still just the one row, not two
   });
 
-  test('saveHealthScore writes a new row when the score actually changes', () => {
+  test('saveHealthScore writes a new row when the score actually changes', async () => {
     const changed = { health_score: 45, health_status: 'warning', score_reference: 'platform_default', breakdown: {} };
-    saveHealthScore(campaign, 'acct-1', changed, 'campaign');
+    await saveHealthScore(campaign, 'acct-1', changed, 'campaign');
 
-    const trend = getHealthScoreTrend('camp_trend_test', 30, 'campaign');
+    const trend = await getHealthScoreTrend('camp_trend_test', 30, 'campaign');
     expect(trend.length).toBe(2);
     expect(trend[1].health_score).toBe(45); // chronological order, most recent last
   });

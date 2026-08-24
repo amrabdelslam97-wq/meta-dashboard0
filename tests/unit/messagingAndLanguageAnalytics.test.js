@@ -20,7 +20,7 @@ describe('messagingAnalytics.getMessagingDestinationAnalytics', () => {
 
   afterEach(() => { testDb.db.run('DELETE FROM creative_analytics'); });
 
-  test('groups persisted creative_analytics rows by destination_type and computes cost per conversation', () => {
+  test('groups persisted creative_analytics rows by destination_type and computes cost per conversation', async () => {
     const range = { since: '2026-06-01', until: '2026-06-07' };
     const now = new Date().toISOString();
     const insert = (destType, spend, results) => testDb.db.run(
@@ -32,7 +32,7 @@ describe('messagingAnalytics.getMessagingDestinationAnalytics', () => {
     insert('WHATSAPP', 50, 10);
     insert('MESSENGER', 80, 8);
 
-    const result = messagingAnalytics.getMessagingDestinationAnalytics('camp_msg_1', range);
+    const result = await messagingAnalytics.getMessagingDestinationAnalytics('camp_msg_1', range);
     expect(result.destinations.length).toBe(2);
     const whatsapp = result.destinations.find(d => d.destination_type === 'WHATSAPP');
     expect(whatsapp.spend).toBe(150);
@@ -41,8 +41,8 @@ describe('messagingAnalytics.getMessagingDestinationAnalytics', () => {
     expect(result.insight.top_performer).toBeTruthy();
   });
 
-  test('returns an honest empty result with an explanatory note when no messaging data exists', () => {
-    const result = messagingAnalytics.getMessagingDestinationAnalytics('camp_no_messaging', { since: '2026-06-01', until: '2026-06-07' });
+  test('returns an honest empty result with an explanatory note when no messaging data exists', async () => {
+    const result = await messagingAnalytics.getMessagingDestinationAnalytics('camp_no_messaging', { since: '2026-06-01', until: '2026-06-07' });
     expect(result.destinations).toEqual([]);
     expect(result.note).toMatch(/not.*synced|not.*messaging/i);
   });
@@ -67,19 +67,19 @@ describe('messagingAnalytics.getDestinationAttribution (Attribution Step 2)', ()
     );
   }
 
-  test('computes revenue via spend*roas reconstruction, correctly weighted (not a naive average of per-ad ROAS)', () => {
+  test('computes revenue via spend*roas reconstruction, correctly weighted (not a naive average of per-ad ROAS)', async () => {
     insert('WEBSITE', 10, 2, 10, 1.5, 20);  // revenue 100
     insert('WEBSITE', 1000, 50, 1, 2.0, 5); // revenue 1000 -- ROAS of 1 should dominate the naive-average-of-10-and-1=5.5 result
-    const result = messagingAnalytics.getDestinationAttribution('camp_dest_1', { since: '2026-06-01', until: '2026-06-07' });
+    const result = await messagingAnalytics.getDestinationAttribution('camp_dest_1', { since: '2026-06-01', until: '2026-06-07' });
     const website = result.destinations.find(d => d.destination_type === 'WEBSITE');
     expect(website.revenue).toBeCloseTo(1100, 0); // 100 + 1000
     expect(website.roas).toBeCloseTo(1100 / 1010, 1); // NOT 5.5 (naive average)
   });
 
-  test('computes contribution_pct across destinations, summing to 100', () => {
+  test('computes contribution_pct across destinations, summing to 100', async () => {
     insert('WEBSITE', 75, 5, 2, 1, 10);
     insert('MESSENGER', 25, 3, 1, 1, 10);
-    const result = messagingAnalytics.getDestinationAttribution('camp_dest_1', { since: '2026-06-01', until: '2026-06-07' });
+    const result = await messagingAnalytics.getDestinationAttribution('camp_dest_1', { since: '2026-06-01', until: '2026-06-07' });
     const total = result.destinations.reduce((s, d) => s + d.contribution_pct, 0);
     expect(Math.round(total)).toBe(100);
   });
@@ -96,7 +96,7 @@ describe('messagingAnalytics.comparePlatforms (Attribution Step 7)', () => {
   afterAll(() => { testDb.cleanup(); });
   afterEach(() => { testDb.db.run('DELETE FROM creative_analytics'); });
 
-  test('picks the lowest cost_per_result destination as the winner', () => {
+  test('picks the lowest cost_per_result destination as the winner', async () => {
     const now = new Date().toISOString();
     const insert = (destType, spend, results) => testDb.db.run(
       `INSERT INTO creative_analytics (id, ad_account_id, meta_ad_id, meta_campaign_id, destination_type, date_since, date_until, spend, results, calculated_at)
@@ -107,13 +107,13 @@ describe('messagingAnalytics.comparePlatforms (Attribution Step 7)', () => {
     insert('MESSENGER', 100, 10); // $10/result
     insert('WEBSITE', 100, 0); // no results -- never the winner
 
-    const result = messagingAnalytics.comparePlatforms('camp_cmp_1', { since: '2026-06-01', until: '2026-06-07' });
+    const result = await messagingAnalytics.comparePlatforms('camp_cmp_1', { since: '2026-06-01', until: '2026-06-07' });
     expect(result.winner.destination_type).toBe('WHATSAPP');
     expect(result.platforms.length).toBe(3);
   });
 
-  test('returns a null winner (not a crash) when nothing has data', () => {
-    const result = messagingAnalytics.comparePlatforms('camp_cmp_empty', { since: '2026-06-01', until: '2026-06-07' });
+  test('returns a null winner (not a crash) when nothing has data', async () => {
+    const result = await messagingAnalytics.comparePlatforms('camp_cmp_empty', { since: '2026-06-01', until: '2026-06-07' });
     expect(result.winner).toBeNull();
     expect(result.platforms).toEqual([]);
   });
@@ -135,7 +135,7 @@ describe('languageAnalytics.getLanguageTargeting', () => {
     testDb.db.run('DELETE FROM ad_sets');
   });
 
-  test('reports configured target languages per ad set, labeling known locale IDs and never fabricating performance', () => {
+  test('reports configured target languages per ad set, labeling known locale IDs and never fabricating performance', async () => {
     const accountId = uuidv4();
     testDb.db.run(
       `INSERT INTO ad_accounts (id, meta_account_id, account_name, access_token_encrypted, created_at, updated_at)
@@ -159,7 +159,7 @@ describe('languageAnalytics.getLanguageTargeting', () => {
       [uuidv4(), campaignId, accountId]
     );
 
-    const result = languageAnalytics.getLanguageTargeting('camp_lang_1');
+    const result = await languageAnalytics.getLanguageTargeting('camp_lang_1');
     expect(result.ad_sets.length).toBe(2);
     const arabic = result.ad_sets.find(a => a.meta_adset_id === 'adset_lang_1');
     expect(arabic.targeted_languages).toEqual(['Arabic', 'English (US)']);
@@ -233,7 +233,7 @@ describe('languageAnalytics.syncAccountLanguagePerformance + getLanguagePerforma
     expect(result.errors).toEqual([]);
     expect(result.campaignsProcessed).toBe(1);
 
-    const read = languageAnalytics.getLanguagePerformanceAttribution('camp_langperf_1', range);
+    const read = await languageAnalytics.getLanguagePerformanceAttribution('camp_langperf_1', range);
     expect(read.languages.length).toBe(2);
 
     const arabic = read.languages.find(l => l.locale_label === 'Arabic');
@@ -265,7 +265,7 @@ describe('languageAnalytics.syncAccountLanguagePerformance + getLanguagePerforma
     const range = { since: '2026-06-15', until: '2026-06-21' };
     await languageAnalytics.syncAccountLanguagePerformance(fullAccount, range);
 
-    const read = languageAnalytics.getLanguagePerformanceAttribution('camp_langperf_1', range);
+    const read = await languageAnalytics.getLanguagePerformanceAttribution('camp_langperf_1', range);
     expect(read.languages.length).toBe(1); // one combined row, not two
     expect(read.languages[0].locale_label).toBe('English (US) + Arabic'); // sorted by locale ID (6, then 24)
     expect(read.languages[0].spend).toBe(100); // not double-counted

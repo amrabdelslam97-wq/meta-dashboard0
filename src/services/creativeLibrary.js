@@ -21,6 +21,11 @@ const { buildCreativeAdvisor } = require('./advisorEngine');
 const { buildRootCauseReasoning } = require('./executiveReasoningEngine');
 const { buildExecutiveDecisionLayer } = require('./executiveDecisionEngine');
 const { loadActiveRecommendations } = require('./recommendationEngine');
+const { generateHookAlternatives } = require('./hookAlternativeGenerator');
+const { mapRootCauseTaxonomy } = require('./rootCauseTaxonomy');
+const { generateCtaAlternatives } = require('./ctaAlternativeGenerator');
+const { generateCreativeConcepts } = require('./creativeConceptGenerator');
+const { verifyCreativeChange } = require('./creativeVerificationEngine');
 
 function round(n, dp = 2) {
   if (n === null || n === undefined || Number.isNaN(n)) return null;
@@ -38,7 +43,7 @@ function round(n, dp = 2) {
 // ─────────────────────────────────────────────
 const BENCHMARK_MIN_SAMPLE = 2;
 
-function getCreativeBenchmarkAverages(latestRow) {
+async function getCreativeBenchmarkAverages(latestRow) {
   const grains = [
     { level: 'ad_set', column: 'meta_adset_id', value: latestRow.meta_adset_id },
     { level: 'campaign', column: 'meta_campaign_id', value: latestRow.meta_campaign_id },
@@ -51,7 +56,7 @@ function getCreativeBenchmarkAverages(latestRow) {
       result[grain.level] = { status: 'not_applicable', sample_size: 0, reason: `No ${grain.level.replace('_', ' ')} on this creative.` };
       continue;
     }
-    const row = db.get(
+    const row = await db.get(
       `SELECT AVG(ctr) as avg_ctr, AVG(cpa) as avg_cpa, AVG(cpm) as avg_cpm,
               AVG(frequency) as avg_frequency, AVG(roas) as avg_roas,
               AVG(score_overall) as avg_score, COUNT(*) as n
@@ -84,18 +89,18 @@ function getCreativeBenchmarkAverages(latestRow) {
 // active_alerts -- all Phase 2 tables, entity_type='ad' rows written by the
 // existing orchestrator, no new table). Read-only, no new writes.
 // ─────────────────────────────────────────────
-function getCreativeStateHistory(metaAdId) {
-  const healthHistory = db.all(
+async function getCreativeStateHistory(metaAdId) {
+  const healthHistory = await db.all(
     `SELECT health_score, health_status, calculated_at FROM health_score_history
      WHERE entity_type = 'ad' AND entity_meta_id = ? ORDER BY calculated_at ASC`,
     [metaAdId]
   );
-  const recommendationHistory = db.all(
+  const recommendationHistory = await db.all(
     `SELECT rule_code, recommendation_title, severity, generated_at, dismissed_at FROM recommendation_log
      WHERE entity_type = 'ad' AND entity_meta_id = ? ORDER BY generated_at ASC`,
     [metaAdId]
   );
-  const alertHistory = db.all(
+  const alertHistory = await db.all(
     `SELECT alert_code, severity, alert_message, status, first_detected_at, resolved_at FROM active_alerts
      WHERE entity_type = 'ad' AND entity_meta_id = ? ORDER BY first_detected_at ASC`,
     [metaAdId]
@@ -108,9 +113,9 @@ function getCreativeStateHistory(metaAdId) {
 // snapshot per ad, >= $5 spend, excluding this ad itself). Real read, no
 // fabricated "industry" comparison.
 // ─────────────────────────────────────────────
-function getAccountBestWorstCreative(adAccountId, excludeMetaAdId) {
+async function getAccountBestWorstCreative(adAccountId, excludeMetaAdId) {
   if (!adAccountId) return { best: null, worst: null };
-  const rows = db.all(
+  const rows = await db.all(
     `SELECT ca.meta_ad_id, ca.score_overall, a.name as ad_name FROM creative_analytics ca
      LEFT JOIN ads a ON a.meta_ad_id = ca.meta_ad_id
      INNER JOIN (
@@ -133,10 +138,10 @@ function getAccountBestWorstCreative(adAccountId, excludeMetaAdId) {
 // (same query shape as every other Phase 42-44 benchmark read in this
 // file) -- absence of a row is reported as `null`, never fabricated.
 // ─────────────────────────────────────────────
-function getCrossModuleSignals(adAccountId, metaCampaignId) {
+async function getCrossModuleSignals(adAccountId, metaCampaignId) {
   if (!metaCampaignId) return { budget: null, audience: null };
 
-  const budgetRow = db.get(
+  const budgetRow = await db.get(
     `SELECT waste_detected, waste_amount, efficiency_status FROM budget_analysis_history
      WHERE ad_account_id = ? AND level = 'campaign' AND entity_meta_id = ?
      ORDER BY calculated_at DESC LIMIT 1`,
@@ -146,7 +151,7 @@ function getCrossModuleSignals(adAccountId, metaCampaignId) {
   // Real average saturation across this campaign's most recently-scored
   // audience dimensions (age/gender/region/placement etc.) -- not a single
   // dimension cherry-picked, and not fabricated when no row exists yet.
-  const audienceRow = db.get(
+  const audienceRow = await db.get(
     `SELECT AVG(saturation_score) as avg_saturation, COUNT(*) as n FROM audience_score_history
      WHERE ad_account_id = ? AND meta_campaign_id = ? AND saturation_score IS NOT NULL
      AND date_until = (SELECT MAX(date_until) FROM audience_score_history WHERE ad_account_id = ? AND meta_campaign_id = ?)`,
@@ -166,8 +171,8 @@ const DECLINE_THRESHOLD_PCT = 15; // relative drop from peak score_overall
 const RECOVERY_THRESHOLD_RATIO = 0.9; // recovered once back within 90% of peak
 const CONTENT_CHANGE_FIELDS = ['headline', 'primary_text', 'cta_type', 'creative_type', 'destination_url'];
 
-function getCreativeTimeline(metaAdId) {
-  const rows = db.all(
+async function getCreativeTimeline(metaAdId) {
+  const rows = await db.all(
     `SELECT * FROM creative_analytics WHERE meta_ad_id = ? ORDER BY date_since ASC`,
     [metaAdId]
   );
@@ -276,7 +281,7 @@ function toComparisonShape(row) {
 // ─────────────────────────────────────────────
 // Step 11 — Creative Library (search + filter)
 // ─────────────────────────────────────────────
-function searchCreativeLibrary(filters = {}) {
+async function searchCreativeLibrary(filters = {}) {
   const {
     account_id, campaign_id, adset_id, objective, creative_type,
     min_score, max_score, fatigue_status, is_winner, is_loser,
@@ -298,11 +303,11 @@ function searchCreativeLibrary(filters = {}) {
 
   if (account_id) { conditions.push('ca.ad_account_id = ?'); params.push(account_id); }
   if (campaign_id) {
-    const camp = db.get('SELECT meta_campaign_id FROM campaigns WHERE id = ? OR meta_campaign_id = ?', [campaign_id, campaign_id]);
+    const camp = await db.get('SELECT meta_campaign_id FROM campaigns WHERE id = ? OR meta_campaign_id = ?', [campaign_id, campaign_id]);
     conditions.push('ca.meta_campaign_id = ?'); params.push(camp ? camp.meta_campaign_id : campaign_id);
   }
   if (adset_id) {
-    const as = db.get('SELECT meta_adset_id FROM ad_sets WHERE id = ? OR meta_adset_id = ?', [adset_id, adset_id]);
+    const as = await db.get('SELECT meta_adset_id FROM ad_sets WHERE id = ? OR meta_adset_id = ?', [adset_id, adset_id]);
     conditions.push('ca.meta_adset_id = ?'); params.push(as ? as.meta_adset_id : adset_id);
   }
   if (creative_type) { conditions.push('ca.creative_type = ?'); params.push(creative_type); }
@@ -323,7 +328,7 @@ function searchCreativeLibrary(filters = {}) {
     params.push(platform);
   }
 
-  const rows = db.all(
+  const rows = await db.all(
     `SELECT ca.*, c.name as campaign_name, c.objective as campaign_objective,
             s.name as adset_name, a.status as ad_status, a.name as ad_name
      FROM creative_analytics ca
@@ -364,8 +369,8 @@ function searchCreativeLibrary(filters = {}) {
 // getCreativeDetails() computes for one ad's own siblings, exposed directly
 // for a whole-ad-set view (e.g. the Ranking chart, Step 9).
 // ─────────────────────────────────────────────
-function getAdSetComparison(metaAdsetId, dateRange = defaultRange()) {
-  const rows = db.all(
+async function getAdSetComparison(metaAdsetId, dateRange = defaultRange()) {
+  const rows = await db.all(
     `SELECT ca.*, a.name as ad_name FROM creative_analytics ca
      LEFT JOIN ads a ON a.meta_ad_id = ca.meta_ad_id
      WHERE ca.meta_adset_id = ? AND ca.date_since = ? AND ca.date_until = ?`,
@@ -380,10 +385,10 @@ function getAdSetComparison(metaAdsetId, dateRange = defaultRange()) {
 async function getCreativeDetails(adIdOrMetaAdId, options = {}) {
   const { useMock = false } = options;
 
-  const ad = db.get(`SELECT id, meta_ad_id, name FROM ads WHERE id = ? OR meta_ad_id = ?`, [adIdOrMetaAdId, adIdOrMetaAdId]);
+  const ad = await db.get(`SELECT id, meta_ad_id, name FROM ads WHERE id = ? OR meta_ad_id = ?`, [adIdOrMetaAdId, adIdOrMetaAdId]);
   if (!ad) return null;
 
-  const latest = db.get(
+  const latest = await db.get(
     `SELECT * FROM creative_analytics WHERE meta_ad_id = ? ORDER BY date_until DESC LIMIT 1`,
     [ad.meta_ad_id]
   );
@@ -394,14 +399,14 @@ async function getCreativeDetails(adIdOrMetaAdId, options = {}) {
     };
   }
 
-  const timeline = getCreativeTimeline(ad.meta_ad_id);
+  const timeline = await getCreativeTimeline(ad.meta_ad_id);
 
   // Step 6 — comparison against siblings in the same ad set, same date range.
   let comparison = { winner: null, runner_up: null, worst: null, ranking: [], comparisons: [] };
   let role = { isWinner: false, isWorst: false };
   let shapedSiblings = [];
   if (latest.meta_adset_id) {
-    const siblings = db.all(
+    const siblings = await db.all(
       `SELECT * FROM creative_analytics WHERE meta_adset_id = ? AND date_since = ? AND date_until = ?`,
       [latest.meta_adset_id, latest.date_since, latest.date_until]
     );
@@ -490,9 +495,9 @@ async function getCreativeDetails(adIdOrMetaAdId, options = {}) {
   // Phase 43 additionally wires in the real health score (Task 2) and this
   // ad's real persisted health/recommendation/alert history (Task 6) --
   // both already-existing tables, no schema change, no fabricated events.
-  const benchmarkAverages = getCreativeBenchmarkAverages(latest);
-  const { healthHistory, recommendationHistory, alertHistory } = getCreativeStateHistory(ad.meta_ad_id);
-  const accountBestWorst = getAccountBestWorstCreative(latest.ad_account_id, ad.meta_ad_id);
+  const benchmarkAverages = await getCreativeBenchmarkAverages(latest);
+  const { healthHistory, recommendationHistory, alertHistory } = await getCreativeStateHistory(ad.meta_ad_id);
+  const accountBestWorst = await getAccountBestWorstCreative(latest.ad_account_id, ad.meta_ad_id);
   const advisor = buildCreativeAdvisor({
     scores, fatigue, textAnalysis: aiAnalysis, latestRow: latest, benchmarkAverages,
     comparison, comparisonRole: role, shapedSiblings, timeline, recommendations,
@@ -509,8 +514,8 @@ async function getCreativeDetails(adIdOrMetaAdId, options = {}) {
   // real, currently-active DB-rule-driven recommendations (recommendationEngine.js's
   // loadActiveRecommendations(), already exported and used by the /recommendations
   // route -- reused as-is, no new query) so the arbitration is aware of them too.
-  const crossModuleSignals = getCrossModuleSignals(latest.ad_account_id, latest.meta_campaign_id);
-  const recommendationLogRows = latest.meta_campaign_id ? loadActiveRecommendations(latest.meta_campaign_id) : [];
+  const crossModuleSignals = await getCrossModuleSignals(latest.ad_account_id, latest.meta_campaign_id);
+  const recommendationLogRows = latest.meta_campaign_id ? await loadActiveRecommendations(latest.meta_campaign_id) : [];
   const executiveDecision = buildExecutiveDecisionLayer({
     panel: advisor.panel,
     priorities: advisor.priorities,
@@ -526,6 +531,25 @@ async function getCreativeDetails(adIdOrMetaAdId, options = {}) {
     crossModuleSignals,
     recommendationLogRows,
   });
+
+  // AP-POS Intelligence Layer -- pure additive synthesis over everything
+  // already computed above (ai_analysis's real hook signals, the real
+  // diagnosisEngine.js category via `intelligence.diagnosis`, real
+  // crossModuleSignals) plus the existing benchmark/fatigue objects. No new
+  // score, no re-derivation of any existing value; see
+  // hookAlternativeGenerator.js / rootCauseTaxonomy.js headers.
+  const objective = (intelligence && intelligence.analyzed !== false) ? intelligence.objective : null;
+  const hookAlternatives = generateHookAlternatives(aiAnalysis?.hook || null, latest.primary_text);
+  const rootCauseTaxonomy = mapRootCauseTaxonomy({
+    diagnosis: (intelligence && intelligence.analyzed !== false) ? intelligence.diagnosis : null,
+    scores,
+    textAnalysis: aiAnalysis || {},
+    fatigue,
+    crossModuleSignals,
+  });
+  const ctaAlternatives = generateCtaAlternatives(aiAnalysis?.cta || null, latest.cta_type, objective);
+  const creativeConcepts = generateCreativeConcepts({ scores, textAnalysis: aiAnalysis || {}, primaryText: latest.primary_text, ctaType: latest.cta_type, objective });
+  const verification = verifyCreativeChange(timeline, recommendationHistory);
 
   return {
     meta_ad_id: ad.meta_ad_id,
@@ -548,6 +572,11 @@ async function getCreativeDetails(adIdOrMetaAdId, options = {}) {
     benchmark_averages: benchmarkAverages,
     advisor,
     executive_decision: executiveDecision,
+    hook_alternatives: hookAlternatives,
+    root_cause_taxonomy: rootCauseTaxonomy,
+    cta_alternatives: ctaAlternatives,
+    creative_concepts: creativeConcepts,
+    verification,
   };
 }
 

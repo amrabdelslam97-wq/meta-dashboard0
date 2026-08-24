@@ -491,22 +491,22 @@ CREATE INDEX IF NOT EXISTS idx_background_jobs_scheduled
 
 `;
 
-function runPhase29Migrations() {
+async function runPhase29Migrations() {
   try {
     // Ensure migration registry exists
-    ensureMigrationsTable();
+    await ensureMigrationsTable();
 
     // Skip if env var set
     if (process.env.SKIP_MIGRATIONS) return;
 
     // Check if migration already applied (idempotent)
-    if (isMigrationApplied(MIGRATION_NAME)) return;
+    if (await isMigrationApplied(MIGRATION_NAME)) return;
 
     // Run migration
-    db.run(SCHEMA_SQL);
+    await db.run(SCHEMA_SQL);
 
     // Mark as applied
-    markMigrationApplied(MIGRATION_NAME);
+    await markMigrationApplied(MIGRATION_NAME);
     console.log('✓ Phase 29 (Enterprise SaaS Platform) migrations applied');
   } catch (e) {
     console.error(`Phase 29 migration error: ${e.message}`);

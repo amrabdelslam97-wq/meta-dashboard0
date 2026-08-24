@@ -165,8 +165,8 @@ CREATE INDEX IF NOT EXISTS idx_ads_status
  * Run the schema against the database.
  * Safe to run multiple times — uses CREATE IF NOT EXISTS.
  */
-function runMigrations() {
-  ensureMigrationsTable();
+async function runMigrations() {
+  await ensureMigrationsTable();
   console.log('[DB] Running schema migrations...');
 
   // Split on semicolons and run each statement individually
@@ -177,10 +177,10 @@ function runMigrations() {
     .filter(s => s.length > 0);
 
   for (const statement of statements) {
-    db.run(statement + ';');
+    await db.run(statement + ';');
   }
 
-  markMigrationApplied(MIGRATION_NAME);
+  await markMigrationApplied(MIGRATION_NAME);
   console.log('[DB] Schema migrations complete.');
 }
 

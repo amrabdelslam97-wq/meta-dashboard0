@@ -34,8 +34,8 @@ function pctChange(current, prior) {
  * Calculate budget efficiency score (0-100) for a campaign/ad_set/ad.
  * Considers: CPA, ROAS, CTR, frequency, conversion rate, volume, stability, trends.
  */
-function scoreBudgetEfficiency(adAccountId, level, entityMetaId, dateRange = defaultRange()) {
-  const current = db.get(
+async function scoreBudgetEfficiency(adAccountId, level, entityMetaId, dateRange = defaultRange()) {
+  const current = await db.get(
     `SELECT * FROM budget_distribution_snapshots
      WHERE ad_account_id = ? AND level = ? AND entity_meta_id = ?
      AND date_since = ? AND date_until = ?`,
@@ -73,7 +73,7 @@ function scoreBudgetEfficiency(adAccountId, level, entityMetaId, dateRange = def
 
   // 4. Stability (20%)
   // Compare to prior period
-  const prior = db.get(
+  const prior = await db.get(
     `SELECT * FROM budget_distribution_snapshots
      WHERE ad_account_id = ? AND level = ? AND entity_meta_id = ?
      AND date_until <= ? ORDER BY date_until DESC LIMIT 1`,
@@ -142,8 +142,8 @@ function scoreBudgetEfficiency(adAccountId, level, entityMetaId, dateRange = def
 /**
  * Detect budget waste: overspending, underspending, saturation, poor ROAS.
  */
-function detectBudgetWaste(adAccountId, level, entityMetaId, dateRange = defaultRange()) {
-  const current = db.get(
+async function detectBudgetWaste(adAccountId, level, entityMetaId, dateRange = defaultRange()) {
+  const current = await db.get(
     `SELECT * FROM budget_distribution_snapshots
      WHERE ad_account_id = ? AND level = ? AND entity_meta_id = ?
      AND date_since = ? AND date_until = ?`,
@@ -164,7 +164,7 @@ function detectBudgetWaste(adAccountId, level, entityMetaId, dateRange = default
   };
 
   // Get account-level averages for comparison
-  const accountAvg = db.get(
+  const accountAvg = await db.get(
     `SELECT AVG(roas) as avg_roas, AVG(efficiency_score) as avg_efficiency
      FROM budget_distribution_snapshots
      WHERE ad_account_id = ? AND level = ? AND date_since = ? AND date_until = ?`,
@@ -227,8 +227,8 @@ function detectBudgetWaste(adAccountId, level, entityMetaId, dateRange = default
 /**
  * Detect scaling opportunities.
  */
-function detectScalingOpportunities(adAccountId, level = 'campaign', dateRange = defaultRange()) {
-  const entities = db.all(
+async function detectScalingOpportunities(adAccountId, level = 'campaign', dateRange = defaultRange()) {
+  const entities = await db.all(
     `SELECT * FROM budget_distribution_snapshots
      WHERE ad_account_id = ? AND level = ? AND date_since = ? AND date_until = ?
      ORDER BY roas DESC`,
@@ -278,8 +278,8 @@ function detectScalingOpportunities(adAccountId, level = 'campaign', dateRange =
 /**
  * Get budget distribution analysis (share percentages).
  */
-function getBudgetDistribution(adAccountId, level = 'campaign', dateRange = defaultRange()) {
-  const entities = db.all(
+async function getBudgetDistribution(adAccountId, level = 'campaign', dateRange = defaultRange()) {
+  const entities = await db.all(
     `SELECT * FROM budget_distribution_snapshots
      WHERE ad_account_id = ? AND level = ? AND date_since = ? AND date_until = ?
      ORDER BY spend_amount DESC`,
@@ -312,8 +312,8 @@ function getBudgetDistribution(adAccountId, level = 'campaign', dateRange = defa
 /**
  * Calculate burn rate and pacing.
  */
-function calculateBurnRate(adAccountId, dateRange = defaultRange()) {
-  const campaigns = db.all(
+async function calculateBurnRate(adAccountId, dateRange = defaultRange()) {
+  const campaigns = await db.all(
     `SELECT SUM(spend_amount) as total_spend, COUNT(*) as count
      FROM budget_distribution_snapshots
      WHERE ad_account_id = ? AND level = 'campaign'

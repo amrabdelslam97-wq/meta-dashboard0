@@ -37,29 +37,29 @@ const { runAlertEngine, loadActiveAlerts }                   = require('./alertE
  * @param {string} adAccountId
  * @param {string} entityType - 'campaign' | 'ad_set' | 'ad'
  */
-function runScoringPipeline(entity, currentMetrics, priorMetrics, adAccountId, entityType = 'campaign') {
+async function runScoringPipeline(entity, currentMetrics, priorMetrics, adAccountId, entityType = 'campaign') {
   const entityMetaId = entity.meta_campaign_id;
   // Only ad sets carry a real optimization_goal (see adSetIntelligence.js's
   // synthetic entity); campaigns/ads leave this undefined and every
   // resolver call below falls back to the base objective profile unchanged.
   const optimizationGoal = entity.optimization_goal || null;
 
-  const healthResult = calculateHealthScore(entity, currentMetrics, adAccountId, optimizationGoal);
-  saveHealthScore(entity, adAccountId, healthResult, entityType);
+  const healthResult = await calculateHealthScore(entity, currentMetrics, adAccountId, optimizationGoal);
+  await saveHealthScore(entity, adAccountId, healthResult, entityType);
 
-  const benchmarkResult = evaluateBenchmarks(entity, currentMetrics, adAccountId, optimizationGoal);
+  const benchmarkResult = await evaluateBenchmarks(entity, currentMetrics, adAccountId, optimizationGoal);
 
-  const newRecommendations = runRecommendationEngine(
+  const newRecommendations = await runRecommendationEngine(
     entity, currentMetrics, adAccountId, healthResult.health_score, entityType
   );
-  const recommendations = loadActiveRecommendations(entityMetaId, entityType);
+  const recommendations = await loadActiveRecommendations(entityMetaId, entityType);
 
-  const newAlerts = runAlertEngine(
+  const newAlerts = await runAlertEngine(
     entity, currentMetrics, priorMetrics || null, adAccountId, entityType
   );
-  const alerts = loadActiveAlerts(entityMetaId, entityType);
+  const alerts = await loadActiveAlerts(entityMetaId, entityType);
 
-  const trend = getHealthScoreTrend(entityMetaId, 30, entityType);
+  const trend = await getHealthScoreTrend(entityMetaId, 30, entityType);
 
   return {
     healthResult,
@@ -81,16 +81,16 @@ function runScoringPipeline(entity, currentMetrics, priorMetrics, adAccountId, e
  * @param {string} adAccountId    - Internal ad_account_id (UUID)
  * @returns {object}              - Full intelligence result
  */
-function runIntelligencePipeline(campaign, currentMetrics, priorMetrics, adAccountId) {
+async function runIntelligencePipeline(campaign, currentMetrics, priorMetrics, adAccountId) {
   const startedAt = Date.now();
 
   const {
     healthResult, benchmarkResult, recommendations, alerts, trend,
     newRecommendationsCount, newAlertsCount,
-  } = runScoringPipeline(campaign, currentMetrics, priorMetrics, adAccountId, 'campaign');
+  } = await runScoringPipeline(campaign, currentMetrics, priorMetrics, adAccountId, 'campaign');
 
   // Goal Achievement is campaign-only — not part of the shared sequence.
-  const goalResult = evaluateGoalAchievement(campaign, currentMetrics, adAccountId);
+  const goalResult = await evaluateGoalAchievement(campaign, currentMetrics, adAccountId);
 
   const durationMs = Date.now() - startedAt;
 

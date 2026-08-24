@@ -39,28 +39,28 @@ describe('recommendationEngine.runRecommendationEngine', () => {
     testDb.cleanup();
   });
 
-  test('fires the seeded LOW_ROAS rule when roas is below 1.0 for a sales campaign', () => {
+  test('fires the seeded LOW_ROAS rule when roas is below 1.0 for a sales campaign', async () => {
     const campaign = { meta_campaign_id: 'camp_low_roas', name: 'Low ROAS Campaign', objective: 'sales' };
-    const fired = runRecommendationEngine(campaign, { roas: 0.5 }, accountId);
+    const fired = await runRecommendationEngine(campaign, { roas: 0.5 }, accountId);
     expect(fired.some(f => f.rule_code === 'LOW_ROAS')).toBe(true);
 
-    const active = loadActiveRecommendations('camp_low_roas');
+    const active = await loadActiveRecommendations('camp_low_roas');
     expect(active.some(r => r.rule_code === 'LOW_ROAS')).toBe(true);
   });
 
-  test('does not fire LOW_ROAS when roas is healthy', () => {
+  test('does not fire LOW_ROAS when roas is healthy', async () => {
     const campaign = { meta_campaign_id: 'camp_healthy_roas', name: 'Healthy Campaign', objective: 'sales' };
-    const fired = runRecommendationEngine(campaign, { roas: 4.0 }, accountId);
+    const fired = await runRecommendationEngine(campaign, { roas: 4.0 }, accountId);
     expect(fired.some(f => f.rule_code === 'LOW_ROAS')).toBe(false);
   });
 
-  test('auto-dismisses a previously-fired recommendation once the condition no longer holds', () => {
+  test('auto-dismisses a previously-fired recommendation once the condition no longer holds', async () => {
     const campaign = { meta_campaign_id: 'camp_recovers', name: 'Recovering Campaign', objective: 'sales' };
-    runRecommendationEngine(campaign, { roas: 0.3 }, accountId); // fires
-    expect(loadActiveRecommendations('camp_recovers').some(r => r.rule_code === 'LOW_ROAS')).toBe(true);
+    await runRecommendationEngine(campaign, { roas: 0.3 }, accountId); // fires
+    expect((await loadActiveRecommendations('camp_recovers')).some(r => r.rule_code === 'LOW_ROAS')).toBe(true);
 
-    runRecommendationEngine(campaign, { roas: 5.0 }, accountId); // recovers
-    expect(loadActiveRecommendations('camp_recovers').some(r => r.rule_code === 'LOW_ROAS')).toBe(false);
+    await runRecommendationEngine(campaign, { roas: 5.0 }, accountId); // recovers
+    expect((await loadActiveRecommendations('camp_recovers')).some(r => r.rule_code === 'LOW_ROAS')).toBe(false);
   });
 
   // Regression test for T4-03: a rule row with condition_logic missing a
@@ -69,7 +69,7 @@ describe('recommendationEngine.runRecommendationEngine', () => {
   // remaining rule AND campaign in that pass. Insert exactly such a
   // malformed rule and confirm the engine skips it gracefully instead of
   // crashing, and still evaluates the other valid rules.
-  test('skips a rule with malformed condition_logic (missing metric) instead of crashing the whole run', () => {
+  test('skips a rule with malformed condition_logic (missing metric) instead of crashing the whole run', async () => {
     const malformedRuleId = uuidv4();
     testDb.db.run(
       `INSERT INTO recommendation_rules
@@ -81,9 +81,9 @@ describe('recommendationEngine.runRecommendationEngine', () => {
 
     const campaign = { meta_campaign_id: 'camp_malformed_test', name: 'Malformed Test', objective: 'sales' };
     let fired;
-    expect(() => {
-      fired = runRecommendationEngine(campaign, { roas: 0.2, ctr: 0.1 }, accountId);
-    }).not.toThrow();
+    await expect((async () => {
+      fired = await runRecommendationEngine(campaign, { roas: 0.2, ctr: 0.1 }, accountId);
+    })()).resolves.not.toThrow();
 
     // The malformed rule itself never fires, but valid rules (LOW_ROAS,
     // LOW_CTR) for the same campaign still evaluate normally afterward.
@@ -91,7 +91,7 @@ describe('recommendationEngine.runRecommendationEngine', () => {
     expect(fired.some(f => f.rule_code === 'LOW_ROAS')).toBe(true);
   });
 
-  test('invalid JSON condition_logic is skipped without crashing', () => {
+  test('invalid JSON condition_logic is skipped without crashing', async () => {
     const badJsonId = uuidv4();
     testDb.db.run(
       `INSERT INTO recommendation_rules
@@ -102,6 +102,6 @@ describe('recommendationEngine.runRecommendationEngine', () => {
     );
 
     const campaign = { meta_campaign_id: 'camp_bad_json', name: 'Bad JSON Test', objective: 'leads' };
-    expect(() => runRecommendationEngine(campaign, { cpl: 200 }, accountId)).not.toThrow();
+    await expect(runRecommendationEngine(campaign, { cpl: 200 }, accountId)).resolves.not.toThrow();
   });
 });

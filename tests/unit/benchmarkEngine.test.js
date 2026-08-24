@@ -85,21 +85,21 @@ describe('benchmarkEngine.evaluateBenchmarks (metric-set-per-objective, T4-06)',
     ['sales',     ['roas', 'cpa', 'purchases', 'ctr']],
     ['traffic',   ['cpc', 'ctr', 'landing_page_views', 'frequency']],
     ['awareness', ['reach', 'cpm', 'frequency', 'impressions']],
-  ])('%s objective evaluates exactly %j', (objective, expectedKeys) => {
+  ])('%s objective evaluates exactly %j', async (objective, expectedKeys) => {
     const campaign = { objective };
     const metrics = Object.fromEntries(expectedKeys.map(k => [k, 1]));
-    const result = evaluateBenchmarks(campaign, metrics, 'test-account');
+    const result = await evaluateBenchmarks(campaign, metrics, 'test-account');
     expect(Object.keys(result.metrics).sort()).toEqual([...expectedKeys].sort());
   });
 
-  test('unknown objective falls back to a universal metric set', () => {
-    const result = evaluateBenchmarks({ objective: 'not_a_real_objective' }, {}, 'test-account');
+  test('unknown objective falls back to a universal metric set', async () => {
+    const result = await evaluateBenchmarks({ objective: 'not_a_real_objective' }, {}, 'test-account');
     expect(Object.keys(result.metrics).sort()).toEqual(['cpm', 'ctr', 'frequency']);
   });
 
-  test('summary tallies statuses correctly against platform-default thresholds', () => {
+  test('summary tallies statuses correctly against platform-default thresholds', async () => {
     // engagement: cpr excellent<=5, ctr excellent>=3, frequency optimal 1.5-3.5, reach excellent>=5000
-    const result = evaluateBenchmarks(
+    const result = await evaluateBenchmarks(
       { objective: 'engagement' },
       { cpr: 5, ctr: 3, frequency: 2.5, reach: 5000 },
       'test-account'
@@ -109,13 +109,13 @@ describe('benchmarkEngine.evaluateBenchmarks (metric-set-per-objective, T4-06)',
     expect(result.summary.total).toBe(4);
   });
 
-  test('missing metric values resolve to no_data rather than throwing', () => {
-    const result = evaluateBenchmarks({ objective: 'sales' }, {}, 'test-account');
+  test('missing metric values resolve to no_data rather than throwing', async () => {
+    const result = await evaluateBenchmarks({ objective: 'sales' }, {}, 'test-account');
     expect(result.summary.no_data).toBe(4);
   });
 
-  test('a matching ad-set optimization_goal switches an awareness campaign to the Video Views benchmark set', () => {
-    const result = evaluateBenchmarks(
+  test('a matching ad-set optimization_goal switches an awareness campaign to the Video Views benchmark set', async () => {
+    const result = await evaluateBenchmarks(
       { objective: 'awareness' },
       { cost_per_thruplay: 1, video_retention_rate: 50, ctr: 1, frequency: 2 },
       'test-account',
@@ -124,8 +124,8 @@ describe('benchmarkEngine.evaluateBenchmarks (metric-set-per-objective, T4-06)',
     expect(Object.keys(result.metrics).sort()).toEqual(['cost_per_thruplay', 'ctr', 'frequency', 'video_retention_rate']);
   });
 
-  test('a non-Video-Views optimization_goal leaves the base awareness benchmark set unchanged', () => {
-    const result = evaluateBenchmarks({ objective: 'awareness' }, {}, 'test-account', 'REACH');
+  test('a non-Video-Views optimization_goal leaves the base awareness benchmark set unchanged', async () => {
+    const result = await evaluateBenchmarks({ objective: 'awareness' }, {}, 'test-account', 'REACH');
     expect(Object.keys(result.metrics).sort()).toEqual(['cpm', 'frequency', 'impressions', 'reach']);
   });
 });

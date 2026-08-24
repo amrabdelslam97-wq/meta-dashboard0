@@ -33,11 +33,11 @@ describe('mmsOrchestrator.orchestrateIntelligence (Phase 5 — MMS as real orche
     return campaignId;
   }
 
-  test('sequences Diagnosis -> Rule Engine -> Decision Engine -> Governance in one call', () => {
+  test('sequences Diagnosis -> Rule Engine -> Decision Engine -> Governance in one call', async () => {
     const campaignId = insertCampaign('traffic', 'camp_orch_1');
     const campaign = { id: campaignId, meta_campaign_id: 'camp_orch_1', name: 'Traffic Campaign', objective: 'traffic' };
 
-    const result = orchestrateIntelligence({
+    const result = await orchestrateIntelligence({
       campaign,
       adAccountId: accountId,
       currentMetrics: { impressions: 5000, link_clicks: 1000, landing_page_views: 200, clicks: 1000, spend: 100 },
@@ -60,11 +60,11 @@ describe('mmsOrchestrator.orchestrateIntelligence (Phase 5 — MMS as real orche
     }
   });
 
-  test('persists fired rules to rule_engine_log, which generateTodaysDecisions() then reads back (closes the Decision Engine/Rule Engine disconnect)', () => {
+  test('persists fired rules to rule_engine_log, which generateTodaysDecisions() then reads back (closes the Decision Engine/Rule Engine disconnect)', async () => {
     const campaignId = insertCampaign('traffic', 'camp_orch_2');
     const campaign = { id: campaignId, meta_campaign_id: 'camp_orch_2', name: 'Traffic Campaign 2', objective: 'traffic' };
 
-    orchestrateIntelligence({
+    await orchestrateIntelligence({
       campaign,
       adAccountId: accountId,
       currentMetrics: { impressions: 5000, link_clicks: 1000, landing_page_views: 200, clicks: 1000, spend: 100 },
@@ -82,18 +82,18 @@ describe('mmsOrchestrator.orchestrateIntelligence (Phase 5 — MMS as real orche
     expect(row.ad_account_id).toBe(accountId);
 
     // The Decision Center's own data source must now include this firing.
-    const decisionsResult = generateTodaysDecisions(accountId);
+    const decisionsResult = await generateTodaysDecisions(accountId);
     const fromRuleEngine = decisionsResult.decisions.find(d => d.source === 'rule_engine' && d.meta_campaign_id === 'camp_orch_2');
     expect(fromRuleEngine).toBeDefined();
     expect(fromRuleEngine.rule_id).toBe('MF7.10.10');
     expect(fromRuleEngine.framework).toBe('MF7');
   });
 
-  test('persist:false does not write to rule_engine_log', () => {
+  test('persist:false does not write to rule_engine_log', async () => {
     const campaignId = insertCampaign('traffic', 'camp_orch_3');
     const campaign = { id: campaignId, meta_campaign_id: 'camp_orch_3', name: 'Traffic Campaign 3', objective: 'traffic' };
 
-    orchestrateIntelligence({
+    await orchestrateIntelligence({
       campaign,
       adAccountId: accountId,
       currentMetrics: { impressions: 5000, link_clicks: 1000, landing_page_views: 200, clicks: 1000, spend: 100 },
@@ -109,11 +109,11 @@ describe('mmsOrchestrator.orchestrateIntelligence (Phase 5 — MMS as real orche
     expect(row).toBeFalsy();
   });
 
-  test('MF6.14.2 fires when budgetUtilizationPct is supplied and CPM is rising', () => {
+  test('MF6.14.2 fires when budgetUtilizationPct is supplied and CPM is rising', async () => {
     const campaignId = insertCampaign('sales', 'camp_orch_4');
     const campaign = { id: campaignId, meta_campaign_id: 'camp_orch_4', name: 'Budget Test Campaign', objective: 'sales' };
 
-    const result = orchestrateIntelligence({
+    const result = await orchestrateIntelligence({
       campaign,
       adAccountId: accountId,
       currentMetrics: { impressions: 5000, cpm: 20, purchases: 10, clicks: 500 },
@@ -126,11 +126,11 @@ describe('mmsOrchestrator.orchestrateIntelligence (Phase 5 — MMS as real orche
     expect(result.ruleEngineResult.fired.map(f => f.rule_id)).toContain('MF6.14.2');
   });
 
-  test('does not fire MF6.14.2 when budgetUtilizationPct is null (no ad-set budget data)', () => {
+  test('does not fire MF6.14.2 when budgetUtilizationPct is null (no ad-set budget data)', async () => {
     const campaignId = insertCampaign('sales', 'camp_orch_5');
     const campaign = { id: campaignId, meta_campaign_id: 'camp_orch_5', name: 'No Budget Data Campaign', objective: 'sales' };
 
-    const result = orchestrateIntelligence({
+    const result = await orchestrateIntelligence({
       campaign,
       adAccountId: accountId,
       currentMetrics: { impressions: 5000, cpm: 20, purchases: 10, clicks: 500 },
@@ -143,7 +143,7 @@ describe('mmsOrchestrator.orchestrateIntelligence (Phase 5 — MMS as real orche
     expect(result.ruleEngineResult.fired.map(f => f.rule_id)).not.toContain('MF6.14.2');
   });
 
-  test('Phase X.3 — governs recommendation-/alert-sourced findings and persists governance_state onto their rows', () => {
+  test('Phase X.3 — governs recommendation-/alert-sourced findings and persists governance_state onto their rows', async () => {
     const campaignId = insertCampaign('traffic', 'camp_orch_6');
     const campaign = { id: campaignId, meta_campaign_id: 'camp_orch_6', name: 'Governance Test Campaign', objective: 'traffic' };
 
@@ -155,7 +155,7 @@ describe('mmsOrchestrator.orchestrateIntelligence (Phase 5 — MMS as real orche
     // decision_type dedup -- unrelated to this test's governance assertions).
     // cpm 100->140 (+40% > 30% threshold) fires the DB-driven CPM_SPIKE alert
     // (-> REVIEW_PERFORMANCE, a different decision_type, so both survive dedup).
-    const result = orchestrateIntelligence({
+    const result = await orchestrateIntelligence({
       campaign,
       adAccountId: accountId,
       currentMetrics: { impressions: 5000, clicks: 25, ctr: 0.5, cpm: 140, link_clicks: 25, spend: 100 },
@@ -187,18 +187,18 @@ describe('mmsOrchestrator.orchestrateIntelligence (Phase 5 — MMS as real orche
     expect(alertRow.governance_state).toBeTruthy();
 
     // The Decision Center reads the same persisted verdict, never recomputes.
-    const decisionsResult = generateTodaysDecisions(accountId);
+    const decisionsResult = await generateTodaysDecisions(accountId);
     const fromRec = decisionsResult.decisions.find(d => d.source === 'recommendation' && d.meta_campaign_id === 'camp_orch_6');
     expect(fromRec.governance_state).toBe(recRow.governance_state);
     const fromAlert = decisionsResult.decisions.find(d => d.source === 'alert' && d.meta_campaign_id === 'camp_orch_6');
     expect(fromAlert.governance_state).toBe(alertRow.governance_state);
   });
 
-  test('Phase X.3 — persist:false does not write governance_state onto recommendation_log/active_alerts', () => {
+  test('Phase X.3 — persist:false does not write governance_state onto recommendation_log/active_alerts', async () => {
     const campaignId = insertCampaign('traffic', 'camp_orch_7');
     const campaign = { id: campaignId, meta_campaign_id: 'camp_orch_7', name: 'No Persist Governance Campaign', objective: 'traffic' };
 
-    orchestrateIntelligence({
+    await orchestrateIntelligence({
       campaign,
       adAccountId: accountId,
       currentMetrics: { impressions: 5000, clicks: 25, ctr: 0.5, cpm: 140, link_clicks: 25, spend: 100 },
@@ -218,11 +218,11 @@ describe('mmsOrchestrator.orchestrateIntelligence (Phase 5 — MMS as real orche
     expect(recRow.governance_state).toBeFalsy();
   });
 
-  test('Phase X.6 — persists diagnosisEngine\'s output to diagnosis_history', () => {
+  test('Phase X.6 — persists diagnosisEngine\'s output to diagnosis_history', async () => {
     const campaignId = insertCampaign('traffic', 'camp_orch_8');
     const campaign = { id: campaignId, meta_campaign_id: 'camp_orch_8', name: 'Memory Test Campaign', objective: 'traffic' };
 
-    orchestrateIntelligence({
+    await orchestrateIntelligence({
       campaign,
       adAccountId: accountId,
       currentMetrics: { impressions: 5000, link_clicks: 1000, landing_page_views: 200, clicks: 1000, spend: 100 },
@@ -240,11 +240,11 @@ describe('mmsOrchestrator.orchestrateIntelligence (Phase 5 — MMS as real orche
     expect(['diagnosed', 'insufficient_data']).toContain(row.status);
   });
 
-  test('Phase X.6 — persist:false does not write to diagnosis_history', () => {
+  test('Phase X.6 — persist:false does not write to diagnosis_history', async () => {
     const campaignId = insertCampaign('traffic', 'camp_orch_9');
     const campaign = { id: campaignId, meta_campaign_id: 'camp_orch_9', name: 'No Persist Memory Campaign', objective: 'traffic' };
 
-    orchestrateIntelligence({
+    await orchestrateIntelligence({
       campaign,
       adAccountId: accountId,
       currentMetrics: { impressions: 5000, link_clicks: 1000, landing_page_views: 200, clicks: 1000, spend: 100 },
@@ -257,7 +257,7 @@ describe('mmsOrchestrator.orchestrateIntelligence (Phase 5 — MMS as real orche
     expect(row).toBeFalsy();
   });
 
-  test('Phase X.6 — measureOutcomes is invoked and persists a decision_outcomes row for an old completed decision', () => {
+  test('Phase X.6 — measureOutcomes is invoked and persists a decision_outcomes row for an old completed decision', async () => {
     const campaignId = insertCampaign('traffic', 'camp_orch_10');
     const campaign = { id: campaignId, meta_campaign_id: 'camp_orch_10', name: 'Outcome Test Campaign', objective: 'traffic' };
 
@@ -273,7 +273,7 @@ describe('mmsOrchestrator.orchestrateIntelligence (Phase 5 — MMS as real orche
       [decisionId, accountId, 'camp_orch_10', JSON.stringify({ ctr: 0.5 }), eightDaysAgo]
     );
 
-    orchestrateIntelligence({
+    await orchestrateIntelligence({
       campaign,
       adAccountId: accountId,
       currentMetrics: { impressions: 5000, link_clicks: 1000, landing_page_views: 200, clicks: 1000, spend: 100, ctr: 1.5 },
@@ -288,10 +288,10 @@ describe('mmsOrchestrator.orchestrateIntelligence (Phase 5 — MMS as real orche
     expect(outcomeRow.outcome).toBe('improved'); // 0.5 -> 1.5 is a big favorable move for ctr
   });
 
-  test('Phase X.6 — historical learning downgrades confidence and attaches historical_note after 2 ineffective prior attempts of the same rule/campaign', () => {
+  test('Phase X.6 — historical learning downgrades confidence and attaches historical_note after 2 ineffective prior attempts of the same rule/campaign', async () => {
     const campaignIdBaseline = insertCampaign('traffic', 'camp_orch_11a');
     const campaignBaseline = { id: campaignIdBaseline, meta_campaign_id: 'camp_orch_11a', name: 'Baseline Campaign', objective: 'traffic' };
-    const baselineResult = orchestrateIntelligence({
+    const baselineResult = await orchestrateIntelligence({
       campaign: campaignBaseline,
       adAccountId: accountId,
       currentMetrics: { impressions: 5000, link_clicks: 1000, landing_page_views: 200, clicks: 1000, spend: 100 },
@@ -321,7 +321,7 @@ describe('mmsOrchestrator.orchestrateIntelligence (Phase 5 — MMS as real orche
       );
     }
 
-    const historyResult = orchestrateIntelligence({
+    const historyResult = await orchestrateIntelligence({
       campaign: campaignHistory,
       adAccountId: accountId,
       currentMetrics: { impressions: 5000, link_clicks: 1000, landing_page_views: 200, clicks: 1000, spend: 100 },
@@ -340,7 +340,7 @@ describe('mmsOrchestrator.orchestrateIntelligence (Phase 5 — MMS as real orche
     expect(historyDecision.confidence).toBe(CONFIDENCE_DOWNGRADE[baselineDecision.confidence]);
   });
 
-  test('Phase X.6 — historical learning applies to recommendation-/alert-sourced findings INSIDE orchestrateIntelligence() itself (Step 3.5/4b), not just the diagnosis route\'s separate second-pass call', () => {
+  test('Phase X.6 — historical learning applies to recommendation-/alert-sourced findings INSIDE orchestrateIntelligence() itself (Step 3.5/4b), not just the diagnosis route\'s separate second-pass call', async () => {
     const campaignId = insertCampaign('traffic', 'camp_orch_12');
     const campaignMetaId = 'camp_orch_12';
 
@@ -366,7 +366,7 @@ describe('mmsOrchestrator.orchestrateIntelligence (Phase 5 — MMS as real orche
     const campaign = { id: campaignId, meta_campaign_id: campaignMetaId, name: 'History Rec/Alert Campaign', objective: 'traffic' };
     // Same fixture as the Phase X.3 test above: fires LOW_CTR (-> REFRESH_CREATIVE)
     // and CPM_SPIKE (-> REVIEW_PERFORMANCE) without colliding via dedup.
-    const result = orchestrateIntelligence({
+    const result = await orchestrateIntelligence({
       campaign,
       adAccountId: accountId,
       currentMetrics: { impressions: 5000, clicks: 25, ctr: 0.5, cpm: 140, link_clicks: 25, spend: 100 },
@@ -393,11 +393,11 @@ describe('mmsOrchestrator.orchestrateIntelligence (Phase 5 — MMS as real orche
   // delivering must be retired, not left showing.
   // ═══════════════════════════════════════════════════════════════════
   describe('lifecycle gate (effectiveStatus)', () => {
-    test('a PAUSED campaign short-circuits to a lifecycle-only bundle: no health score, no diagnosis, no rule engine, no decisions', () => {
+    test('a PAUSED campaign short-circuits to a lifecycle-only bundle: no health score, no diagnosis, no rule engine, no decisions', async () => {
       const campaignId = insertCampaign('sales', 'camp_lifecycle_1');
       const campaign = { id: campaignId, meta_campaign_id: 'camp_lifecycle_1', name: 'Paused Sales Campaign', objective: 'sales' };
 
-      const result = orchestrateIntelligence({
+      const result = await orchestrateIntelligence({
         campaign,
         adAccountId: accountId,
         // Metrics that WOULD normally fire rules/recommendations if the
@@ -424,11 +424,11 @@ describe('mmsOrchestrator.orchestrateIntelligence (Phase 5 — MMS as real orche
       expect(healthRow).toBeFalsy();
     });
 
-    test('the one recommendation returned is a lifecycle action, never Increase Budget/Scale/Creative Refresh/Audience Expansion', () => {
+    test('the one recommendation returned is a lifecycle action, never Increase Budget/Scale/Creative Refresh/Audience Expansion', async () => {
       const campaignId = insertCampaign('sales', 'camp_lifecycle_2');
       const campaign = { id: campaignId, meta_campaign_id: 'camp_lifecycle_2', name: 'Disapproved Campaign', objective: 'sales' };
 
-      const result = orchestrateIntelligence({
+      const result = await orchestrateIntelligence({
         campaign,
         adAccountId: accountId,
         currentMetrics: { impressions: 5000, purchases: 1, roas: 0.2, spend: 500 },
@@ -447,7 +447,7 @@ describe('mmsOrchestrator.orchestrateIntelligence (Phase 5 — MMS as real orche
       expect(rec.recommendation_body).not.toMatch(forbidden);
     });
 
-    test('retires stale performance recommendations/alerts from before the entity stopped delivering', () => {
+    test('retires stale performance recommendations/alerts from before the entity stopped delivering', async () => {
       const campaignId = insertCampaign('traffic', 'camp_lifecycle_3');
       const metaCampaignId = 'camp_lifecycle_3';
       const now = new Date().toISOString();
@@ -464,7 +464,7 @@ describe('mmsOrchestrator.orchestrateIntelligence (Phase 5 — MMS as real orche
       );
 
       const campaign = { id: campaignId, meta_campaign_id: metaCampaignId, name: 'Stale Campaign', objective: 'traffic' };
-      orchestrateIntelligence({
+      await orchestrateIntelligence({
         campaign,
         adAccountId: accountId,
         currentMetrics: { impressions: 5000, link_clicks: 1000, landing_page_views: 200, clicks: 1000, spend: 100 },
@@ -494,11 +494,11 @@ describe('mmsOrchestrator.orchestrateIntelligence (Phase 5 — MMS as real orche
       expect(lifecycleRec.dismissed_at).toBeNull();
     });
 
-    test('persist:false does not touch recommendation_log/active_alerts (ad_set/ad grain reads)', () => {
+    test('persist:false does not touch recommendation_log/active_alerts (ad_set/ad grain reads)', async () => {
       const campaignId = insertCampaign('traffic', 'camp_lifecycle_4');
       const campaign = { id: campaignId, meta_campaign_id: 'camp_lifecycle_4', name: 'Ad Set Grain', objective: 'traffic' };
 
-      const result = orchestrateIntelligence({
+      const result = await orchestrateIntelligence({
         campaign,
         entityType: 'ad_set',
         adAccountId: accountId,
@@ -518,11 +518,11 @@ describe('mmsOrchestrator.orchestrateIntelligence (Phase 5 — MMS as real orche
       expect(row).toBeFalsy();
     });
 
-    test('ACTIVE effective_status runs the normal pipeline unchanged (no regression)', () => {
+    test('ACTIVE effective_status runs the normal pipeline unchanged (no regression)', async () => {
       const campaignId = insertCampaign('traffic', 'camp_lifecycle_5');
       const campaign = { id: campaignId, meta_campaign_id: 'camp_lifecycle_5', name: 'Active Campaign', objective: 'traffic' };
 
-      const result = orchestrateIntelligence({
+      const result = await orchestrateIntelligence({
         campaign,
         adAccountId: accountId,
         currentMetrics: { impressions: 5000, link_clicks: 1000, landing_page_views: 200, clicks: 1000, spend: 100 },
@@ -536,11 +536,11 @@ describe('mmsOrchestrator.orchestrateIntelligence (Phase 5 — MMS as real orche
       expect(typeof result.intelligence.health.score === 'number' || result.intelligence.health.score === null).toBe(true);
     });
 
-    test('an ARCHIVED campaign gets a Duplicate lifecycle recommendation, not a scale/budget suggestion', () => {
+    test('an ARCHIVED campaign gets a Duplicate lifecycle recommendation, not a scale/budget suggestion', async () => {
       const campaignId = insertCampaign('sales', 'camp_lifecycle_archived');
       const campaign = { id: campaignId, meta_campaign_id: 'camp_lifecycle_archived', name: 'Archived Campaign', objective: 'sales' };
 
-      const result = orchestrateIntelligence({
+      const result = await orchestrateIntelligence({
         campaign,
         adAccountId: accountId,
         currentMetrics: { impressions: 5000, purchases: 20, roas: 4, spend: 500 },
@@ -558,11 +558,11 @@ describe('mmsOrchestrator.orchestrateIntelligence (Phase 5 — MMS as real orche
       expect(result.ruleEngineDecisions).toEqual([]);
     });
 
-    test('DELETED effective_status short-circuits to a lifecycle-only bundle with no scale/budget/creative recommendation', () => {
+    test('DELETED effective_status short-circuits to a lifecycle-only bundle with no scale/budget/creative recommendation', async () => {
       const campaignId = insertCampaign('sales', 'camp_lifecycle_deleted');
       const campaign = { id: campaignId, meta_campaign_id: 'camp_lifecycle_deleted', name: 'Deleted Campaign', objective: 'sales' };
 
-      const result = orchestrateIntelligence({
+      const result = await orchestrateIntelligence({
         campaign,
         adAccountId: accountId,
         currentMetrics: { impressions: 5000, purchases: 1, roas: 0.2, spend: 500 },
@@ -579,11 +579,11 @@ describe('mmsOrchestrator.orchestrateIntelligence (Phase 5 — MMS as real orche
       expect(result.ruleEngineDecisions).toEqual([]);
     });
 
-    test('an unknown/legacy effective_status (not yet synced) falls back to the normal pipeline, not a lifecycle short-circuit', () => {
+    test('an unknown/legacy effective_status (not yet synced) falls back to the normal pipeline, not a lifecycle short-circuit', async () => {
       const campaignId = insertCampaign('traffic', 'camp_lifecycle_6');
       const campaign = { id: campaignId, meta_campaign_id: 'camp_lifecycle_6', name: 'Pre-Phase-15 Campaign', objective: 'traffic' };
 
-      const result = orchestrateIntelligence({
+      const result = await orchestrateIntelligence({
         campaign,
         adAccountId: accountId,
         currentMetrics: { impressions: 5000, link_clicks: 1000, landing_page_views: 200, clicks: 1000, spend: 100 },
@@ -612,11 +612,11 @@ describe('mmsOrchestrator.orchestrateIntelligence (Phase 5 — MMS as real orche
   // contradiction this test locks in as fixed.
   // ═══════════════════════════════════════════════════════════════════
   describe('governance contradiction fix (Task 1)', () => {
-    test('top-level governance trace matches the current execution\'s own decision, not historical relatedDecisions', () => {
+    test('top-level governance trace matches the current execution\'s own decision, not historical relatedDecisions', async () => {
       const campaignId = insertCampaign('engagement', 'camp_governance_fix');
       const campaign = { id: campaignId, meta_campaign_id: 'camp_governance_fix', name: 'New Engagement Campaign', objective: 'engagement' };
 
-      const result = orchestrateIntelligence({
+      const result = await orchestrateIntelligence({
         campaign,
         adAccountId: accountId,
         // Real production values (spend/results/post_engagements all fell
@@ -660,13 +660,13 @@ describe('mmsOrchestrator.orchestrateIntelligence (Phase 5 — MMS as real orche
       expect(result.governance.self_check.checks.correct_governance_compliance.status).toBe('failed');
     });
 
-    test('multiple decisions in one execution are all validated and aggregated into one overall state', () => {
+    test('multiple decisions in one execution are all validated and aggregated into one overall state', async () => {
       const campaignId = insertCampaign('traffic', 'camp_governance_multi');
       const campaign = { id: campaignId, meta_campaign_id: 'camp_governance_multi', name: 'Multi-Decision Campaign', objective: 'traffic' };
 
       // Fires both a rule-engine decision (MF7.10.10, High Bounce) and a
       // recommendation-sourced one (LOW_CTR, ctr < 1) in the same execution.
-      const result = orchestrateIntelligence({
+      const result = await orchestrateIntelligence({
         campaign,
         adAccountId: accountId,
         currentMetrics: { impressions: 5000, link_clicks: 1000, landing_page_views: 200, clicks: 1000, spend: 100, ctr: 0.5 },
@@ -691,11 +691,11 @@ describe('mmsOrchestrator.orchestrateIntelligence (Phase 5 — MMS as real orche
       }
     });
 
-    test('zero decisions this execution -> governance trace is vacuously clean regardless of any historical decisions the caller has', () => {
+    test('zero decisions this execution -> governance trace is vacuously clean regardless of any historical decisions the caller has', async () => {
       const campaignId = insertCampaign('traffic', 'camp_governance_none');
       const campaign = { id: campaignId, meta_campaign_id: 'camp_governance_none', name: 'Quiet Campaign', objective: 'traffic' };
 
-      const result = orchestrateIntelligence({
+      const result = await orchestrateIntelligence({
         campaign,
         adAccountId: accountId,
         currentMetrics: { impressions: 5000, link_clicks: 1000, landing_page_views: 900, clicks: 1000, spend: 100, ctr: 5 },

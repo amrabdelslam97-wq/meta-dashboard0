@@ -26,7 +26,7 @@ describe('decisionEngine.decisionsFromRuleEngine', () => {
 
   const campaign = { meta_campaign_id: 'camp_rule_1', name: 'Rule Engine Test Campaign', objective: 'traffic' };
 
-  test('converts a fired Rule Engine result into a Decision with full Framework/Rule attribution', () => {
+  test('converts a fired Rule Engine result into a Decision with full Framework/Rule attribution', async () => {
     const { fired } = executeRules({
       objective: 'traffic',
       current: { link_clicks: 1000, landing_page_views: 200 },
@@ -34,7 +34,7 @@ describe('decisionEngine.decisionsFromRuleEngine', () => {
     });
     expect(fired.length).toBeGreaterThan(0); // High Bounce should have fired
 
-    const decisions = decisionsFromRuleEngine(campaign, accountId, fired);
+    const decisions = await decisionsFromRuleEngine(campaign, accountId, fired);
     expect(decisions).toHaveLength(fired.length);
 
     const d = decisions.find(x => x.rule_id === 'MF7.10.10');
@@ -50,12 +50,12 @@ describe('decisionEngine.decisionsFromRuleEngine', () => {
     expect(d.evidence).toBeDefined();
   });
 
-  test('returns an empty array when no rules fired', () => {
-    const decisions = decisionsFromRuleEngine(campaign, accountId, []);
+  test('returns an empty array when no rules fired', async () => {
+    const decisions = await decisionsFromRuleEngine(campaign, accountId, []);
     expect(decisions).toEqual([]);
   });
 
-  test('a higher-severity fired rule produces a higher priority_score than a lower-severity one, all else equal', () => {
+  test('a higher-severity fired rule produces a higher priority_score than a lower-severity one, all else equal', async () => {
     const warningFired = [{
       rule_id: 'X1', framework: 'MF7', framework_name: 'Optimization Framework', rule_name: 'Test',
       version: 1, category: 'tracking', severity: 'warning',
@@ -63,8 +63,8 @@ describe('decisionEngine.decisionsFromRuleEngine', () => {
     }];
     const criticalFired = [{ ...warningFired[0], rule_id: 'X2', severity: 'critical' }];
 
-    const [warningDecision] = decisionsFromRuleEngine(campaign, accountId, warningFired);
-    const [criticalDecision] = decisionsFromRuleEngine(campaign, accountId, criticalFired);
+    const [warningDecision] = await decisionsFromRuleEngine(campaign, accountId, warningFired);
+    const [criticalDecision] = await decisionsFromRuleEngine(campaign, accountId, criticalFired);
     expect(criticalDecision.priority_score).toBeGreaterThan(warningDecision.priority_score);
   });
 });
@@ -92,23 +92,23 @@ describe('decisionEngine.persistRuleEngineFirings (Phase X.1 — entity_type cor
     severity: 'warning', reason: 'test', evidence: [], action: { type: 'FIX_TRACKING' }, governance_state: 'passed',
   }];
 
-  test('defaults to entity_type "campaign" when omitted (backward compatible)', () => {
+  test('defaults to entity_type "campaign" when omitted (backward compatible)', async () => {
     const campaign = { meta_campaign_id: 'camp_persist_1', name: 'Campaign A', objective: 'traffic' };
-    persistRuleEngineFirings(accountId, campaign, syntheticFired);
+    await persistRuleEngineFirings(accountId, campaign, syntheticFired);
     const row = testDb.db.get(`SELECT entity_type FROM rule_engine_log WHERE entity_meta_id = ?`, ['camp_persist_1']);
     expect(row.entity_type).toBe('campaign');
   });
 
-  test('records the correct entity_type for an ad_set-grain firing (was hardcoded to "campaign" before Phase X.1)', () => {
+  test('records the correct entity_type for an ad_set-grain firing (was hardcoded to "campaign" before Phase X.1)', async () => {
     const adSet = { meta_campaign_id: 'adset_persist_1', name: 'Ad Set A', objective: 'traffic' };
-    persistRuleEngineFirings(accountId, adSet, syntheticFired, 'ad_set');
+    await persistRuleEngineFirings(accountId, adSet, syntheticFired, 'ad_set');
     const row = testDb.db.get(`SELECT entity_type FROM rule_engine_log WHERE entity_meta_id = ?`, ['adset_persist_1']);
     expect(row.entity_type).toBe('ad_set');
   });
 
-  test('records the correct entity_type for an ad-grain firing', () => {
+  test('records the correct entity_type for an ad-grain firing', async () => {
     const ad = { meta_campaign_id: 'ad_persist_1', name: 'Ad A', objective: 'traffic' };
-    persistRuleEngineFirings(accountId, ad, syntheticFired, 'ad');
+    await persistRuleEngineFirings(accountId, ad, syntheticFired, 'ad');
     const row = testDb.db.get(`SELECT entity_type FROM rule_engine_log WHERE entity_meta_id = ?`, ['ad_persist_1']);
     expect(row.entity_type).toBe('ad');
   });

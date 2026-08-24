@@ -26,7 +26,7 @@ router.get('/efficiency/:level/:entityId', asyncHandler(async (req, res) => {
   const { level, entityId } = req.params;
   const dateRange = resolveDateRange(req.query);
 
-  const score = budgetIntel.scoreBudgetEfficiency(accountId, level, entityId, dateRange);
+  const score = await budgetIntel.scoreBudgetEfficiency(accountId, level, entityId, dateRange);
   return res.json({ data: score });
 }));
 
@@ -37,7 +37,7 @@ router.get('/waste/:level/:entityId', asyncHandler(async (req, res) => {
   const { level, entityId } = req.params;
   const dateRange = resolveDateRange(req.query);
 
-  const waste = budgetIntel.detectBudgetWaste(accountId, level, entityId, dateRange);
+  const waste = await budgetIntel.detectBudgetWaste(accountId, level, entityId, dateRange);
   return res.json({ data: waste });
 }));
 
@@ -46,19 +46,20 @@ router.get('/waste-summary', asyncHandler(async (req, res) => {
   const dateRange = resolveDateRange(req.query);
 
   // Detect waste across all campaigns
-  const campaigns = db.all(
+  const campaigns = await db.all(
     `SELECT * FROM budget_distribution_snapshots
      WHERE ad_account_id = ? AND level = 'campaign'
      AND date_since = ? AND date_until = ?`,
     [accountId, dateRange.since, dateRange.until]
   );
 
-  const wasteByEntity = campaigns
-    .map(c => ({
-      ...c,
-      waste: budgetIntel.detectBudgetWaste(accountId, 'campaign', c.entity_meta_id, dateRange),
-    }))
-    .filter(c => c.waste.waste_detected);
+  // Promise.all is safe here: each campaign's detectBudgetWaste() read is
+  // independent (own entity id, no shared mutable state).
+  const withWaste = await Promise.all(campaigns.map(async c => ({
+    ...c,
+    waste: await budgetIntel.detectBudgetWaste(accountId, 'campaign', c.entity_meta_id, dateRange),
+  })));
+  const wasteByEntity = withWaste.filter(c => c.waste.waste_detected);
 
   const totalWaste = wasteByEntity.reduce((s, c) => s + (c.waste.waste_amount || 0), 0);
 
@@ -84,7 +85,7 @@ router.get('/scaling-opportunities', asyncHandler(async (req, res) => {
   const level = req.query.level || 'campaign';
   const dateRange = resolveDateRange(req.query);
 
-  const opportunities = budgetIntel.detectScalingOpportunities(accountId, level, dateRange);
+  const opportunities = await budgetIntel.detectScalingOpportunities(accountId, level, dateRange);
   return res.json({ data: opportunities });
 }));
 
@@ -95,7 +96,7 @@ router.get('/distribution/:level', asyncHandler(async (req, res) => {
   const { level } = req.params;
   const dateRange = resolveDateRange(req.query);
 
-  const distribution = budgetIntel.getBudgetDistribution(accountId, level, dateRange);
+  const distribution = await budgetIntel.getBudgetDistribution(accountId, level, dateRange);
   return res.json({ data: distribution });
 }));
 
@@ -105,7 +106,7 @@ router.get('/burn-rate', asyncHandler(async (req, res) => {
   const accountId = loadAccountId(req);
   const dateRange = resolveDateRange(req.query);
 
-  const burnRate = budgetIntel.calculateBurnRate(accountId, dateRange);
+  const burnRate = await budgetIntel.calculateBurnRate(accountId, dateRange);
   return res.json({ data: burnRate });
 }));
 
@@ -115,7 +116,7 @@ router.get('/movement-recommendations', asyncHandler(async (req, res) => {
   const accountId = loadAccountId(req);
   const dateRange = resolveDateRange(req.query);
 
-  const recommendations = budgetMovement.generateBudgetMovementRecommendations(accountId, dateRange);
+  const recommendations = await budgetMovement.generateBudgetMovementRecommendations(accountId, dateRange);
   return res.json({ data: recommendations });
 }));
 
@@ -128,7 +129,7 @@ router.post('/simulate-reallocation', asyncHandler(async (req, res) => {
     return res.status(400).json({ error: 'movements array required' });
   }
 
-  const simulation = budgetMovement.simulateBudgetReallocation(accountId, movements, dateRange);
+  const simulation = await budgetMovement.simulateBudgetReallocation(accountId, movements, dateRange);
   return res.json({ data: simulation });
 }));
 
@@ -138,11 +139,15 @@ router.get('/dashboard', asyncHandler(async (req, res) => {
   const accountId = loadAccountId(req);
   const dateRange = resolveDateRange(req.query);
 
-  const distribution = budgetIntel.getBudgetDistribution(accountId, 'campaign', dateRange);
-  const burnRate = budgetIntel.calculateBurnRate(accountId, dateRange);
-  const waste = budgetIntel.detectBudgetWaste(accountId, 'campaign', '', dateRange); // Aggregate
-  const scaling = budgetIntel.detectScalingOpportunities(accountId, 'campaign', dateRange);
-  const movements = budgetMovement.generateBudgetMovementRecommendations(accountId, dateRange);
+  // Promise.all is safe here: every read below is independent (own table/
+  // query, none consumes another's output).
+  const [distribution, burnRate, waste, scaling, movements] = await Promise.all([
+    budgetIntel.getBudgetDistribution(accountId, 'campaign', dateRange),
+    budgetIntel.calculateBurnRate(accountId, dateRange),
+    budgetIntel.detectBudgetWaste(accountId, 'campaign', '', dateRange), // Aggregate
+    budgetIntel.detectScalingOpportunities(accountId, 'campaign', dateRange),
+    budgetMovement.generateBudgetMovementRecommendations(accountId, dateRange),
+  ]);
 
   return res.json({
     data: {

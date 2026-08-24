@@ -1052,15 +1052,29 @@ async function refreshSyncStatusCard() {
   } catch (e) { return; }
   if (!data) return;
 
-  const running = data.scheduler_status === 'running';
   const rateLimited = data.meta_api.rate_limit_status === 'limited';
+  // Phase 2 (PHASE_2_SYNC_EXECUTION_OBSERVABILITY_REPORT.md): has_live_scheduler
+  // is false on Vercel (the persistent in-process scheduler never starts
+  // there -- see autoSyncScheduler.js's own comment on this field). In that
+  // case the queue/progress fields below are not applicable at all -- the
+  // DB-backed currently_running/no_sync_currently_running/accounts.running
+  // fields are the real, accurate source of truth instead, on every
+  // deployment target.
+  const running = data.has_live_scheduler ? data.scheduler_status === 'running' : null;
+  const currentlyRunning = data.currently_running || [];
 
   el.innerHTML = `
     <div class="section-header">
       <div><span class="section-title">Executive Sync Status</span></div>
       <div style="display:flex;align-items:center;gap:8px">
-        <span class="badge ${running ? 'excellent' : 'warning'}">${running ? '● Running' : '⏸ Paused'}</span>
-        <button class="btn btn-ghost btn-sm" onclick="toggleScheduler(${running})">${running ? 'Pause' : 'Resume'}</button>
+        ${data.has_live_scheduler ? `
+          <span class="badge ${running ? 'excellent' : 'warning'}">${running ? '● Running' : '⏸ Paused'}</span>
+          <button class="btn btn-ghost btn-sm" onclick="toggleScheduler(${running})">${running ? 'Pause' : 'Resume'}</button>
+        ` : `
+          <span class="badge ${currentlyRunning.length ? 'excellent' : 'good'}" title="This deployment uses cron-triggered invocations, not a persistent background scheduler.">
+            ${currentlyRunning.length ? `● ${currentlyRunning.length} syncing` : '✓ Idle'}
+          </span>
+        `}
       </div>
     </div>
     <div class="grid grid-4" style="gap:12px;margin-top:8px">
@@ -1068,18 +1082,17 @@ async function refreshSyncStatusCard() {
         <div class="stat-label">Accounts</div>
         <div style="font-size:13px;margin-top:4px">
           <div>Connected: <strong>${data.accounts.connected}</strong></div>
-          <div>Waiting: <strong>${data.accounts.waiting}</strong></div>
-          <div>Syncing: <strong class="text-green">${data.accounts.syncing}</strong></div>
-          <div>Completed: <strong>${data.accounts.completed}</strong></div>
+          <div>Running: <strong class="${data.accounts.running ? 'text-green' : ''}">${data.accounts.running}</strong></div>
+          <div>Last cycle — Success: <strong class="text-green">${data.accounts.recent_success}</strong> · Partial: <strong class="text-orange">${data.accounts.recent_partial}</strong> · Failed: <strong class="text-red">${data.accounts.recent_failed}</strong></div>
         </div>
       </div>
       <div>
-        <div class="stat-label">Current Cycle</div>
+        <div class="stat-label">Current Execution</div>
         <div style="font-size:13px;margin-top:4px">
-          <div>Current Account: <strong>${data.current_account ? data.current_account.name : '—'}</strong></div>
-          <div>Current Step: <strong>${data.current_entity_type || '—'}</strong></div>
-          <div>Queue Position: <strong>${data.queue_position}/${data.queue_size}</strong></div>
-          <div>Progress: <strong>${data.progress_pct}%</strong></div>
+          ${data.no_sync_currently_running
+            ? '<div class="td-muted">No sync currently running</div>'
+            : currentlyRunning.map(a => `<div>${escapeHtml(a.name)} — <strong>${a.phase || 'in progress'}</strong> <span class="td-muted" style="font-size:11px">(since ${fmtWhen(a.started_at)})</span></div>`).join('')}
+          ${data.has_live_scheduler ? `<div class="td-muted" style="margin-top:4px">Queue: ${data.queue_position}/${data.queue_size}${data.progress_pct != null ? ` (${data.progress_pct}%)` : ''}</div>` : ''}
         </div>
       </div>
       <div>
@@ -1104,12 +1117,12 @@ async function refreshSyncStatusCard() {
     <div class="table-wrap" style="margin-top:14px">
       <table>
         <thead><tr>
-          <th>Account</th><th>Auto Sync</th><th>Scheduler</th><th>Queue</th><th>Tier</th>
+          <th>Account</th><th>Auto Sync</th><th>Scheduler</th><th>Sync Mode</th><th>Last Result</th><th>Queue</th><th>Tier</th>
           <th>Last Success</th><th>Last Failed</th><th>Cooldown</th><th>Next Sync</th><th>Freshness</th>
         </tr></thead>
         <tbody>
           ${(data.per_account || []).map(a => renderPerAccountStatusRow(a)).join('')}
-          ${!(data.per_account || []).length ? '<tr><td colspan="10" class="empty">No connected accounts yet.</td></tr>' : ''}
+          ${!(data.per_account || []).length ? '<tr><td colspan="12" class="empty">No connected accounts yet.</td></tr>' : ''}
         </tbody>
       </table>
     </div>
@@ -1129,6 +1142,38 @@ function schedulerStateBadge(state) {
   return `<span class="badge ${m.cls}" style="font-size:10px">${m.label}</span>`;
 }
 
+// Phase 2 (PHASE_2_SYNC_EXECUTION_OBSERVABILITY_REPORT.md): sync_mode/
+// initial_sync_completed_at/initial_sync_in_progress were already returned
+// by getPerAccountStatus() (added during the Sync Architecture Audit) but
+// never rendered anywhere -- this was backend-correct, frontend-invisible.
+function syncModeBadge(a) {
+  if (a.initial_sync_in_progress) {
+    return `<span class="badge warning" style="font-size:10px" title="Full historical sweep in progress -- resumes automatically from its checkpoint">⏳ Initial sync in progress</span>`;
+  }
+  if (a.sync_mode === 'initial_full_sweep') {
+    return `<span class="badge info" style="font-size:10px" title="Has not yet completed its first full hierarchy sweep">Initial sync pending</span>`;
+  }
+  return `<span class="badge good" style="font-size:10px" title="Initial sync completed ${fmtWhen(a.initial_sync_completed_at)} -- recurring sync is now active-only">✓ Active-only</span>`;
+}
+
+function lastResultBadge(a) {
+  const reasonLabel = { timed_out: 'time limit', rate_limited: 'rate limit', batch_limit: 'batch boundary' };
+  if (a.last_sync_status === 'partial') {
+    const reason = reasonLabel[a.last_sync_partial_reason] || 'paused';
+    return `<span class="badge warning" style="font-size:10px" title="Stopped safely (${reason}) -- resumes automatically">◐ Partial (${reason})</span>`;
+  }
+  if (a.last_sync_status === 'failed') {
+    return `<span class="badge critical" style="font-size:10px" title="${a.last_sync_error ? escapeHtml(a.last_sync_error) : ''}">✕ Failed</span>`;
+  }
+  if (a.last_sync_status === 'success') {
+    return `<span class="badge excellent" style="font-size:10px">✓ Completed</span>`;
+  }
+  if (a.last_sync_status === 'running') {
+    return `<span class="badge info" style="font-size:10px">● Running</span>`;
+  }
+  return `<span class="badge none" style="font-size:10px">—</span>`;
+}
+
 function renderPerAccountStatusRow(a) {
   const fresh = a.freshness || [];
   const staleCount = fresh.filter(f => f.is_stale).length;
@@ -1138,6 +1183,8 @@ function renderPerAccountStatusRow(a) {
       <td class="td-name">${a.account_name}</td>
       <td>${a.auto_sync_enabled ? '<span class="badge good" style="font-size:10px">✓ ON</span>' : '<span class="badge none" style="font-size:10px">⏸ OFF</span>'}</td>
       <td>${schedulerStateBadge(a.scheduler_state)}</td>
+      <td>${syncModeBadge(a)}</td>
+      <td>${lastResultBadge(a)}</td>
       <td class="td-muted">${a.queue_position ? `${a.queue_position}/${a.queue_size}` : '—'}</td>
       <td class="td-muted">${a.current_sync_tier || '—'}</td>
       <td class="td-muted" style="font-size:11px">${fmtWhen(a.last_successful_sync_at)}</td>
@@ -2826,11 +2873,63 @@ async function testAccountConnection(id, btnEl) {
   }
 }
 
+// Phase 2 (PHASE_2_SYNC_EXECUTION_OBSERVABILITY_REPORT.md): every value here
+// comes straight from the real backend summary (syncService.js's
+// summary.status/partialReason/sweepRemaining/campaigns.synced/errors) --
+// nothing here is a guess or a fabricated progress number. Mirrors the
+// completed/partial/timed_out/failed distinction the backend now makes.
+function describeForceSyncResult(result) {
+  const c = result && result.campaigns ? result.campaigns.synced : 0;
+  if (!result || result.status === 'completed') {
+    return { type: 'success', message: `Sync completed successfully — ${c} campaign(s) processed.` };
+  }
+  if (result.status === 'partial') {
+    const remaining = result.sweepRemaining || 0;
+    if (result.partialReason === 'timed_out') {
+      return {
+        type: 'info',
+        message: `Sync stopped safely before the server time limit — ${c} campaign(s) processed, ${remaining} remaining. Progress was saved and will resume automatically.`,
+      };
+    }
+    if (result.partialReason === 'rate_limited') {
+      return {
+        type: 'info',
+        message: `Sync paused due to Meta API rate limiting — ${c} campaign(s) processed, ${remaining} remaining. Will resume automatically once the cooldown clears.`,
+      };
+    }
+    return {
+      type: 'info',
+      message: `Sync partially completed — ${c} campaign(s) processed, ${remaining} remaining. The next sync will resume automatically.`,
+    };
+  }
+  // status === 'failed'
+  const firstError = (result.errors || [])[0];
+  const detail = firstError ? firstError.message : 'unknown error';
+  return {
+    type: 'error',
+    message: `Sync failed (${detail}) — see Sync History for details.`,
+  };
+}
+
 async function syncAccountNow(id, btnEl) {
   const original = btnEl.textContent;
   btnEl.textContent = 'Syncing…'; btnEl.disabled = true;
   try {
-    await apiPost('/sync', { account_id: id });
+    const res = await apiPost('/sync', { account_id: id });
+    const result = res && res.results ? res.results[0] : null;
+    const { type, message } = describeForceSyncResult(result);
+    showToast(message, type);
+  } catch (e) {
+    // Covers network failure, 4xx/5xx, and a Vercel platform timeout (504,
+    // no parseable JSON body) alike -- the one case syncAccountNow() used to
+    // let become a silent, un-caught rejection (only the global
+    // 'unhandledrejection' listener's generic "Request failed (504)" toast
+    // caught it, with no account context and no real progress numbers).
+    if (e && e.status === 504) {
+      showToast('Sync stopped safely before the server time limit. Progress was saved and will resume automatically — check Sync History shortly.', 'info');
+    } else {
+      showToast(`Sync did not complete: ${e && e.message ? e.message : 'unknown error'}. No new progress was committed.`, 'error');
+    }
   } finally {
     btnEl.textContent = original; btnEl.disabled = false;
     loadSettings();
@@ -3740,6 +3839,127 @@ function ciRenderBenchmark(b) {
   </div>`;
 }
 
+// ── AP-POS Intelligence Layer — Hook Alternatives + Root-Cause Taxonomy ──
+// Pure presentation over hook_alternatives/root_cause_taxonomy (creativeLibrary.js's
+// additive fields, see hookAlternativeGenerator.js/rootCauseTaxonomy.js) --
+// no new API call, same bundle already fetched for this page.
+
+function ciRenderHookAlternatives(h) {
+  if (!h) return '';
+  if (h.status !== 'generated') {
+    return `<div class="card" style="margin-bottom:20px"><div class="section-title" style="margin-bottom:8px">Suggested Hook Alternatives</div><div class="empty">${h.reason || 'Not applicable for this creative.'}</div></div>`;
+  }
+  return `
+  <div class="card" style="margin-bottom:20px">
+    <div class="section-title" style="margin-bottom:8px">Suggested Hook Alternatives</div>
+    <div style="font-size:11px;color:var(--muted);margin-bottom:12px">${h.disclosure}</div>
+    ${h.alternatives.map((a, i) => `
+      <div style="padding:10px 0;border-bottom:1px solid var(--border)">
+        <div style="font-size:13px"><strong>${i + 1}.</strong> ${a.pattern}</div>
+        <div style="font-size:11px;color:var(--muted);margin-top:4px">Addresses missing signal: <em>${a.addresses_missing_signal.replace(/_/g, ' ')}</em> — ${a.rationale}</div>
+      </div>`).join('')}
+  </div>`;
+}
+
+const RC_TAXONOMY_LABELS = {
+  creative: 'Creative', audience: 'Audience', funnel: 'Funnel', offer: 'Offer',
+  delivery: 'Delivery', campaign: 'Campaign', scaling: 'Scaling', measurement: 'Measurement',
+};
+
+function ciRenderRootCauseTaxonomy(t) {
+  if (!t) return '';
+  const cats = t.categories || {};
+  return `
+  <div class="card" style="margin-bottom:20px">
+    <div class="section-title" style="margin-bottom:4px">Root-Cause Taxonomy</div>
+    <div style="font-size:11px;color:var(--muted);margin-bottom:12px">${t.primary_category ? `Primary category: <strong>${RC_TAXONOMY_LABELS[t.primary_category]}</strong>. ` : ''}${t.arbitration_source || ''}</div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
+      ${Object.keys(RC_TAXONOMY_LABELS).map(key => {
+        const c = cats[key] || {};
+        const badgeClass = c.contributing ? 'critical' : (c.status === 'not_measurable' ? 'none' : 'excellent');
+        const badgeText = c.contributing ? 'Contributing' : (c.status === 'not_measurable' ? 'Not measurable' : 'Not contributing');
+        return `<div style="padding:8px;background:var(--bg3);border-radius:6px">
+          <div style="display:flex;justify-content:space-between;align-items:center">
+            <span style="font-size:12px;font-weight:600">${RC_TAXONOMY_LABELS[key]}</span>
+            <span class="badge ${badgeClass}">${badgeText}</span>
+          </div>
+          ${(c.evidence || []).length ? `<div style="font-size:11px;color:var(--muted);margin-top:4px">${c.evidence.join(' ')}</div>` : ''}
+          ${c.reason ? `<div style="font-size:11px;color:var(--muted);margin-top:4px">${c.reason}</div>` : ''}
+          ${c.not_measurable_note ? `<div style="font-size:10px;color:var(--muted);margin-top:4px;font-style:italic">${c.not_measurable_note}</div>` : ''}
+        </div>`;
+      }).join('')}
+    </div>
+  </div>`;
+}
+
+function ciRenderCtaAlternatives(c) {
+  if (!c) return '';
+  if (c.status !== 'generated') {
+    return `<div class="card" style="margin-bottom:20px"><div class="section-title" style="margin-bottom:8px">Suggested CTA Alternatives</div><div class="empty">${c.reason || 'Not applicable for this creative.'}</div></div>`;
+  }
+  return `
+  <div class="card" style="margin-bottom:20px">
+    <div class="section-title" style="margin-bottom:8px">Suggested CTA Alternatives</div>
+    <div style="font-size:11px;color:var(--muted);margin-bottom:12px">${c.disclosure}</div>
+    <div style="font-size:12px;margin-bottom:10px;color:var(--muted)">Current: <strong>${c.current_cta_type || 'unset'}</strong> — ${c.current_cta_reason || ''}</div>
+    ${c.alternatives.map((a, i) => `
+      <div style="padding:8px 0;border-bottom:1px solid var(--border)">
+        <div style="font-size:13px"><strong>${i + 1}. ${a.cta_type}</strong></div>
+        <div style="font-size:11px;color:var(--muted);margin-top:2px">${a.rationale}</div>
+      </div>`).join('')}
+  </div>`;
+}
+
+function ciRenderCreativeConcepts(cc) {
+  if (!cc) return '';
+  if (cc.status !== 'generated') {
+    return `<div class="card" style="margin-bottom:20px"><div class="section-title" style="margin-bottom:8px">Creative Concepts</div><div class="empty">${cc.reason || 'Not applicable for this creative.'}</div></div>`;
+  }
+  return `
+  <div class="card" style="margin-bottom:20px">
+    <div class="section-title" style="margin-bottom:8px">Creative Concepts</div>
+    <div style="font-size:11px;color:var(--muted);margin-bottom:12px">${cc.disclosure}</div>
+    <div style="display:flex;flex-direction:column;gap:10px">
+      ${cc.concepts.map(c => `
+        <div style="padding:10px;background:var(--bg3);border-radius:8px">
+          <div style="font-size:13px;font-weight:700;margin-bottom:6px">${c.concept} <span class="badge info" style="font-size:9px">targets: ${c.problem_addressed}</span></div>
+          <div style="font-size:12px;margin-bottom:3px"><strong>Hook:</strong> ${c.hook}</div>
+          <div style="font-size:12px;margin-bottom:3px"><strong>Message angle:</strong> ${c.message_angle}</div>
+          <div style="font-size:12px;margin-bottom:3px"><strong>Visual direction:</strong> ${c.visual_direction}</div>
+          <div style="font-size:12px;margin-bottom:6px"><strong>CTA:</strong> ${c.cta}</div>
+          ${c.structural_guidance ? `<div style="font-size:12px;margin-bottom:6px"><strong>Guidance:</strong> ${c.structural_guidance}</div>` : ''}
+          <div style="font-size:11px;color:var(--muted)">${c.why}</div>
+          <div style="font-size:10px;color:var(--muted);margin-top:4px">Evidence: ${(c.evidence || []).join(' ')} — Confidence: ${c.confidence}</div>
+        </div>`).join('')}
+    </div>
+  </div>`;
+}
+
+const CI_VERIFICATION_BADGE = { improved: 'excellent', declined: 'critical', mixed_signals: 'good', no_clear_change: 'none' };
+
+function ciRenderVerification(v) {
+  if (!v) return '';
+  if (v.status !== 'verified') {
+    return `<div class="card" style="margin-bottom:20px"><div class="section-title" style="margin-bottom:8px">Verification: Did the last change work?</div><div class="empty">${v.reason || 'Not applicable.'}</div></div>`;
+  }
+  const d = v.deltas;
+  return `
+  <div class="card" style="margin-bottom:20px">
+    <div class="section-title" style="margin-bottom:8px">Verification: Did the last change work?</div>
+    <div style="margin-bottom:8px"><span class="badge ${CI_VERIFICATION_BADGE[v.verdict] || 'none'}">${v.verdict.replace(/_/g, ' ').toUpperCase()}</span></div>
+    <div style="font-size:12px;color:var(--muted);margin-bottom:8px">Last real change: <strong>${v.last_change.field}</strong> on ${v.last_change.date} ("${v.last_change.from || '(none)'}" → "${v.last_change.to || '(none)'}"). Compared ${v.compared_period.before} vs ${v.compared_period.after}.</div>
+    <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:8px">
+      ${['score_overall', 'ctr', 'cpa', 'roas'].map(k => `
+        <div style="text-align:center;padding:6px;background:var(--bg3);border-radius:6px">
+          <div style="font-size:10px;color:var(--muted);text-transform:uppercase">${k.replace('_', ' ')}</div>
+          <div style="font-size:13px;font-weight:700">${d[k].delta_pct != null ? (d[k].delta_pct > 0 ? '+' : '') + d[k].delta_pct + '%' : 'N/A'}</div>
+        </div>`).join('')}
+    </div>
+    ${v.plausible_trigger ? `<div style="font-size:11px;color:var(--muted);padding:8px;background:var(--bg3);border-radius:6px">Possibly triggered by: <strong>${v.plausible_trigger.recommendation_title}</strong> (logged ${v.plausible_trigger.generated_at}). ${v.plausible_trigger.disclosure}</div>` : ''}
+    <div style="font-size:10px;color:var(--muted);margin-top:8px">${v.disclosure}</div>
+  </div>`;
+}
+
 /** Merges the existing lifecycle-event timeline with Phase 44's real business events and state transitions into one sorted, chronological list. */
 function ciMergedTimelineRows(d) {
   const rows = (d.timeline?.events || []).map(e => ({ ...e }));
@@ -4171,6 +4391,12 @@ function ciRenderDetails(d) {
   </div>
 
   ${ciRenderBenchmark(advisor?.benchmark)}
+
+  ${ciRenderHookAlternatives(d.hook_alternatives)}
+  ${ciRenderCtaAlternatives(d.cta_alternatives)}
+  ${ciRenderCreativeConcepts(d.creative_concepts)}
+  ${ciRenderRootCauseTaxonomy(d.root_cause_taxonomy)}
+  ${ciRenderVerification(d.verification)}
 
   <div class="card" style="margin-bottom:20px">
     <div class="section-title" style="margin-bottom:12px">Timeline</div>

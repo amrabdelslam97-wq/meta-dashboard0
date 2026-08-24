@@ -18,11 +18,11 @@ function generateId(prefix) {
 /**
  * Create subscription plan (admin only)
  */
-function createPlan(planData) {
+async function createPlan(planData) {
   const planId = generateId('plan');
   const now = new Date().toISOString();
 
-  db.run(`
+  await db.run(`
     INSERT INTO subscription_plans (
       id, plan_name, plan_slug, description, price_monthly, price_yearly,
       currency, max_users, max_clients, max_ad_accounts, max_ai_requests,
@@ -61,8 +61,8 @@ function createPlan(planData) {
 /**
  * Get plan by ID
  */
-function getPlan(planId) {
-  const plan = db.get(`
+async function getPlan(planId) {
+  const plan = await db.get(`
     SELECT * FROM subscription_plans WHERE id = ?
   `, [planId]);
 
@@ -77,8 +77,8 @@ function getPlan(planId) {
 /**
  * Get plan by slug
  */
-function getPlanBySlug(slug) {
-  const plan = db.get(`
+async function getPlanBySlug(slug) {
+  const plan = await db.get(`
     SELECT * FROM subscription_plans WHERE plan_slug = ?
   `, [slug]);
 
@@ -93,7 +93,7 @@ function getPlanBySlug(slug) {
 /**
  * List all active plans
  */
-function listPlans(includeInactive = false) {
+async function listPlans(includeInactive = false) {
   let query = 'SELECT * FROM subscription_plans';
   const params = [];
 
@@ -103,7 +103,7 @@ function listPlans(includeInactive = false) {
 
   query += ' ORDER BY tier ASC';
 
-  const plans = db.all(query, params);
+  const plans = await db.all(query, params);
   return plans.map(p => ({
     ...p,
     features: p.features_json ? JSON.parse(p.features_json) : [],
@@ -117,7 +117,7 @@ function listPlans(includeInactive = false) {
 /**
  * Subscribe tenant to plan
  */
-function subscribeTenantToPlan(tenantId, planId, billingCycle = 'monthly') {
+async function subscribeTenantToPlan(tenantId, planId, billingCycle = 'monthly') {
   const subscriptionId = generateId('sub');
   const now = new Date().toISOString();
 
@@ -131,10 +131,10 @@ function subscribeTenantToPlan(tenantId, planId, billingCycle = 'monthly') {
   }
 
   // Remove existing subscription
-  db.run('DELETE FROM tenant_subscriptions WHERE tenant_id = ?', [tenantId]);
+  await db.run('DELETE FROM tenant_subscriptions WHERE tenant_id = ?', [tenantId]);
 
   // Create new subscription
-  db.run(`
+  await db.run(`
     INSERT INTO tenant_subscriptions (
       id, tenant_id, plan_id, billing_cycle, current_period_start,
       current_period_end, status, auto_renew, created_at, updated_at
@@ -154,7 +154,7 @@ function subscribeTenantToPlan(tenantId, planId, billingCycle = 'monthly') {
 
   // Update tenant quotas based on plan
   const tenantService = require('./tenantService');
-  tenantService.updateTenantQuotasFromPlan(tenantId, planId);
+  await tenantService.updateTenantQuotasFromPlan(tenantId, planId);
 
   return getSubscription(tenantId);
 }
@@ -162,7 +162,7 @@ function subscribeTenantToPlan(tenantId, planId, billingCycle = 'monthly') {
 /**
  * Get tenant's current subscription
  */
-function getSubscription(tenantId) {
+async function getSubscription(tenantId) {
   return db.get(`
     SELECT ts.*, sp.plan_name, sp.plan_slug, sp.features_json
     FROM tenant_subscriptions ts
@@ -174,10 +174,10 @@ function getSubscription(tenantId) {
 /**
  * Cancel subscription
  */
-function cancelSubscription(tenantId, reason = null) {
+async function cancelSubscription(tenantId, reason = null) {
   const now = new Date().toISOString();
 
-  db.run(`
+  await db.run(`
     UPDATE tenant_subscriptions
     SET status = 'cancelled', cancelled_at = ?, cancel_at = ?, updated_at = ?
     WHERE tenant_id = ?
@@ -189,10 +189,10 @@ function cancelSubscription(tenantId, reason = null) {
 /**
  * Pause subscription
  */
-function pauseSubscription(tenantId) {
+async function pauseSubscription(tenantId) {
   const now = new Date().toISOString();
 
-  db.run(`
+  await db.run(`
     UPDATE tenant_subscriptions
     SET status = 'paused', updated_at = ?
     WHERE tenant_id = ?
@@ -204,10 +204,10 @@ function pauseSubscription(tenantId) {
 /**
  * Resume subscription
  */
-function resumeSubscription(tenantId) {
+async function resumeSubscription(tenantId) {
   const now = new Date().toISOString();
 
-  db.run(`
+  await db.run(`
     UPDATE tenant_subscriptions
     SET status = 'active', updated_at = ?
     WHERE tenant_id = ?
@@ -219,8 +219,8 @@ function resumeSubscription(tenantId) {
 /**
  * Check if subscription is expiring soon
  */
-function isExpiringInDays(tenantId, days = 7) {
-  const subscription = getSubscription(tenantId);
+async function isExpiringInDays(tenantId, days = 7) {
+  const subscription = await getSubscription(tenantId);
   if (!subscription || subscription.status !== 'active') return false;
 
   const expiryDate = new Date(subscription.current_period_end);
@@ -232,8 +232,8 @@ function isExpiringInDays(tenantId, days = 7) {
 /**
  * Check if tenant can use feature (based on plan)
  */
-function canAccessFeature(tenantId, featureKey) {
-  const subscription = getSubscription(tenantId);
+async function canAccessFeature(tenantId, featureKey) {
+  const subscription = await getSubscription(tenantId);
   if (!subscription) return false;
 
   const features = JSON.parse(subscription.features_json || '[]');
@@ -243,34 +243,34 @@ function canAccessFeature(tenantId, featureKey) {
 /**
  * Get subscription statistics
  */
-function getSubscriptionStats() {
-  const totalTenants = db.get(
+async function getSubscriptionStats() {
+  const totalTenants = (await db.get(
     'SELECT COUNT(*) as count FROM tenants'
-  )?.count || 0;
+  ))?.count || 0;
 
-  const activeSubscriptions = db.get(
+  const activeSubscriptions = (await db.get(
     'SELECT COUNT(*) as count FROM tenant_subscriptions WHERE status = "active"'
-  )?.count || 0;
+  ))?.count || 0;
 
-  const byStatus = db.all(`
+  const byStatus = await db.all(`
     SELECT status, COUNT(*) as count
     FROM tenant_subscriptions
     GROUP BY status
   `);
 
-  const byPlan = db.all(`
+  const byPlan = await db.all(`
     SELECT sp.plan_name, COUNT(*) as count
     FROM tenant_subscriptions ts
     LEFT JOIN subscription_plans sp ON ts.plan_id = sp.id
     GROUP BY sp.plan_name
   `);
 
-  const mrr = db.get(`
+  const mrr = (await db.get(`
     SELECT SUM(sp.price_monthly) as total
     FROM tenant_subscriptions ts
     LEFT JOIN subscription_plans sp ON ts.plan_id = sp.id
     WHERE ts.status = 'active' AND ts.billing_cycle = 'monthly'
-  `)?.total || 0;
+  `))?.total || 0;
 
   return {
     total_tenants: totalTenants,

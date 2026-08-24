@@ -44,10 +44,10 @@ function computeConfidence(condition, actualValue) {
 // Resolve (auto-dismiss) a recommendation that no longer applies (FIX 3)
 // Called when a rule's condition is no longer met during an Analyze run.
 // ─────────────────────────────────────────────
-function resolveRecommendation(ruleCode, entityMetaId) {
+async function resolveRecommendation(ruleCode, entityMetaId) {
   const now = new Date().toISOString();
   // recommendation_log has dismissed_at but no updated_at column
-  db.run(
+  await db.run(
     `UPDATE recommendation_log
      SET dismissed_at = ?
      WHERE rule_code = ? AND entity_meta_id = ? AND dismissed_at IS NULL`,
@@ -61,7 +61,7 @@ function resolveRecommendation(ruleCode, entityMetaId) {
 // existing non-dismissed row for the same rule+entity and updating it
 // in place, rather than a separate once-per-day check.
 // ─────────────────────────────────────────────
-function upsertRecommendation(rule, campaign, adAccountId, metrics, healthScore, entityType = 'campaign') {
+async function upsertRecommendation(rule, campaign, adAccountId, metrics, healthScore, entityType = 'campaign') {
   const now = new Date().toISOString();
 
   // Look up by the SAME grain as idx_recommendation_log_dedup (rule_code,
@@ -69,7 +69,7 @@ function upsertRecommendation(rule, campaign, adAccountId, metrics, healthScore,
   // rule re-firing after being dismissed earlier the same day updates that
   // row in place instead of attempting a second INSERT for the same day,
   // which violated the unique index and crashed the insights endpoint.
-  const existing = db.get(
+  const existing = await db.get(
     `SELECT id FROM recommendation_log
      WHERE rule_code = ?
        AND entity_meta_id = ?
@@ -81,7 +81,7 @@ function upsertRecommendation(rule, campaign, adAccountId, metrics, healthScore,
     // FIX 1 (Phase 9): Also refresh metric_snapshot, health_score, and evidence fields
     // so that displayed evidence always reflects the CURRENT analysis, not the first one.
     // Root cause of stale evidence bug: previously only last_generated_at was updated.
-    db.run(
+    await db.run(
       `UPDATE recommendation_log
        SET last_generated_at = ?,
            metric_snapshot = ?,
@@ -107,7 +107,7 @@ function upsertRecommendation(rule, campaign, adAccountId, metrics, healthScore,
 
   // Insert new entry
   const id = uuidv4();
-  db.run(
+  await db.run(
     `INSERT INTO recommendation_log
        (id, rule_id, rule_code, ad_account_id, entity_type, entity_meta_id,
         entity_label, objective, severity, recommendation_title, recommendation_body,
@@ -149,8 +149,8 @@ function upsertRecommendation(rule, campaign, adAccountId, metrics, healthScore,
 // MAIN: Run recommendation engine for one campaign
 // Returns array of fired recommendations
 // ─────────────────────────────────────────────
-function runRecommendationEngine(campaign, metrics, adAccountId, healthScore = null, entityType = 'campaign') {
-  const rules = loadApplicableRules(campaign.objective);
+async function runRecommendationEngine(campaign, metrics, adAccountId, healthScore = null, entityType = 'campaign') {
+  const rules = await loadApplicableRules(campaign.objective);
   const fired = [];
   const suppressedCodes = new Set();
 
@@ -186,12 +186,12 @@ function runRecommendationEngine(campaign, metrics, adAccountId, healthScore = n
       // FIX 3 (Phase 9): auto-dismiss stale recommendations.
       // If a rule no longer meets its condition, close any open recommendation
       // so the user isn't shown advice that contradicts current metrics.
-      resolveRecommendation(rule.rule_code, campaign.meta_campaign_id);
+      await resolveRecommendation(rule.rule_code, campaign.meta_campaign_id);
       continue;
     }
 
     // Write to DB
-    upsertRecommendation(rule, campaign, adAccountId, metrics, healthScore, entityType);
+    await upsertRecommendation(rule, campaign, adAccountId, metrics, healthScore, entityType);
 
     fired.push({
       rule_code:            rule.rule_code,
@@ -226,8 +226,8 @@ function runRecommendationEngine(campaign, metrics, adAccountId, healthScore = n
 // Load existing (non-dismissed) recommendations
 // for a campaign from the log
 // ─────────────────────────────────────────────
-function loadActiveRecommendations(metaCampaignId, entityType = 'campaign') {
-  const rows = db.all(
+async function loadActiveRecommendations(metaCampaignId, entityType = 'campaign') {
+  const rows = await db.all(
     `SELECT
        r.rule_code, r.recommendation_title, r.recommendation_body,
        r.severity, r.generated_at, r.last_generated_at,

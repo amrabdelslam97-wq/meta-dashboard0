@@ -38,9 +38,9 @@ router.get('/', asyncHandler(async (req, res) => {
 
   const where = conditions.length ? 'WHERE ' + conditions.join(' AND ') : '';
 
-  const total = db.get(`SELECT COUNT(*) as c FROM active_alerts a ${where}`, params);
+  const total = await db.get(`SELECT COUNT(*) as c FROM active_alerts a ${where}`, params);
 
-  const rows = db.all(
+  const rows = await db.all(
     `SELECT
        a.id, a.alert_code, a.entity_type, a.entity_meta_id, a.entity_label,
        a.severity, a.alert_message, a.detected_value, a.threshold_value,
@@ -68,11 +68,11 @@ router.patch('/:id', asyncHandler(async (req, res) => {
   const { action, snooze_hours, snooze_until } = req.body || {};
   const now = new Date().toISOString();
 
-  const alert = db.get('SELECT id, status FROM active_alerts WHERE id = ?', [id]);
+  const alert = await db.get('SELECT id, status FROM active_alerts WHERE id = ?', [id]);
   if (!alert) return res.status(404).json({ error: 'Alert not found' });
 
   if (action === 'dismiss') {
-    db.run("UPDATE active_alerts SET status = 'dismissed' WHERE id = ?", [id]);
+    await db.run("UPDATE active_alerts SET status = 'dismissed' WHERE id = ?", [id]);
   } else if (action === 'snooze') {
     let until;
     if (snooze_until) {
@@ -87,14 +87,14 @@ router.patch('/:id', asyncHandler(async (req, res) => {
       d.setHours(d.getHours() + hours);
       until = d.toISOString();
     }
-    db.run('UPDATE active_alerts SET snoozed_until = ? WHERE id = ?', [until, id]);
+    await db.run('UPDATE active_alerts SET snoozed_until = ? WHERE id = ?', [until, id]);
   } else if (action === 'resolve') {
-    db.run("UPDATE active_alerts SET status = 'resolved', resolved_at = ? WHERE id = ?", [now, id]);
+    await db.run("UPDATE active_alerts SET status = 'resolved', resolved_at = ? WHERE id = ?", [now, id]);
   } else {
     return res.status(400).json({ error: 'Invalid action', valid: ['dismiss', 'snooze', 'resolve'] });
   }
 
-  const updated = db.get('SELECT * FROM active_alerts WHERE id = ?', [id]);
+  const updated = await db.get('SELECT * FROM active_alerts WHERE id = ?', [id]);
   return res.json({ data: updated });
 }));
 

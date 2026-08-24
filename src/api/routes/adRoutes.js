@@ -26,7 +26,7 @@ router.get('/', asyncHandler(async (req, res) => {
   const limit  = Math.min(Math.max(parseInt(lp, 10) || 100, 1), 500);
   const offset = Math.max(parseInt(op, 10) || 0, 0);
 
-  const allAds = getAdsList({ adset_id, campaign_id, account_id, status });
+  const allAds = await getAdsList({ adset_id, campaign_id, account_id, status });
   const page   = allAds.slice(offset, offset + limit);
 
   return res.json({
@@ -41,7 +41,7 @@ router.get('/', asyncHandler(async (req, res) => {
 router.get('/:id', asyncHandler(async (req, res) => {
   const { id } = req.params;
 
-  const ad = db.get(
+  const ad = await db.get(
     `SELECT ad.*, s.meta_adset_id, s.name as adset_name,
             c.meta_campaign_id, c.name as campaign_name, c.objective,
             a.account_name, a.currency
@@ -55,7 +55,7 @@ router.get('/:id', asyncHandler(async (req, res) => {
 
   if (!ad) return res.status(404).json({ error: 'Ad not found', id });
 
-  const latest = db.get(
+  const latest = await db.get(
     `SELECT health_score, health_status, calculated_at
      FROM health_score_history
      WHERE entity_meta_id = ? AND entity_type = 'ad'
@@ -63,13 +63,13 @@ router.get('/:id', asyncHandler(async (req, res) => {
     [ad.meta_ad_id]
   );
 
-  const recCount = db.get(
+  const recCount = await db.get(
     `SELECT COUNT(*) as count FROM recommendation_log
      WHERE entity_meta_id = ? AND dismissed_at IS NULL`,
     [ad.meta_ad_id]
   );
 
-  const alertCount = db.get(
+  const alertCount = await db.get(
     `SELECT COUNT(*) as count FROM active_alerts
      WHERE entity_meta_id = ? AND status = 'active'`,
     [ad.meta_ad_id]
@@ -115,13 +115,13 @@ router.get('/:id/history', asyncHandler(async (req, res) => {
   const { days = '30' } = req.query;
   const n = Math.min(Math.max(parseInt(days, 10) || 30, 1), 365);
 
-  const ad = db.get(
+  const ad = await db.get(
     'SELECT meta_ad_id, name FROM ads WHERE id = ? OR meta_ad_id = ?',
     [id, id]
   );
   if (!ad) return res.status(404).json({ error: 'Ad not found', id });
 
-  const history = db.all(
+  const history = await db.all(
     `SELECT health_score, health_status, score_reference, calculated_at
      FROM health_score_history
      WHERE entity_meta_id = ? AND entity_type = 'ad'
@@ -145,7 +145,7 @@ router.get('/:id/history', asyncHandler(async (req, res) => {
 router.get('/:id/score-breakdown', asyncHandler(async (req, res) => {
   const { id } = req.params;
 
-  const ad = db.get(
+  const ad = await db.get(
     `SELECT ad.meta_ad_id, ad.name, a.currency
      FROM ads ad
      JOIN ad_accounts a ON ad.ad_account_id = a.id
@@ -154,7 +154,7 @@ router.get('/:id/score-breakdown', asyncHandler(async (req, res) => {
   );
   if (!ad) return res.status(404).json({ error: 'Ad not found', id });
 
-  const breakdown = formatScoreBreakdown(ad.meta_ad_id, 'ad', ad.currency);
+  const breakdown = await formatScoreBreakdown(ad.meta_ad_id, 'ad', ad.currency);
   return res.json({ data: breakdown });
 }));
 

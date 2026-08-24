@@ -36,9 +36,9 @@ const CTA_TYPES = {
  * Get complete creative profile for a single ad.
  * Combines metadata from ads table + creative_analytics table + insights data.
  */
-function getCreativeProfile(metaAdId) {
+async function getCreativeProfile(metaAdId) {
   // Get ad metadata
-  const ad = db.get(
+  const ad = await db.get(
     `SELECT a.*, c.meta_campaign_id, c.objective, s.meta_adset_id
      FROM ads a
      LEFT JOIN campaigns c ON c.id = a.campaign_id
@@ -55,7 +55,7 @@ function getCreativeProfile(metaAdId) {
   }
 
   // Get creative analytics (performance history)
-  const analytics = db.get(
+  const analytics = await db.get(
     `SELECT * FROM creative_analytics
      WHERE meta_ad_id = ?
      ORDER BY date_until DESC LIMIT 1`,
@@ -167,8 +167,8 @@ function extractCreativeAssets(creative) {
 /**
  * Get creative assets display-ready format.
  */
-function getCreativeAssets(metaAdId) {
-  const profile = getCreativeProfile(metaAdId);
+async function getCreativeAssets(metaAdId) {
+  const profile = await getCreativeProfile(metaAdId);
 
   if (profile.error) {
     return { error: profile.error };
@@ -194,8 +194,8 @@ function getCreativeAssets(metaAdId) {
 /**
  * List all creatives for a campaign with basic info.
  */
-function listCreativesByCampaign(metaCampaignId, limit = 50) {
-  const rows = db.all(
+async function listCreativesByCampaign(metaCampaignId, limit = 50) {
+  const rows = await db.all(
     `SELECT a.meta_ad_id, a.name, a.status, a.created_at, ca.spend, ca.results, ca.ctr, ca.cpa, ca.roas, ca.score_overall
      FROM ads a
      LEFT JOIN creative_analytics ca ON ca.meta_ad_id = a.meta_ad_id AND ca.date_until = (

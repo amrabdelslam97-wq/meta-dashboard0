@@ -107,7 +107,7 @@ describe('audienceAttributionEngine', () => {
       expect(result.errors).toEqual([]);
       expect(result.campaignsProcessed).toBe(1);
 
-      const read = engine.getAudienceAttribution('camp_aud_1', range);
+      const read = await engine.getAudienceAttribution('camp_aud_1', range);
       expect(read.audience_types.length).toBe(2);
 
       const lookalike = read.audience_types.find(r => r.audience_type === 'lookalike');

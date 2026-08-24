@@ -196,7 +196,7 @@ describe('analyticsEngine', () => {
       insertRow(prior, 'US', 80, 8);
 
       // No nock interceptors at all -- proves this function never calls Meta.
-      const result = analyticsEngine.getBreakdownAnalytics('camp_read_1', 'country', range);
+      const result = await analyticsEngine.getBreakdownAnalytics('camp_read_1', 'country', range);
 
       expect(result.current.length).toBe(2);
       const us = result.current.find(r => r.breakdown_value === 'US');

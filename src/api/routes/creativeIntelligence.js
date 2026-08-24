@@ -22,16 +22,16 @@ const creativeIntel = require('../../services/creativeIntelligenceService');
 const creativeLibrary = require('../../services/creativeLibrary');
 const chartDataBuilder = require('../../services/chartDataBuilder');
 
-function loadCampaignMetaId(idOrMetaId) {
-  const row = db.get(
+async function loadCampaignMetaId(idOrMetaId) {
+  const row = await db.get(
     'SELECT meta_campaign_id FROM campaigns WHERE id = ? OR meta_campaign_id = ?',
     [idOrMetaId, idOrMetaId]
   );
   return row?.meta_campaign_id || null;
 }
 
-function loadAdsetMetaId(idOrMetaId) {
-  const row = db.get(
+async function loadAdsetMetaId(idOrMetaId) {
+  const row = await db.get(
     'SELECT meta_adset_id FROM ad_sets WHERE id = ? OR meta_adset_id = ?',
     [idOrMetaId, idOrMetaId]
   );
@@ -49,7 +49,7 @@ router.get('/library', asyncHandler(async (req, res) => {
     search, since, until, platform, language,
   } = req.query;
 
-  const result = creativeLibrary.searchCreativeLibrary({
+  const result = await creativeLibrary.searchCreativeLibrary({
     account_id, campaign_id, adset_id, objective, creative_type,
     min_score: min_score != null ? parseFloat(min_score) : undefined,
     max_score: max_score != null ? parseFloat(max_score) : undefined,
@@ -67,11 +67,11 @@ router.get('/library', asyncHandler(async (req, res) => {
 // never wired to a route until now.
 
 router.get('/adset/:adsetId/comparison', asyncHandler(async (req, res) => {
-  const metaAdsetId = loadAdsetMetaId(req.params.adsetId);
+  const metaAdsetId = await loadAdsetMetaId(req.params.adsetId);
   if (!metaAdsetId) return res.status(404).json({ error: 'Ad set not found' });
 
   const dateRange = resolveDateRange(req.query);
-  const result = creativeLibrary.getAdSetComparison(metaAdsetId, dateRange);
+  const result = await creativeLibrary.getAdSetComparison(metaAdsetId, dateRange);
 
   return res.json({ data: result });
 }));
@@ -84,7 +84,7 @@ router.get('/adset/:adsetId/comparison', asyncHandler(async (req, res) => {
 const CHART_TYPES = ['score_distribution', 'ctr_by_creative', 'retention_curve', 'ranking', 'funnel'];
 
 router.get('/charts/:campaignId', asyncHandler(async (req, res) => {
-  const metaCampaignId = loadCampaignMetaId(req.params.campaignId);
+  const metaCampaignId = await loadCampaignMetaId(req.params.campaignId);
   if (!metaCampaignId) return res.status(404).json({ error: 'Campaign not found' });
 
   const { type, ad_id, adset_id } = req.query;
@@ -93,7 +93,7 @@ router.get('/charts/:campaignId', asyncHandler(async (req, res) => {
   }
 
   const dateRange = resolveDateRange(req.query);
-  const creatives = db.all(
+  const creatives = await db.all(
     `SELECT ca.*, a.name as ad_name FROM creative_analytics ca
      LEFT JOIN ads a ON a.meta_ad_id = ca.meta_ad_id
      WHERE ca.meta_campaign_id = ? AND ca.date_since = ? AND ca.date_until = ?`,
@@ -128,8 +128,8 @@ router.get('/charts/:campaignId', asyncHandler(async (req, res) => {
 
   if (type === 'ranking') {
     if (!adset_id) return res.status(400).json({ error: 'adset_id is required for the ranking chart type' });
-    const metaAdsetId = loadAdsetMetaId(adset_id) || adset_id;
-    const comparison = creativeLibrary.getAdSetComparison(metaAdsetId, dateRange);
+    const metaAdsetId = (await loadAdsetMetaId(adset_id)) || adset_id;
+    const comparison = await creativeLibrary.getAdSetComparison(metaAdsetId, dateRange);
     return res.json({ data: chartDataBuilder.buildRankingChart(comparison.ranking, { labelKey: 'ad_name', valueKey: 'score' }) });
   }
 
@@ -165,41 +165,41 @@ router.get('/:adId', asyncHandler(async (req, res) => {
 }));
 
 router.get('/:adId/timeline', asyncHandler(async (req, res) => {
-  const ad = db.get('SELECT meta_ad_id FROM ads WHERE id = ? OR meta_ad_id = ?', [req.params.adId, req.params.adId]);
+  const ad = await db.get('SELECT meta_ad_id FROM ads WHERE id = ? OR meta_ad_id = ?', [req.params.adId, req.params.adId]);
   if (!ad) return res.status(404).json({ error: 'Ad not found' });
-  const timeline = creativeLibrary.getCreativeTimeline(ad.meta_ad_id);
+  const timeline = await creativeLibrary.getCreativeTimeline(ad.meta_ad_id);
   return res.json({ data: timeline });
 }));
 
 // ── Creative Score ───────────────────────────────────────
 
 router.get('/score/:adId', asyncHandler(async (req, res) => {
-  const score = creativeIntel.scoreCreative(req.params.adId);
+  const score = await creativeIntel.scoreCreative(req.params.adId);
   return res.json({ data: score });
 }));
 
 // ── Creative Diagnostics ────────────────────────────────
 
 router.get('/diagnosis/:adId', asyncHandler(async (req, res) => {
-  const diagnosis = creativeIntel.diagnoseCreative(req.params.adId);
+  const diagnosis = await creativeIntel.diagnoseCreative(req.params.adId);
   return res.json({ data: diagnosis });
 }));
 
 // ── Creative Trend Analysis ─────────────────────────────
 
 router.get('/trend/:adId', asyncHandler(async (req, res) => {
-  const trend = creativeIntel.analyzeCreativeTrend(req.params.adId);
+  const trend = await creativeIntel.analyzeCreativeTrend(req.params.adId);
   return res.json({ data: trend });
 }));
 
 // ── Campaign Leaderboard ────────────────────────────────
 
 router.get('/leaderboard/:campaignId', asyncHandler(async (req, res) => {
-  const metaCampaignId = loadCampaignMetaId(req.params.campaignId);
+  const metaCampaignId = await loadCampaignMetaId(req.params.campaignId);
   if (!metaCampaignId) return res.status(404).json({ error: 'Campaign not found' });
 
   const limit = parseInt(req.query.limit) || 20;
-  const leaderboard = creativeIntel.getCampaignLeaderboard(metaCampaignId, limit);
+  const leaderboard = await creativeIntel.getCampaignLeaderboard(metaCampaignId, limit);
 
   return res.json({ data: leaderboard });
 }));
@@ -207,11 +207,11 @@ router.get('/leaderboard/:campaignId', asyncHandler(async (req, res) => {
 // ── Conversation Destination Analysis ───────────────────
 
 router.get('/destinations/:campaignId', asyncHandler(async (req, res) => {
-  const metaCampaignId = loadCampaignMetaId(req.params.campaignId);
+  const metaCampaignId = await loadCampaignMetaId(req.params.campaignId);
   if (!metaCampaignId) return res.status(404).json({ error: 'Campaign not found' });
 
   const dateRange = resolveDateRange(req.query);
-  const analysis = creativeIntel.analyzeConversationDestinations(metaCampaignId, dateRange);
+  const analysis = await creativeIntel.analyzeConversationDestinations(metaCampaignId, dateRange);
 
   return res.json({ data: analysis });
 }));
@@ -219,7 +219,7 @@ router.get('/destinations/:campaignId', asyncHandler(async (req, res) => {
 // ── Creative Recommendations ────────────────────────────
 
 router.get('/recommendations/:adId', asyncHandler(async (req, res) => {
-  const recommendations = creativeIntel.generateCreativeRecommendations(req.params.adId);
+  const recommendations = await creativeIntel.generateCreativeRecommendations(req.params.adId);
   return res.json({ data: recommendations });
 }));
 
@@ -228,7 +228,7 @@ router.get('/recommendations/:adId', asyncHandler(async (req, res) => {
 router.get('/dashboard/:adId', asyncHandler(async (req, res) => {
   const adId = req.params.adId;
 
-  const creative = db.get(
+  const creative = await db.get(
     'SELECT * FROM creative_analytics WHERE meta_ad_id = ? ORDER BY date_until DESC LIMIT 1',
     [adId]
   );
@@ -237,10 +237,10 @@ router.get('/dashboard/:adId', asyncHandler(async (req, res) => {
     return res.status(404).json({ error: 'Creative not found' });
   }
 
-  const score = creativeIntel.scoreCreative(adId);
-  const diagnosis = creativeIntel.diagnoseCreative(adId);
-  const trend = creativeIntel.analyzeCreativeTrend(adId);
-  const recommendations = creativeIntel.generateCreativeRecommendations(adId);
+  const score = await creativeIntel.scoreCreative(adId);
+  const diagnosis = await creativeIntel.diagnoseCreative(adId);
+  const trend = await creativeIntel.analyzeCreativeTrend(adId);
+  const recommendations = await creativeIntel.generateCreativeRecommendations(adId);
 
   return res.json({
     data: {
@@ -277,10 +277,10 @@ router.get('/dashboard/:adId', asyncHandler(async (req, res) => {
 // ── Campaign Creatives ──────────────────────────────────
 
 router.get('/campaign/:campaignId', asyncHandler(async (req, res) => {
-  const metaCampaignId = loadCampaignMetaId(req.params.campaignId);
+  const metaCampaignId = await loadCampaignMetaId(req.params.campaignId);
   if (!metaCampaignId) return res.status(404).json({ error: 'Campaign not found' });
 
-  const creatives = db.all(
+  const creatives = await db.all(
     `SELECT meta_ad_id, creative_name, creative_type, spend, results, ctr, cpa, roas
      FROM creative_analytics
      WHERE meta_campaign_id = ?
@@ -288,14 +288,19 @@ router.get('/campaign/:campaignId', asyncHandler(async (req, res) => {
     [metaCampaignId]
   );
 
+  // Promise.all is safe here: each creative's scoreCreative() read is
+  // independent (own meta_ad_id, no shared mutable state), and Promise.all
+  // preserves the same output order as the .map() it replaces.
+  const creativesWithScore = await Promise.all(creatives.map(async c => ({
+    ...c,
+    score: (await creativeIntel.scoreCreative(c.meta_ad_id)).score,
+  })));
+
   return res.json({
     data: {
       campaign: metaCampaignId,
       total_creatives: creatives.length,
-      creatives: creatives.map(c => ({
-        ...c,
-        score: creativeIntel.scoreCreative(c.meta_ad_id).score,
-      })),
+      creatives: creativesWithScore,
     },
   });
 }));

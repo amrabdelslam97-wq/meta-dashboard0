@@ -41,10 +41,10 @@ const MIGRATION_NAME = 'phase19_executive_analytics_layer';
 // insights-tier freshness, but should still refresh several times a day.
 const ANALYTICS_DEFAULT_INTERVAL_MINUTES = 360;
 
-function runPhase19Migrations() {
-  ensureMigrationsTable();
+async function runPhase19Migrations() {
+  await ensureMigrationsTable();
 
-  db.run(`
+  await db.run(`
     CREATE TABLE IF NOT EXISTS analytics_breakdown_history (
       id               TEXT PRIMARY KEY,
       ad_account_id    TEXT NOT NULL,
@@ -69,9 +69,9 @@ function runPhase19Migrations() {
       UNIQUE(ad_account_id, entity_meta_id, breakdown_type, breakdown_value, date_since, date_until)
     )
   `);
-  db.run(`CREATE INDEX IF NOT EXISTS idx_analytics_breakdown_lookup ON analytics_breakdown_history(ad_account_id, entity_meta_id, breakdown_type, date_since)`);
+  await db.run(`CREATE INDEX IF NOT EXISTS idx_analytics_breakdown_lookup ON analytics_breakdown_history(ad_account_id, entity_meta_id, breakdown_type, date_since)`);
 
-  db.run(`
+  await db.run(`
     CREATE TABLE IF NOT EXISTS creative_analytics (
       id                 TEXT PRIMARY KEY,
       ad_account_id      TEXT NOT NULL,
@@ -111,9 +111,9 @@ function runPhase19Migrations() {
       UNIQUE(meta_ad_id, date_since, date_until)
     )
   `);
-  db.run(`CREATE INDEX IF NOT EXISTS idx_creative_analytics_lookup ON creative_analytics(ad_account_id, meta_campaign_id, date_since)`);
+  await db.run(`CREATE INDEX IF NOT EXISTS idx_creative_analytics_lookup ON creative_analytics(ad_account_id, meta_campaign_id, date_since)`);
 
-  db.run(`
+  await db.run(`
     CREATE TABLE IF NOT EXISTS budget_distribution_snapshots (
       id                       TEXT PRIMARY KEY,
       ad_account_id            TEXT NOT NULL,
@@ -135,18 +135,18 @@ function runPhase19Migrations() {
       UNIQUE(ad_account_id, level, entity_meta_id, date_since, date_until)
     )
   `);
-  db.run(`CREATE INDEX IF NOT EXISTS idx_budget_distribution_lookup ON budget_distribution_snapshots(ad_account_id, level, date_since)`);
+  await db.run(`CREATE INDEX IF NOT EXISTS idx_budget_distribution_lookup ON budget_distribution_snapshots(ad_account_id, level, date_since)`);
 
   // Reuse Phase 16's sync_schedule_config table -- one new entity_type row,
   // same seed-once pattern schema.phase16.js used for its own six rows.
-  if (!isMigrationApplied(MIGRATION_NAME)) {
+  if (!await isMigrationApplied(MIGRATION_NAME)) {
     const now = new Date().toISOString();
-    db.run(
+    await db.run(
       `INSERT OR IGNORE INTO sync_schedule_config (entity_type, interval_minutes, updated_at) VALUES (?, ?, ?)`,
       ['analytics', ANALYTICS_DEFAULT_INTERVAL_MINUTES, now]
     );
-    markMigrationApplied(MIGRATION_NAME);
-    db.persist();
+    await markMigrationApplied(MIGRATION_NAME);
+    await db.persist();
     console.log('[DB] Phase 19 migration complete — analytics tables created and scheduler tier seeded.');
   } else {
     console.log('[DB] Phase 19 schema: analytics tables already present, skipping seed.');

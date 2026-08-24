@@ -54,8 +54,8 @@ function classifyScoreStatus(score) {
  * same route shape, same status vocabulary, `components`/`metrics` reshaped
  * to reflect real data instead of a third independently computed breakdown.
  */
-function scoreCreative(metaAdId) {
-  const latest = db.get(
+async function scoreCreative(metaAdId) {
+  const latest = await db.get(
     `SELECT * FROM creative_analytics WHERE meta_ad_id = ? ORDER BY date_until DESC LIMIT 1`,
     [metaAdId]
   );
@@ -117,8 +117,8 @@ function scoreCreative(metaAdId) {
 /**
  * Automatically detect creative issues and strengths.
  */
-function diagnoseCreative(metaAdId) {
-  const latest = db.get(
+async function diagnoseCreative(metaAdId) {
+  const latest = await db.get(
     `SELECT * FROM creative_analytics WHERE meta_ad_id = ? ORDER BY date_until DESC LIMIT 1`,
     [metaAdId]
   );
@@ -196,7 +196,7 @@ function diagnoseCreative(metaAdId) {
 /**
  * Analyze creative performance trend (7d, 14d, 30d, lifetime).
  */
-function analyzeCreativeTrend(metaAdId) {
+async function analyzeCreativeTrend(metaAdId) {
   const periods = [
     { days: 7, label: '7d' },
     { days: 14, label: '14d' },
@@ -210,7 +210,7 @@ function analyzeCreativeTrend(metaAdId) {
     cutoffDate.setDate(cutoffDate.getDate() - period.days);
     const cutoffISO = cutoffDate.toISOString().split('T')[0];
 
-    const data = db.all(
+    const data = await db.all(
       `SELECT ctr, cpa, spend, results FROM creative_analytics
        WHERE meta_ad_id = ? AND date_until >= ?
        ORDER BY date_until DESC`,
@@ -254,8 +254,8 @@ function analyzeCreativeTrend(metaAdId) {
 /**
  * Generate creative leaderboards for a campaign.
  */
-function getCampaignLeaderboard(metaCampaignId, limit = 20) {
-  const creatives = db.all(
+async function getCampaignLeaderboard(metaCampaignId, limit = 20) {
+  const creatives = await db.all(
     `SELECT * FROM creative_analytics
      WHERE meta_campaign_id = ?
      ORDER BY date_until DESC LIMIT 1000`,
@@ -269,14 +269,17 @@ function getCampaignLeaderboard(metaCampaignId, limit = 20) {
     };
   }
 
-  // Score all creatives
-  const scored = creatives
-    .filter(c => c.spend >= 5)
-    .map(c => {
-      const score = scoreCreative(c.meta_ad_id);
+  // Score all creatives. Promise.all is safe here: each creative's
+  // scoreCreative() read is independent (own meta_ad_id, no shared mutable
+  // state), and Promise.all preserves the same output order as the .map()
+  // it replaces.
+  const scoredUnsorted = await Promise.all(
+    creatives.filter(c => c.spend >= 5).map(async c => {
+      const score = await scoreCreative(c.meta_ad_id);
       return { ...c, ...score };
     })
-    .sort((a, b) => (b.score || 0) - (a.score || 0));
+  );
+  const scored = scoredUnsorted.sort((a, b) => (b.score || 0) - (a.score || 0));
 
   return {
     campaign: metaCampaignId,
@@ -295,8 +298,8 @@ function getCampaignLeaderboard(metaCampaignId, limit = 20) {
 /**
  * Break down messaging results by destination.
  */
-function analyzeConversationDestinations(metaCampaignId, dateRange) {
-  const creatives = db.all(
+async function analyzeConversationDestinations(metaCampaignId, dateRange) {
+  const creatives = await db.all(
     `SELECT * FROM creative_analytics
      WHERE meta_campaign_id = ? AND date_since = ? AND date_until = ?`,
     [metaCampaignId, dateRange.since, dateRange.until]
@@ -359,10 +362,10 @@ function analyzeConversationDestinations(metaCampaignId, dateRange) {
 /**
  * Generate creative recommendations based on performance.
  */
-function generateCreativeRecommendations(metaAdId) {
-  const score = scoreCreative(metaAdId);
-  const diagnostics = diagnoseCreative(metaAdId);
-  const trend = analyzeCreativeTrend(metaAdId);
+async function generateCreativeRecommendations(metaAdId) {
+  const score = await scoreCreative(metaAdId);
+  const diagnostics = await diagnoseCreative(metaAdId);
+  const trend = await analyzeCreativeTrend(metaAdId);
 
   const recommendations = [];
 

@@ -53,8 +53,14 @@ beforeAll(() => {
     'ciDecisionColorClass', 'ciDecisionBorderVar', 'ciRenderExecutivePriorityCard', 'ciRenderWhyNot',
     'ciRenderConsistencyAudit', 'ciRenderExecutiveDecision', 'ciRenderMarketingDirectorPlan',
     'ciRenderContributionFormula', 'ciRenderBusinessImpactRanking',
+    // AP-POS Intelligence Layer — Hook/CTA alternatives, Creative Concepts,
+    // Root-Cause Taxonomy, Verification render helpers.
+    'ciRenderHookAlternatives', 'ciRenderCtaAlternatives', 'ciRenderCreativeConcepts',
+    'ciRenderRootCauseTaxonomy', 'ciRenderVerification',
   ].map(name => extractFn(script, name)).join('\n\n')
     + '\n\n' + extractConst(script, 'CI_TIMELINE_BADGE')
+    + '\n\n' + extractConst(script, 'RC_TAXONOMY_LABELS')
+    + '\n\n' + extractConst(script, 'CI_VERIFICATION_BADGE')
     + '\n\n' + extractFn(script, 'ciRenderCreativeCard')
     + '\n\n' + extractFn(script, 'ciRenderDetails')
     + '\nmodule.exports = { ciRenderCreativeCard, ciRenderDetails };';

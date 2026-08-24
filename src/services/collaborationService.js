@@ -18,11 +18,11 @@ function generateId(prefix) {
 /**
  * Add comment to entity
  */
-function addComment(entityType, entityId, userId, content, mentions = []) {
+async function addComment(entityType, entityId, userId, content, mentions = []) {
   const commentId = generateId('com');
   const now = new Date().toISOString();
 
-  db.run(`
+  await db.run(`
     INSERT INTO comments (
       id, entity_type, entity_id, user_id, content,
       mentions_json, is_pinned, is_resolved, created_at, updated_at
@@ -46,8 +46,8 @@ function addComment(entityType, entityId, userId, content, mentions = []) {
 /**
  * Get comment
  */
-function getComment(commentId) {
-  const comment = db.get(`
+async function getComment(commentId) {
+  const comment = await db.get(`
     SELECT c.*, u.email as user_email FROM comments c
     LEFT JOIN users u ON c.user_id = u.id
     WHERE c.id = ?
@@ -55,7 +55,7 @@ function getComment(commentId) {
 
   if (!comment) return null;
 
-  const replies = db.all(`
+  const replies = await db.all(`
     SELECT c.*, u.email as user_email FROM comments c
     LEFT JOIN users u ON c.user_id = u.id
     WHERE c.parent_comment_id = ?
@@ -73,8 +73,8 @@ function getComment(commentId) {
 /**
  * List comments on entity
  */
-function listComments(entityType, entityId, includeReplies = true) {
-  const comments = db.all(`
+async function listComments(entityType, entityId, includeReplies = true) {
+  const comments = await db.all(`
     SELECT c.*, u.email as user_email FROM comments c
     LEFT JOIN users u ON c.user_id = u.id
     WHERE c.entity_type = ? AND c.entity_id = ? AND c.parent_comment_id IS NULL
@@ -83,16 +83,18 @@ function listComments(entityType, entityId, includeReplies = true) {
 
   if (!includeReplies) return comments;
 
-  return comments.map(c => getComment(c.id));
+  // Promise.all is safe here: each comment's getComment() read is
+  // independent (own comment id, no shared mutable state).
+  return Promise.all(comments.map(c => getComment(c.id)));
 }
 
 /**
  * Update comment
  */
-function updateComment(commentId, content) {
+async function updateComment(commentId, content) {
   const now = new Date().toISOString();
 
-  db.run(
+  await db.run(
     'UPDATE comments SET content = ?, updated_at = ? WHERE id = ?',
     [content, now, commentId]
   );
@@ -103,10 +105,10 @@ function updateComment(commentId, content) {
 /**
  * Delete comment (soft delete)
  */
-function deleteComment(commentId) {
+async function deleteComment(commentId) {
   // Mark as deleted by clearing content
   const now = new Date().toISOString();
-  db.run(
+  await db.run(
     'UPDATE comments SET content = "[deleted]", updated_at = ? WHERE id = ?',
     [now, commentId]
   );
@@ -116,12 +118,12 @@ function deleteComment(commentId) {
 /**
  * Pin/unpin comment
  */
-function togglePinComment(commentId) {
-  const comment = db.get('SELECT is_pinned FROM comments WHERE id = ?', [commentId]);
+async function togglePinComment(commentId) {
+  const comment = await db.get('SELECT is_pinned FROM comments WHERE id = ?', [commentId]);
   if (!comment) return null;
 
   const now = new Date().toISOString();
-  db.run(
+  await db.run(
     'UPDATE comments SET is_pinned = ?, updated_at = ? WHERE id = ?',
     [1 - comment.is_pinned, now, commentId]
   );
@@ -132,8 +134,8 @@ function togglePinComment(commentId) {
 /**
  * Add emoji reaction to comment
  */
-function addReaction(commentId, userId, emoji) {
-  const comment = db.get('SELECT reactions_json FROM comments WHERE id = ?', [commentId]);
+async function addReaction(commentId, userId, emoji) {
+  const comment = await db.get('SELECT reactions_json FROM comments WHERE id = ?', [commentId]);
   if (!comment) return null;
 
   const reactions = comment.reactions_json ? JSON.parse(comment.reactions_json) : {};
@@ -144,7 +146,7 @@ function addReaction(commentId, userId, emoji) {
   }
 
   const now = new Date().toISOString();
-  db.run(
+  await db.run(
     'UPDATE comments SET reactions_json = ?, updated_at = ? WHERE id = ?',
     [JSON.stringify(reactions), now, commentId]
   );
@@ -155,9 +157,9 @@ function addReaction(commentId, userId, emoji) {
 /**
  * Resolve comment thread
  */
-function resolveComment(commentId) {
+async function resolveComment(commentId) {
   const now = new Date().toISOString();
-  db.run(
+  await db.run(
     'UPDATE comments SET is_resolved = 1, resolved_at = ?, updated_at = ? WHERE id = ?',
     [now, now, commentId]
   );
@@ -172,11 +174,11 @@ function resolveComment(commentId) {
 /**
  * Log activity to timeline
  */
-function logActivity(workspaceId, userId, actionType, details = {}) {
+async function logActivity(workspaceId, userId, actionType, details = {}) {
   const activityId = generateId('act');
   const now = new Date().toISOString();
 
-  db.run(`
+  await db.run(`
     INSERT INTO activity_timeline (
       id, workspace_id, user_id, action_type, entity_type, entity_id,
       old_value, new_value, description, ip_address, user_agent, created_at
@@ -202,7 +204,7 @@ function logActivity(workspaceId, userId, actionType, details = {}) {
 /**
  * Get activity timeline
  */
-function getActivityTimeline(workspaceId, filters = {}) {
+async function getActivityTimeline(workspaceId, filters = {}) {
   let query = `
     SELECT a.*, u.email as user_email FROM activity_timeline a
     LEFT JOIN users u ON a.user_id = u.id
@@ -242,11 +244,11 @@ function getActivityTimeline(workspaceId, filters = {}) {
 /**
  * Create notification
  */
-function createNotification(workspaceId, userId, notificationData) {
+async function createNotification(workspaceId, userId, notificationData) {
   const notificationId = generateId('ntf');
   const now = new Date().toISOString();
 
-  db.run(`
+  await db.run(`
     INSERT INTO notifications (
       id, workspace_id, user_id, triggered_by_user_id, notification_type,
       entity_type, entity_id, title, message, action_url,
@@ -273,7 +275,7 @@ function createNotification(workspaceId, userId, notificationData) {
 /**
  * Get notification
  */
-function getNotification(notificationId) {
+async function getNotification(notificationId) {
   return db.get(`
     SELECT * FROM notifications WHERE id = ?
   `, [notificationId]);
@@ -282,7 +284,7 @@ function getNotification(notificationId) {
 /**
  * List user notifications
  */
-function listNotifications(workspaceId, userId, filters = {}) {
+async function listNotifications(workspaceId, userId, filters = {}) {
   let query = `
     SELECT * FROM notifications
     WHERE workspace_id = ? AND user_id = ?
@@ -301,9 +303,9 @@ function listNotifications(workspaceId, userId, filters = {}) {
 /**
  * Mark notification as read
  */
-function markNotificationRead(notificationId) {
+async function markNotificationRead(notificationId) {
   const now = new Date().toISOString();
-  db.run(
+  await db.run(
     'UPDATE notifications SET is_read = 1, read_at = ? WHERE id = ?',
     [now, notificationId]
   );
@@ -313,9 +315,9 @@ function markNotificationRead(notificationId) {
 /**
  * Mark all notifications as read
  */
-function markAllNotificationsRead(workspaceId, userId) {
+async function markAllNotificationsRead(workspaceId, userId) {
   const now = new Date().toISOString();
-  db.run(
+  await db.run(
     'UPDATE notifications SET is_read = 1, read_at = ? WHERE workspace_id = ? AND user_id = ? AND is_read = 0',
     [now, workspaceId, userId]
   );
@@ -325,8 +327,8 @@ function markAllNotificationsRead(workspaceId, userId) {
 /**
  * Get unread notification count
  */
-function getUnreadCount(workspaceId, userId) {
-  const result = db.get(
+async function getUnreadCount(workspaceId, userId) {
+  const result = await db.get(
     'SELECT COUNT(*) as count FROM notifications WHERE workspace_id = ? AND user_id = ? AND is_read = 0',
     [workspaceId, userId]
   );

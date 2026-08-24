@@ -237,7 +237,7 @@ function persistCreativeSnapshot(tx, adAccountId, ad, creativeContent, adMetrics
 async function syncAccountCreativeAnalytics(account, dateRange = defaultRange()) {
   const accessToken = decryptToken(account.access_token_encrypted);
 
-  const adsNeedingDetail = db.all(
+  const adsNeedingDetail = await db.all(
     `SELECT a.id, a.meta_ad_id, s.meta_adset_id, a.creative_id, a.destination_type, c.meta_campaign_id
      FROM ads a
      JOIN ad_sets s ON s.id = a.ad_set_id
@@ -278,7 +278,7 @@ async function syncAccountCreativeAnalytics(account, dateRange = defaultRange())
       // having it), not once per sync cycle.
       let videoLengthSec = null;
       if (content.video_id) {
-        const alreadyKnown = db.get(
+        const alreadyKnown = await db.get(
           `SELECT video_length_sec FROM creative_analytics WHERE meta_ad_id = ? AND video_length_sec IS NOT NULL LIMIT 1`,
           [ad.meta_ad_id]
         );
@@ -296,13 +296,13 @@ async function syncAccountCreativeAnalytics(account, dateRange = defaultRange())
 
       // Prior snapshots for this ad (any earlier date range) -- fuels
       // Fatigue Detection's trend comparison (Step 5), not a new Meta call.
-      const historyRows = db.all(
+      const historyRows = await db.all(
         `SELECT spend, frequency, ctr, cpc, cpm, conversion_rate, reach, results, cpa as cost_per_result, date_since, date_until
          FROM creative_analytics WHERE meta_ad_id = ? AND date_until < ? ORDER BY date_since ASC`,
         [ad.meta_ad_id, dateRange.since]
       );
 
-      db.transaction(tx => persistCreativeSnapshot(tx, account.id, ad, content, metricsRow, dateRange, videoLengthSec, historyRows));
+      await db.transaction(tx => persistCreativeSnapshot(tx, account.id, ad, content, metricsRow, dateRange, videoLengthSec, historyRows));
       summary.adsProcessed++;
     } catch (err) {
       summary.errors.push({ ad: ad.meta_ad_id, message: err.message });
@@ -317,8 +317,8 @@ async function syncAccountCreativeAnalytics(account, dateRange = defaultRange())
  * Read side (no Meta calls) -- creative performance for a campaign, ranked,
  * with the same AI-prep insight shape every other analytics domain uses.
  */
-function getCreativeAnalytics(metaCampaignId, dateRange = defaultRange()) {
-  const rows = db.all(
+async function getCreativeAnalytics(metaCampaignId, dateRange = defaultRange()) {
+  const rows = await db.all(
     `SELECT * FROM creative_analytics WHERE meta_campaign_id = ? AND date_since = ? AND date_until = ? ORDER BY spend DESC`,
     [metaCampaignId, dateRange.since, dateRange.until]
   );

@@ -57,8 +57,8 @@ function labelLocale(id) {
 /**
  * @param {string} metaCampaignId
  */
-function getLanguageTargeting(metaCampaignId) {
-  const adSets = db.all(
+async function getLanguageTargeting(metaCampaignId) {
+  const adSets = await db.all(
     `SELECT s.meta_adset_id, s.name, s.targeting_locales, s.status
      FROM ad_sets s
      JOIN campaigns c ON c.id = s.campaign_id
@@ -108,7 +108,7 @@ async function syncAccountLanguagePerformance(account, dateRange = defaultRange(
   const accessToken = decryptToken(account.access_token_encrypted);
   const summary = { campaignsProcessed: 0, apiCalls: 0, errors: [] };
 
-  const adSets = db.all(
+  const adSets = await db.all(
     `SELECT s.meta_adset_id, s.targeting_locales, c.meta_campaign_id
      FROM ad_sets s JOIN campaigns c ON c.id = s.campaign_id
      WHERE s.ad_account_id = ? AND s.status = 'active'`,
@@ -153,7 +153,7 @@ async function syncAccountLanguagePerformance(account, dateRange = defaultRange(
     const totalSpend = [...byGroup.values()].reduce((s, a) => s + a.spend, 0);
     const now = new Date().toISOString();
 
-    db.transaction(tx => {
+    await db.transaction(tx => {
       for (const [key, agg] of byGroup) {
         const ctr = agg.impressions > 0 ? round((agg.clicks / agg.impressions) * 100, 4) : null;
         const roas = agg.spend > 0 && agg.purchase_value > 0 ? round(agg.purchase_value / agg.spend, 2) : null;
@@ -178,8 +178,8 @@ async function syncAccountLanguagePerformance(account, dateRange = defaultRange(
 }
 
 /** Read side (no Meta calls). */
-function getLanguagePerformanceAttribution(metaCampaignId, dateRange = defaultRange()) {
-  const rows = db.all(
+async function getLanguagePerformanceAttribution(metaCampaignId, dateRange = defaultRange()) {
+  const rows = await db.all(
     `SELECT * FROM language_performance_attribution WHERE meta_campaign_id = ? AND date_since = ? AND date_until = ? ORDER BY spend DESC`,
     [metaCampaignId, dateRange.since, dateRange.until]
   );

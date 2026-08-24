@@ -19,12 +19,12 @@ function generateId(prefix) {
 /**
  * Create invoice for tenant
  */
-function createInvoice(tenantId, invoiceData) {
+async function createInvoice(tenantId, invoiceData) {
   const invoiceId = generateId('inv');
   const invoiceNumber = generateInvoiceNumber();
   const now = new Date().toISOString();
 
-  db.run(`
+  await db.run(`
     INSERT INTO billing_history (
       id, tenant_id, invoice_number, subscription_id, amount_cents,
       currency, billing_reason, status, payment_method, description,
@@ -51,7 +51,7 @@ function createInvoice(tenantId, invoiceData) {
 /**
  * Get invoice
  */
-function getInvoice(invoiceId) {
+async function getInvoice(invoiceId) {
   return db.get(`
     SELECT * FROM billing_history WHERE id = ?
   `, [invoiceId]);
@@ -60,7 +60,7 @@ function getInvoice(invoiceId) {
 /**
  * List invoices for tenant
  */
-function listInvoices(tenantId, filters = {}) {
+async function listInvoices(tenantId, filters = {}) {
   let query = 'SELECT * FROM billing_history WHERE tenant_id = ?';
   const params = [tenantId];
 
@@ -77,10 +77,10 @@ function listInvoices(tenantId, filters = {}) {
 /**
  * Mark invoice as paid
  */
-function markInvoicePaid(invoiceId, paymentMethod = 'unknown') {
+async function markInvoicePaid(invoiceId, paymentMethod = 'unknown') {
   const now = new Date().toISOString();
 
-  db.run(`
+  await db.run(`
     UPDATE billing_history
     SET status = 'paid', payment_method = ?, payment_date = ?, updated_at = ?
     WHERE id = ?
@@ -92,10 +92,10 @@ function markInvoicePaid(invoiceId, paymentMethod = 'unknown') {
 /**
  * Mark invoice as failed
  */
-function markInvoiceFailed(invoiceId, reason = null) {
+async function markInvoiceFailed(invoiceId, reason = null) {
   const now = new Date().toISOString();
 
-  db.run(`
+  await db.run(`
     UPDATE billing_history
     SET status = 'failed', updated_at = ?
     WHERE id = ?
@@ -111,10 +111,10 @@ function markInvoiceFailed(invoiceId, reason = null) {
 /**
  * Process refund for invoice
  */
-function processRefund(invoiceId, reason = null) {
+async function processRefund(invoiceId, reason = null) {
   const now = new Date().toISOString();
 
-  db.run(`
+  await db.run(`
     UPDATE billing_history
     SET status = 'refunded', refund_date = ?, refund_reason = ?, updated_at = ?
     WHERE id = ?
@@ -126,7 +126,7 @@ function processRefund(invoiceId, reason = null) {
 /**
  * Get refunds for tenant
  */
-function getRefundsForTenant(tenantId) {
+async function getRefundsForTenant(tenantId) {
   return db.all(`
     SELECT * FROM billing_history
     WHERE tenant_id = ? AND status = 'refunded'
@@ -141,8 +141,8 @@ function getRefundsForTenant(tenantId) {
 /**
  * Get billing summary for tenant
  */
-function getBillingSummary(tenantId) {
-  const invoices = db.all(
+async function getBillingSummary(tenantId) {
+  const invoices = await db.all(
     'SELECT * FROM billing_history WHERE tenant_id = ?',
     [tenantId]
   );
@@ -173,13 +173,13 @@ function getBillingSummary(tenantId) {
 /**
  * Get MRR (Monthly Recurring Revenue)
  */
-function calculateMRR() {
-  const mrr = db.get(`
+async function calculateMRR() {
+  const mrr = (await db.get(`
     SELECT SUM(sp.price_monthly) as total
     FROM tenant_subscriptions ts
     LEFT JOIN subscription_plans sp ON ts.plan_id = sp.id
     WHERE ts.status = 'active' AND ts.billing_cycle = 'monthly'
-  `)?.total || 0;
+  `))?.total || 0;
 
   return mrr;
 }
@@ -187,20 +187,20 @@ function calculateMRR() {
 /**
  * Get ARR (Annual Recurring Revenue)
  */
-function calculateARR() {
-  const yearly = db.get(`
+async function calculateARR() {
+  const yearly = (await db.get(`
     SELECT SUM(sp.price_yearly) as total
     FROM tenant_subscriptions ts
     LEFT JOIN subscription_plans sp ON ts.plan_id = sp.id
     WHERE ts.status = 'active' AND ts.billing_cycle = 'yearly'
-  `)?.total || 0;
+  `))?.total || 0;
 
-  const monthly = db.get(`
+  const monthly = (await db.get(`
     SELECT SUM(sp.price_monthly * 12) as total
     FROM tenant_subscriptions ts
     LEFT JOIN subscription_plans sp ON ts.plan_id = sp.id
     WHERE ts.status = 'active' AND ts.billing_cycle = 'monthly'
-  `)?.total || 0;
+  `))?.total || 0;
 
   return yearly + monthly;
 }
@@ -208,20 +208,20 @@ function calculateARR() {
 /**
  * Get churn rate
  */
-function getChurnRate(monthsBack = 1) {
+async function getChurnRate(monthsBack = 1) {
   const currentMonth = new Date();
   currentMonth.setMonth(currentMonth.getMonth() - monthsBack);
   const month = currentMonth.toISOString().slice(0, 7);
 
-  const cancelled = db.get(`
+  const cancelled = (await db.get(`
     SELECT COUNT(*) as count FROM tenant_subscriptions
     WHERE status = 'cancelled' AND date(cancelled_at) >= ?
   `, [month]
-  )?.count || 0;
+  ))?.count || 0;
 
-  const active = db.get(
+  const active = (await db.get(
     'SELECT COUNT(*) as count FROM tenant_subscriptions WHERE status = "active"'
-  )?.count || 1;
+  ))?.count || 1;
 
   return (cancelled / active) * 100;
 }
@@ -241,13 +241,13 @@ function generateInvoiceNumber() {
 /**
  * Schedule subscription renewal
  */
-function scheduleSubscriptionRenewal(tenantId, daysFromNow = 1) {
+async function scheduleSubscriptionRenewal(tenantId, daysFromNow = 1) {
   const jobId = generateId('job');
   const now = new Date().toISOString();
   const scheduledFor = new Date();
   scheduledFor.setDate(scheduledFor.getDate() + daysFromNow);
 
-  db.run(`
+  await db.run(`
     INSERT INTO background_jobs (
       id, tenant_id, job_type, status, scheduled_for, priority, created_at, updated_at
     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)

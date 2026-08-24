@@ -218,7 +218,7 @@ describe('API: /api/v1/accounts', () => {
       // Re-running the one-time migration pass must never flip this back on
       // (Task 2: respect existing/explicit user choice).
       const { runPhase18Migrations } = require('../../src/db/schema.phase18');
-      runPhase18Migrations();
+      await runPhase18Migrations();
       const row = testDb.db.get('SELECT auto_sync_enabled FROM ad_accounts WHERE id = ?', [id]);
       expect(row.auto_sync_enabled).toBe(0);
     });
@@ -240,7 +240,7 @@ describe('API: /api/v1/accounts', () => {
       );
 
       const { runPhase18Migrations } = require('../../src/db/schema.phase18');
-      runPhase18Migrations();
+      await runPhase18Migrations();
 
       expect(testDb.db.get('SELECT auto_sync_enabled FROM ad_accounts WHERE id = ?', [legacyOffId]).auto_sync_enabled).toBe(0);
       expect(testDb.db.get('SELECT auto_sync_enabled FROM ad_accounts WHERE id = ?', [legacyOnId]).auto_sync_enabled).toBe(1);

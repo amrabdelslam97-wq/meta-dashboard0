@@ -26,7 +26,7 @@ router.get('/', asyncHandler(async (req, res) => {
   const limit  = Math.min(Math.max(parseInt(lp, 10) || 100, 1), 500);
   const offset = Math.max(parseInt(op, 10) || 0, 0);
 
-  const allAdSets = getAdSetsList({ campaign_id, account_id, status, optimization_goal });
+  const allAdSets = await getAdSetsList({ campaign_id, account_id, status, optimization_goal });
   const page = allAdSets.slice(offset, offset + limit);
 
   return res.json({
@@ -41,7 +41,7 @@ router.get('/', asyncHandler(async (req, res) => {
 router.get('/:id', asyncHandler(async (req, res) => {
   const { id } = req.params;
 
-  const adSet = db.get(
+  const adSet = await db.get(
     `SELECT s.*, c.meta_campaign_id, c.name as campaign_name, c.objective,
             a.account_name, a.currency
      FROM ad_sets s
@@ -53,7 +53,7 @@ router.get('/:id', asyncHandler(async (req, res) => {
 
   if (!adSet) return res.status(404).json({ error: 'Ad set not found', id });
 
-  const latest = db.get(
+  const latest = await db.get(
     `SELECT health_score, health_status, calculated_at
      FROM health_score_history
      WHERE entity_meta_id = ? AND entity_type = 'ad_set'
@@ -61,13 +61,13 @@ router.get('/:id', asyncHandler(async (req, res) => {
     [adSet.meta_adset_id]
   );
 
-  const recCount = db.get(
+  const recCount = await db.get(
     `SELECT COUNT(*) as count FROM recommendation_log
      WHERE entity_meta_id = ? AND dismissed_at IS NULL`,
     [adSet.meta_adset_id]
   );
 
-  const alertCount = db.get(
+  const alertCount = await db.get(
     `SELECT COUNT(*) as count FROM active_alerts
      WHERE entity_meta_id = ? AND status = 'active'`,
     [adSet.meta_adset_id]
@@ -113,13 +113,13 @@ router.get('/:id/history', asyncHandler(async (req, res) => {
   const { days = '30' } = req.query;
   const n = Math.min(Math.max(parseInt(days, 10) || 30, 1), 365);
 
-  const adSet = db.get(
+  const adSet = await db.get(
     'SELECT meta_adset_id, name FROM ad_sets WHERE id = ? OR meta_adset_id = ?',
     [id, id]
   );
   if (!adSet) return res.status(404).json({ error: 'Ad set not found', id });
 
-  const history = db.all(
+  const history = await db.all(
     `SELECT health_score, health_status, score_reference, calculated_at
      FROM health_score_history
      WHERE entity_meta_id = ? AND entity_type = 'ad_set'
@@ -143,7 +143,7 @@ router.get('/:id/history', asyncHandler(async (req, res) => {
 router.get('/:id/score-breakdown', asyncHandler(async (req, res) => {
   const { id } = req.params;
 
-  const adSet = db.get(
+  const adSet = await db.get(
     `SELECT s.meta_adset_id, s.name, a.currency
      FROM ad_sets s
      JOIN ad_accounts a ON s.ad_account_id = a.id
@@ -152,7 +152,7 @@ router.get('/:id/score-breakdown', asyncHandler(async (req, res) => {
   );
   if (!adSet) return res.status(404).json({ error: 'Ad set not found', id });
 
-  const breakdown = formatScoreBreakdown(adSet.meta_adset_id, 'ad_set', adSet.currency);
+  const breakdown = await formatScoreBreakdown(adSet.meta_adset_id, 'ad_set', adSet.currency);
   return res.json({ data: breakdown });
 }));
 

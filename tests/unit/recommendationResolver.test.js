@@ -30,13 +30,13 @@ describe('recommendationResolver.loadApplicableRules', () => {
     testDb.cleanup();
   });
 
-  test('a sales campaign gets LOW_ROAS plus universal rules', () => {
-    const rules = loadApplicableRules('sales');
+  test('a sales campaign gets LOW_ROAS plus universal rules', async () => {
+    const rules = await loadApplicableRules('sales');
     expect(rules.map(r => r.rule_code)).toEqual(expect.arrayContaining(['LOW_ROAS', 'LOW_CTR', 'HIGH_FREQUENCY']));
   });
 
-  test('an engagement campaign does NOT get LOW_ROAS (objective-scoped to sales)', () => {
-    const rules = loadApplicableRules('engagement');
+  test('an engagement campaign does NOT get LOW_ROAS (objective-scoped to sales)', async () => {
+    const rules = await loadApplicableRules('engagement');
     expect(rules.map(r => r.rule_code)).not.toContain('LOW_ROAS');
     expect(rules.map(r => r.rule_code)).toEqual(expect.arrayContaining(['LOW_CTR', 'HIGH_FREQUENCY']));
   });
@@ -44,14 +44,14 @@ describe('recommendationResolver.loadApplicableRules', () => {
   // Proves recommendationEngine.runRecommendationEngine() is actually
   // sourcing its rule set through this resolver, not a second independent
   // copy -- fed real data end to end.
-  test('runRecommendationEngine only fires LOW_ROAS for a sales-objective entity', () => {
-    const sales = runRecommendationEngine(
+  test('runRecommendationEngine only fires LOW_ROAS for a sales-objective entity', async () => {
+    const sales = await runRecommendationEngine(
       { meta_campaign_id: 'camp_rr_1', name: 'Sales', objective: 'sales' },
       { roas: 0.4 }, 'acct-rr', 50, 'campaign'
     );
     expect(sales.some(r => r.rule_code === 'LOW_ROAS')).toBe(true);
 
-    const engagement = runRecommendationEngine(
+    const engagement = await runRecommendationEngine(
       { meta_campaign_id: 'camp_rr_2', name: 'Engagement', objective: 'engagement' },
       { roas: 0.4 }, 'acct-rr', 50, 'campaign'
     );

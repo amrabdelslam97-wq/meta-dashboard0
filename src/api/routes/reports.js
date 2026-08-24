@@ -40,14 +40,14 @@ function validateObjective(objective) {
 // GET /reports/summary
 // ─────────────────────────────────────────────
 router.get('/summary', asyncHandler(async (req, res) => {
-  const account = resolveAccount(req);
+  const account = await resolveAccount(req);
   if (!account) return res.status(404).json({ error: 'No active ad account found' });
 
   const { period = 'weekly', since, until, objective } = req.query;
   const range = resolvePeriod(period, since, until);
   const objectiveFilter = validateObjective(objective);
 
-  const summary = buildSummaryData(account.id, range.since, range.until, objectiveFilter);
+  const summary = await buildSummaryData(account.id, range.since, range.until, objectiveFilter);
   return res.json({ period, ...summary });
 }));
 
@@ -55,7 +55,7 @@ router.get('/summary', asyncHandler(async (req, res) => {
 // GET /reports/export
 // ─────────────────────────────────────────────
 router.get('/export', asyncHandler(async (req, res) => {
-  const account = resolveAccount(req);
+  const account = await resolveAccount(req);
   if (!account) return res.status(404).json({ error: 'No active ad account found' });
 
   const { format = 'csv', period = 'weekly', since, until, objective } = req.query;
@@ -70,7 +70,7 @@ router.get('/export', asyncHandler(async (req, res) => {
   // This is what makes it safe to build a filename/header value from the
   // result below — no free-form user input ever reaches `filename`.
   const range   = resolvePeriod(period, since, until);
-  const summary = buildSummaryData(account.id, range.since, range.until, objectiveFilter);
+  const summary = await buildSummaryData(account.id, range.since, range.until, objectiveFilter);
   const filename = `meta-ads-report-${period}-${range.since}-${range.until}`;
 
   // ── CSV ──

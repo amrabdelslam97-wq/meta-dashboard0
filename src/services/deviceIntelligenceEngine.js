@@ -29,8 +29,8 @@ const DEVICE_LABELS = {
 /**
  * Get device performance breakdown.
  */
-function getDevicePerformance(metaCampaignId, dateRange = defaultRange()) {
-  const rows = db.all(
+async function getDevicePerformance(metaCampaignId, dateRange = defaultRange()) {
+  const rows = await db.all(
     `SELECT * FROM analytics_breakdown_history
      WHERE meta_campaign_id = ? AND breakdown_type IN ('impression_device', 'device_platform')
      AND date_since = ? AND date_until = ?
@@ -89,8 +89,8 @@ function getDevicePerformance(metaCampaignId, dateRange = defaultRange()) {
 /**
  * Detect device-specific issues.
  */
-function detectDeviceIssues(metaCampaignId, dateRange = defaultRange()) {
-  const performance = getDevicePerformance(metaCampaignId, dateRange);
+async function detectDeviceIssues(metaCampaignId, dateRange = defaultRange()) {
+  const performance = await getDevicePerformance(metaCampaignId, dateRange);
   const issues = [];
 
   if (performance.devices.length < 2) return { issues };
@@ -130,9 +130,9 @@ function detectDeviceIssues(metaCampaignId, dateRange = defaultRange()) {
 /**
  * Generate device recommendations.
  */
-function generateDeviceRecommendations(metaCampaignId, dateRange = defaultRange()) {
-  const performance = getDevicePerformance(metaCampaignId, dateRange);
-  const issues = detectDeviceIssues(metaCampaignId, dateRange);
+async function generateDeviceRecommendations(metaCampaignId, dateRange = defaultRange()) {
+  const performance = await getDevicePerformance(metaCampaignId, dateRange);
+  const issues = await detectDeviceIssues(metaCampaignId, dateRange);
 
   const recommendations = [];
 

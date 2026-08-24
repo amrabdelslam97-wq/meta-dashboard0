@@ -42,11 +42,11 @@ function pctChange(current, prior) {
  * Get audience breakdown for a campaign across a specific dimension.
  * Dimensions: age, gender, age_gender, country, region, comscore_market, placement, impression_device, device_platform
  */
-function getAudienceBreakdown(metaCampaignId, dimension = 'age_gender', dateRange = defaultRange()) {
+async function getAudienceBreakdown(metaCampaignId, dimension = 'age_gender', dateRange = defaultRange()) {
   const validDimensions = ['age', 'gender', 'age_gender', 'country', 'region', 'comscore_market', 'placement', 'impression_device', 'device_platform'];
   const resolvedDimension = validDimensions.includes(dimension) ? dimension : 'age_gender';
 
-  const rows = db.all(
+  const rows = await db.all(
     `SELECT * FROM analytics_breakdown_history
      WHERE meta_campaign_id = ? AND breakdown_type = ? AND date_since = ? AND date_until = ?
      ORDER BY spend DESC`,
@@ -141,8 +141,8 @@ function getAudienceBreakdown(metaCampaignId, dimension = 'age_gender', dateRang
  * Get audience type performance (advantage+, lookalike, custom, interest, broad, remarketing).
  * Uses audience_attribution table synced by audienceAttributionEngine.
  */
-function getAudienceTypePerformance(metaCampaignId, dateRange = defaultRange()) {
-  const rows = db.all(
+async function getAudienceTypePerformance(metaCampaignId, dateRange = defaultRange()) {
+  const rows = await db.all(
     `SELECT * FROM audience_attribution
      WHERE meta_campaign_id = ? AND date_since = ? AND date_until = ?
      ORDER BY spend DESC`,
@@ -178,8 +178,8 @@ function getAudienceTypePerformance(metaCampaignId, dateRange = defaultRange()) 
  * Detect audience opportunities: underutilized high-performers, saturation signals,
  * overlap indicators, fatigue trends.
  */
-function detectAudienceOpportunities(metaCampaignId, dimension = 'age_gender', dateRange = defaultRange()) {
-  const breakdown = getAudienceBreakdown(metaCampaignId, dimension, dateRange);
+async function detectAudienceOpportunities(metaCampaignId, dimension = 'age_gender', dateRange = defaultRange()) {
+  const breakdown = await getAudienceBreakdown(metaCampaignId, dimension, dateRange);
   if (breakdown.segments.length === 0) {
     return {
       date_range: dateRange,
@@ -241,10 +241,10 @@ function detectAudienceOpportunities(metaCampaignId, dimension = 'age_gender', d
 /**
  * Generate AI recommendations for audience optimization.
  */
-function generateAudienceRecommendations(metaCampaignId, dateRange = defaultRange()) {
-  const breakdown = getAudienceBreakdown(metaCampaignId, 'age_gender', dateRange);
-  const audienceTypes = getAudienceTypePerformance(metaCampaignId, dateRange);
-  const opportunities = detectAudienceOpportunities(metaCampaignId, 'age_gender', dateRange);
+async function generateAudienceRecommendations(metaCampaignId, dateRange = defaultRange()) {
+  const breakdown = await getAudienceBreakdown(metaCampaignId, 'age_gender', dateRange);
+  const audienceTypes = await getAudienceTypePerformance(metaCampaignId, dateRange);
+  const opportunities = await detectAudienceOpportunities(metaCampaignId, 'age_gender', dateRange);
 
   const recommendations = [];
 
@@ -307,8 +307,8 @@ function generateAudienceRecommendations(metaCampaignId, dateRange = defaultRang
  * Generate comprehensive audience diagnostics.
  * Explains patterns, anomalies, and insights in natural language.
  */
-function generateAudienceDiagnostics(metaCampaignId, dimension = 'age_gender', dateRange = defaultRange()) {
-  const breakdown = getAudienceBreakdown(metaCampaignId, dimension, dateRange);
+async function generateAudienceDiagnostics(metaCampaignId, dimension = 'age_gender', dateRange = defaultRange()) {
+  const breakdown = await getAudienceBreakdown(metaCampaignId, dimension, dateRange);
   const scoring = require('./audienceScoringEngine');
 
   const diagnostics = {
@@ -375,8 +375,8 @@ function generateAudienceDiagnostics(metaCampaignId, dimension = 'age_gender', d
  * Advanced Audience Opportunity Engine.
  * Detects hidden winners, budget shift opportunities, and expansion/narrowing recommendations.
  */
-function detectAdvancedOpportunities(metaCampaignId, dateRange = defaultRange()) {
-  const breakdown = getAudienceBreakdown(metaCampaignId, 'age_gender', dateRange);
+async function detectAdvancedOpportunities(metaCampaignId, dateRange = defaultRange()) {
+  const breakdown = await getAudienceBreakdown(metaCampaignId, 'age_gender', dateRange);
   const opportunities = {
     hidden_winners: [],
     budget_shifts: [],

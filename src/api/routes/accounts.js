@@ -22,7 +22,7 @@ const { asyncHandler } = require('../../middleware/errorHandler');
 router.get(
   '/',
   asyncHandler(async (req, res) => {
-    const accounts = db.all(
+    const accounts = await db.all(
       `SELECT
         id, meta_account_id, account_name, client_label,
         currency, timezone, country_code, attribution_window_days,
@@ -37,9 +37,12 @@ router.get(
       ORDER BY account_name ASC`
     );
 
-    // Include campaign count per account
-    const accountsWithCounts = accounts.map(account => {
-      const counts = db.get(
+    // Include campaign count per account. Promise.all is safe here: each
+    // account's count read is independent (own account id, no shared
+    // mutable state), and Promise.all preserves the same output order as
+    // the .map() it replaces.
+    const accountsWithCounts = await Promise.all(accounts.map(async account => {
+      const counts = await db.get(
         `SELECT
           COUNT(*) as total_campaigns,
           SUM(CASE WHEN status = 'active' THEN 1 ELSE 0 END) as active_campaigns
@@ -55,7 +58,7 @@ router.get(
           active: counts?.active_campaigns || 0,
         },
       };
-    });
+    }));
 
     return res.json({ data: accountsWithCounts });
   })
@@ -87,7 +90,7 @@ router.post(
       : `act_${meta_account_id}`;
 
     // Check if already connected
-    const existing = db.get(
+    const existing = await db.get(
       'SELECT id FROM ad_accounts WHERE meta_account_id = ?',
       [normalizedAccountId]
     );
@@ -125,7 +128,7 @@ router.post(
     // stays NULL (nothing has been explicitly chosen yet) so a later PATCH
     // that flips this off is recognized as a deliberate user choice and never
     // silently re-enabled (see PATCH /:id below and schema.phase18.js).
-    db.run(
+    await db.run(
       `INSERT INTO ad_accounts (
         id, meta_account_id, account_name, client_label,
         currency, timezone, country_code, attribution_window_days,
@@ -153,7 +156,7 @@ router.post(
       ]
     );
 
-    const created = db.get('SELECT * FROM ad_accounts WHERE id = ?', [id]);
+    const created = await db.get('SELECT * FROM ad_accounts WHERE id = ?', [id]);
 
     return res.status(201).json({
       data: {
@@ -188,7 +191,7 @@ router.post(
       return res.status(400).json({ error: 'access_token is required' });
     }
 
-    const account = db.get('SELECT id, meta_account_id FROM ad_accounts WHERE id = ?', [id]);
+    const account = await db.get('SELECT id, meta_account_id FROM ad_accounts WHERE id = ?', [id]);
     if (!account) {
       return res.status(404).json({ error: 'Account not found' });
     }
@@ -204,14 +207,14 @@ router.post(
     }
 
     const now = new Date().toISOString();
-    db.run(
+    await db.run(
       `UPDATE ad_accounts
        SET access_token_encrypted = ?, token_is_valid = 1, last_token_verified_at = ?, updated_at = ?
        WHERE id = ?`,
       [encryptToken(access_token), now, now, id]
     );
 
-    const updated = db.get(
+    const updated = await db.get(
       `SELECT id, meta_account_id, account_name, client_label, currency, timezone,
               country_code, attribution_window_days, token_is_valid, last_token_verified_at,
               status, updated_at
@@ -242,7 +245,7 @@ router.patch(
       auto_sync_enabled, auto_sync_interval_minutes,
     } = req.body || {};
 
-    const account = db.get('SELECT id FROM ad_accounts WHERE id = ?', [id]);
+    const account = await db.get('SELECT id FROM ad_accounts WHERE id = ?', [id]);
     if (!account) {
       return res.status(404).json({ error: 'Account not found' });
     }
@@ -250,31 +253,31 @@ router.patch(
     const now = new Date().toISOString();
 
     if (account_name !== undefined) {
-      db.run('UPDATE ad_accounts SET account_name = ?, updated_at = ? WHERE id = ?',
+      await db.run('UPDATE ad_accounts SET account_name = ?, updated_at = ? WHERE id = ?',
         [account_name, now, id]);
     }
     if (business_name !== undefined) {
-      db.run('UPDATE ad_accounts SET business_name = ?, updated_at = ? WHERE id = ?',
+      await db.run('UPDATE ad_accounts SET business_name = ?, updated_at = ? WHERE id = ?',
         [business_name, now, id]);
     }
     if (notes !== undefined) {
-      db.run('UPDATE ad_accounts SET notes = ?, updated_at = ? WHERE id = ?',
+      await db.run('UPDATE ad_accounts SET notes = ?, updated_at = ? WHERE id = ?',
         [notes, now, id]);
     }
     if (currency !== undefined) {
-      db.run('UPDATE ad_accounts SET currency = ?, updated_at = ? WHERE id = ?',
+      await db.run('UPDATE ad_accounts SET currency = ?, updated_at = ? WHERE id = ?',
         [currency, now, id]);
     }
     if (timezone !== undefined) {
-      db.run('UPDATE ad_accounts SET timezone = ?, updated_at = ? WHERE id = ?',
+      await db.run('UPDATE ad_accounts SET timezone = ?, updated_at = ? WHERE id = ?',
         [timezone, now, id]);
     }
     if (client_label !== undefined) {
-      db.run('UPDATE ad_accounts SET client_label = ?, updated_at = ? WHERE id = ?',
+      await db.run('UPDATE ad_accounts SET client_label = ?, updated_at = ? WHERE id = ?',
         [client_label, now, id]);
     }
     if (attribution_window_days !== undefined) {
-      db.run('UPDATE ad_accounts SET attribution_window_days = ?, updated_at = ? WHERE id = ?',
+      await db.run('UPDATE ad_accounts SET attribution_window_days = ?, updated_at = ? WHERE id = ?',
         [parseInt(attribution_window_days, 10), now, id]);
     }
     if (auto_sync_enabled !== undefined) {
@@ -282,7 +285,7 @@ router.patch(
       // an explicit, deliberate user choice on record, so no future
       // "enable by default" migration or logic (schema.phase18.js, POST /
       // above) ever silently overrides it again.
-      db.run('UPDATE ad_accounts SET auto_sync_enabled = ?, auto_sync_user_configured_at = ?, updated_at = ? WHERE id = ?',
+      await db.run('UPDATE ad_accounts SET auto_sync_enabled = ?, auto_sync_user_configured_at = ?, updated_at = ? WHERE id = ?',
         [auto_sync_enabled ? 1 : 0, now, now, id]);
     }
     if (auto_sync_interval_minutes !== undefined) {
@@ -290,7 +293,7 @@ router.patch(
       if (!Number.isFinite(minutes) || minutes < 5) {
         return res.status(400).json({ error: 'auto_sync_interval_minutes must be a number >= 5' });
       }
-      db.run('UPDATE ad_accounts SET auto_sync_interval_minutes = ?, updated_at = ? WHERE id = ?',
+      await db.run('UPDATE ad_accounts SET auto_sync_interval_minutes = ?, updated_at = ? WHERE id = ?',
         [minutes, now, id]);
     }
     if (status !== undefined) {
@@ -298,11 +301,11 @@ router.patch(
       if (!validStatuses.includes(status)) {
         return res.status(400).json({ error: 'Invalid status', valid_values: validStatuses });
       }
-      db.run('UPDATE ad_accounts SET status = ?, updated_at = ? WHERE id = ?',
+      await db.run('UPDATE ad_accounts SET status = ?, updated_at = ? WHERE id = ?',
         [status, now, id]);
     }
 
-    const updated = db.get(
+    const updated = await db.get(
       `SELECT id, meta_account_id, account_name, client_label, currency, timezone,
               country_code, attribution_window_days, token_is_valid, status,
               business_name, notes, auto_sync_enabled, auto_sync_interval_minutes,
@@ -336,13 +339,13 @@ router.delete(
   '/:id',
   asyncHandler(async (req, res) => {
     const { id } = req.params;
-    const account = db.get('SELECT id, status FROM ad_accounts WHERE id = ?', [id]);
+    const account = await db.get('SELECT id, status FROM ad_accounts WHERE id = ?', [id]);
     if (!account) {
       return res.status(404).json({ error: 'Account not found' });
     }
 
     const now = new Date().toISOString();
-    db.run(
+    await db.run(
       "UPDATE ad_accounts SET status = 'disconnected', auto_sync_enabled = 0, updated_at = ? WHERE id = ?",
       [now, id]
     );
@@ -366,7 +369,7 @@ router.post(
   '/:id/test-connection',
   asyncHandler(async (req, res) => {
     const { id } = req.params;
-    const account = db.get('SELECT id, meta_account_id, access_token_encrypted FROM ad_accounts WHERE id = ?', [id]);
+    const account = await db.get('SELECT id, meta_account_id, access_token_encrypted FROM ad_accounts WHERE id = ?', [id]);
     if (!account) {
       return res.status(404).json({ error: 'Account not found' });
     }
@@ -418,7 +421,7 @@ router.post(
     }
 
     const now = new Date().toISOString();
-    db.run(
+    await db.run(
       'UPDATE ad_accounts SET token_is_valid = ?, last_token_verified_at = ?, updated_at = ? WHERE id = ?',
       [result.token_valid ? 1 : 0, now, now, id]
     );
@@ -437,7 +440,7 @@ router.get(
   '/:id/sync-status',
   asyncHandler(async (req, res) => {
     const { id } = req.params;
-    const account = db.get(
+    const account = await db.get(
       `SELECT id, last_sync_started_at, last_sync_completed_at, last_successful_sync_at,
               last_failed_sync_at, last_sync_status, last_sync_error, sync_progress_phase,
               auto_sync_enabled, auto_sync_interval_minutes, auto_sync_user_configured_at,

@@ -105,11 +105,11 @@ async function runTests() {
 
   const dbPath = process.env.DB_PATH || './data/meta_ads.db';
   await initializeDatabase(path.resolve(dbPath));
-  runMigrations();
+  await runMigrations();
 
-  const tables = db.all(
+  const tables = (await db.all(
     "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name"
-  ).map(r => r.name);
+  )).map(r => r.name);
 
   ok('users table exists', tables.includes('users'));
   ok('ad_accounts table exists', tables.includes('ad_accounts'));
@@ -223,7 +223,7 @@ async function runTests() {
   const account = db.get('SELECT * FROM ad_accounts LIMIT 1');
   // Upsert an already-existing campaign (should UPDATE, not INSERT)
   const existingCampaign = db.get('SELECT * FROM campaigns LIMIT 1');
-  upsertCampaign(account.id, {
+  await upsertCampaign(account.id, {
     id: existingCampaign.meta_campaign_id,
     name: existingCampaign.name + ' (updated)',
     objective: 'MESSAGES',

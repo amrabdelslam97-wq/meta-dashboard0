@@ -48,7 +48,7 @@ function round(n, dp = 2) {
 async function syncAccountBudgetDistribution(account, dateRange = defaultRange()) {
   const accessToken = decryptToken(account.access_token_encrypted);
 
-  const campaigns = db.all(
+  const campaigns = await db.all(
     `SELECT id, meta_campaign_id, name FROM campaigns WHERE ad_account_id = ? AND status = 'active'`,
     [account.id]
   );
@@ -58,7 +58,7 @@ async function syncAccountBudgetDistribution(account, dateRange = defaultRange()
   let apiCalls = 0;
 
   for (const campaign of campaigns) {
-    const budgetRow = db.get(
+    const budgetRow = await db.get(
       `SELECT COALESCE(SUM(daily_budget), 0) as total_daily, COALESCE(SUM(lifetime_budget), 0) as total_lifetime
        FROM ad_sets WHERE campaign_id = ? AND status = 'active'`,
       [campaign.id]
@@ -83,7 +83,7 @@ async function syncAccountBudgetDistribution(account, dateRange = defaultRange()
   }
 
   const snapshot = computeDistribution(rows);
-  persistSnapshot(account.id, snapshot, dateRange);
+  await persistSnapshot(account.id, snapshot, dateRange);
 
   return { campaignsProcessed: rows.length, apiCalls, errors, snapshot };
 }
@@ -149,9 +149,9 @@ function computeDistribution(rows) {
   return { rows: enriched, account: accountRollup };
 }
 
-function persistSnapshot(adAccountId, snapshot, dateRange) {
+async function persistSnapshot(adAccountId, snapshot, dateRange) {
   const now = new Date().toISOString();
-  db.transaction(tx => {
+  await db.transaction(tx => {
     for (const row of [snapshot.account, ...snapshot.rows]) {
       tx.run(
         `INSERT INTO budget_distribution_snapshots (
@@ -177,12 +177,12 @@ function persistSnapshot(adAccountId, snapshot, dateRange) {
 }
 
 /** Read side (no Meta calls) -- the persisted snapshot for an account/period. */
-function getBudgetDistribution(adAccountId, dateRange = defaultRange()) {
-  const rows = db.all(
+async function getBudgetDistribution(adAccountId, dateRange = defaultRange()) {
+  const rows = await db.all(
     `SELECT * FROM budget_distribution_snapshots WHERE ad_account_id = ? AND date_since = ? AND date_until = ? AND level != 'account' ORDER BY spend_amount DESC`,
     [adAccountId, dateRange.since, dateRange.until]
   );
-  const account = db.get(
+  const account = await db.get(
     `SELECT * FROM budget_distribution_snapshots WHERE ad_account_id = ? AND level = 'account' AND date_since = ? AND date_until = ?`,
     [adAccountId, dateRange.since, dateRange.until]
   );

@@ -18,7 +18,7 @@ const creativeInsightsEngine = require('../../services/creativeInsightsEngine');
 // ── Creative Profile ───────────────────────────────────────
 
 router.get('/profile/:adId', asyncHandler(async (req, res) => {
-  const profile = creativeProfileEngine.getCreativeProfile(req.params.adId);
+  const profile = await creativeProfileEngine.getCreativeProfile(req.params.adId);
 
   if (profile.error) {
     return res.status(404).json({ error: profile.error });
@@ -30,7 +30,7 @@ router.get('/profile/:adId', asyncHandler(async (req, res) => {
 // ── Creative Assets ───────────────────────────────────────
 
 router.get('/assets/:adId', asyncHandler(async (req, res) => {
-  const assets = creativeProfileEngine.getCreativeAssets(req.params.adId);
+  const assets = await creativeProfileEngine.getCreativeAssets(req.params.adId);
 
   if (assets.error) {
     return res.status(404).json({ error: assets.error });
@@ -42,13 +42,13 @@ router.get('/assets/:adId', asyncHandler(async (req, res) => {
 // ── Creative Score ────────────────────────────────────────
 
 router.get('/score/:adId', asyncHandler(async (req, res) => {
-  const score = creativeScoringEngine.calculateCreativeScore(req.params.adId);
+  const score = await creativeScoringEngine.calculateCreativeScore(req.params.adId);
 
   return res.json({ data: score });
 }));
 
 router.get('/scores/campaign/:campaignId', asyncHandler(async (req, res) => {
-  const scores = creativeScoringEngine.scoreCreativesByCampaign(req.params.campaignId);
+  const scores = await creativeScoringEngine.scoreCreativesByCampaign(req.params.campaignId);
 
   return res.json({ data: scores });
 }));
@@ -56,13 +56,13 @@ router.get('/scores/campaign/:campaignId', asyncHandler(async (req, res) => {
 // ── Creative Fatigue ──────────────────────────────────────
 
 router.get('/fatigue/:adId', asyncHandler(async (req, res) => {
-  const fatigue = creativeFatigueEngine.detectCreativeFatigue(req.params.adId);
+  const fatigue = await creativeFatigueEngine.detectCreativeFatigue(req.params.adId);
 
   return res.json({ data: fatigue });
 }));
 
 router.get('/fatigue/campaign/:campaignId', asyncHandler(async (req, res) => {
-  const fatigue = creativeFatigueEngine.detectCampaignFatigue(req.params.campaignId);
+  const fatigue = await creativeFatigueEngine.detectCampaignFatigue(req.params.campaignId);
 
   return res.json({ data: fatigue });
 }));
@@ -70,7 +70,7 @@ router.get('/fatigue/campaign/:campaignId', asyncHandler(async (req, res) => {
 // ── Creative Insights ─────────────────────────────────────
 
 router.get('/insights/:adId', asyncHandler(async (req, res) => {
-  const insights = creativeInsightsEngine.generateCreativeInsights(req.params.adId);
+  const insights = await creativeInsightsEngine.generateCreativeInsights(req.params.adId);
 
   return res.json({ data: insights });
 }));
@@ -82,7 +82,7 @@ router.get('/compare', asyncHandler(async (req, res) => {
     return res.status(400).json({ error: 'ad1 and ad2 parameters required' });
   }
 
-  const comparison = creativeInsightsEngine.compareCreatives(ad1, ad2);
+  const comparison = await creativeInsightsEngine.compareCreatives(ad1, ad2);
 
   return res.json({ data: comparison });
 }));
@@ -92,11 +92,11 @@ router.get('/compare', asyncHandler(async (req, res) => {
 router.get('/dashboard/:adId', asyncHandler(async (req, res) => {
   const adId = req.params.adId;
 
-  const profile = creativeProfileEngine.getCreativeProfile(adId);
-  const assets = creativeProfileEngine.getCreativeAssets(adId);
-  const score = creativeScoringEngine.calculateCreativeScore(adId);
-  const fatigue = creativeFatigueEngine.detectCreativeFatigue(adId);
-  const insights = creativeInsightsEngine.generateCreativeInsights(adId);
+  const profile = await creativeProfileEngine.getCreativeProfile(adId);
+  const assets = await creativeProfileEngine.getCreativeAssets(adId);
+  const score = await creativeScoringEngine.calculateCreativeScore(adId);
+  const fatigue = await creativeFatigueEngine.detectCreativeFatigue(adId);
+  const insights = await creativeInsightsEngine.generateCreativeInsights(adId);
 
   return res.json({
     data: {
@@ -121,7 +121,7 @@ router.get('/dashboard/:adId', asyncHandler(async (req, res) => {
 // ── Campaign Creatives List ────────────────────────────────
 
 router.get('/campaign/:campaignId', asyncHandler(async (req, res) => {
-  const creatives = creativeProfileEngine.listCreativesByCampaign(req.params.campaignId);
+  const creatives = await creativeProfileEngine.listCreativesByCampaign(req.params.campaignId);
 
   return res.json({ data: creatives });
 }));

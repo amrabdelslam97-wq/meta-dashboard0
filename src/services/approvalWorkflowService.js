@@ -15,11 +15,11 @@ function generateId(prefix) {
 /**
  * Create approval request
  */
-function createApprovalRequest(workspaceId, approvalData) {
+async function createApprovalRequest(workspaceId, approvalData) {
   const approvalId = generateId('apr');
   const now = new Date().toISOString();
 
-  db.run(`
+  await db.run(`
     INSERT INTO approvals (
       id, workspace_id, entity_type, entity_id,
       requested_by_user_id, approval_level, assigned_to_user_id,
@@ -46,7 +46,7 @@ function createApprovalRequest(workspaceId, approvalData) {
 /**
  * Get approval request
  */
-function getApproval(approvalId) {
+async function getApproval(approvalId) {
   return db.get(`
     SELECT * FROM approvals WHERE id = ?
   `, [approvalId]);
@@ -55,7 +55,7 @@ function getApproval(approvalId) {
 /**
  * List pending approvals
  */
-function listPendingApprovals(workspaceId, filters = {}) {
+async function listPendingApprovals(workspaceId, filters = {}) {
   let query = `
     SELECT a.* FROM approvals a
     WHERE a.workspace_id = ? AND a.status IN ('pending', 'revisions_requested')
@@ -85,10 +85,10 @@ function listPendingApprovals(workspaceId, filters = {}) {
 /**
  * Approve request
  */
-function approveRequest(approvalId, userId, feedback) {
+async function approveRequest(approvalId, userId, feedback) {
   const now = new Date().toISOString();
 
-  db.run(`
+  await db.run(`
     UPDATE approvals
     SET status = 'approved', feedback = ?, approved_by_user_id = ?, approved_at = ?, updated_at = ?
     WHERE id = ?
@@ -100,10 +100,10 @@ function approveRequest(approvalId, userId, feedback) {
 /**
  * Reject request
  */
-function rejectRequest(approvalId, userId, feedback) {
+async function rejectRequest(approvalId, userId, feedback) {
   const now = new Date().toISOString();
 
-  db.run(`
+  await db.run(`
     UPDATE approvals
     SET status = 'rejected', feedback = ?, approved_by_user_id = ?, approved_at = ?, updated_at = ?
     WHERE id = ?
@@ -115,10 +115,10 @@ function rejectRequest(approvalId, userId, feedback) {
 /**
  * Request revisions
  */
-function requestRevisions(approvalId, userId, feedback) {
+async function requestRevisions(approvalId, userId, feedback) {
   const now = new Date().toISOString();
 
-  db.run(`
+  await db.run(`
     UPDATE approvals
     SET status = 'revisions_requested', feedback = ?, updated_at = ?
     WHERE id = ?
@@ -130,7 +130,7 @@ function requestRevisions(approvalId, userId, feedback) {
 /**
  * Get approval chain for entity
  */
-function getApprovalChain(entityType, entityId) {
+async function getApprovalChain(entityType, entityId) {
   return db.all(`
     SELECT * FROM approvals
     WHERE entity_type = ? AND entity_id = ?
@@ -141,8 +141,8 @@ function getApprovalChain(entityType, entityId) {
 /**
  * Check if all approvals are complete
  */
-function isApprovedByAllLevels(entityType, entityId, requiredLevels) {
-  const chain = getApprovalChain(entityType, entityId);
+async function isApprovedByAllLevels(entityType, entityId, requiredLevels) {
+  const chain = await getApprovalChain(entityType, entityId);
   if (!chain || chain.length === 0) return false;
 
   for (const level of requiredLevels) {
@@ -158,27 +158,27 @@ function isApprovedByAllLevels(entityType, entityId, requiredLevels) {
 /**
  * Get approval stats for workspace
  */
-function getApprovalStats(workspaceId) {
+async function getApprovalStats(workspaceId) {
   const stats = {
-    pending: db.get(
+    pending: (await db.get(
       'SELECT COUNT(*) as count FROM approvals WHERE workspace_id = ? AND status = "pending"',
       [workspaceId]
-    )?.count || 0,
-    approved: db.get(
+    ))?.count || 0,
+    approved: (await db.get(
       'SELECT COUNT(*) as count FROM approvals WHERE workspace_id = ? AND status = "approved"',
       [workspaceId]
-    )?.count || 0,
-    rejected: db.get(
+    ))?.count || 0,
+    rejected: (await db.get(
       'SELECT COUNT(*) as count FROM approvals WHERE workspace_id = ? AND status = "rejected"',
       [workspaceId]
-    )?.count || 0,
-    revisions_requested: db.get(
+    ))?.count || 0,
+    revisions_requested: (await db.get(
       'SELECT COUNT(*) as count FROM approvals WHERE workspace_id = ? AND status = "revisions_requested"',
       [workspaceId]
-    )?.count || 0,
+    ))?.count || 0,
   };
 
-  const byType = db.all(`
+  const byType = await db.all(`
     SELECT entity_type, status, COUNT(*) as count
     FROM approvals
     WHERE workspace_id = ?

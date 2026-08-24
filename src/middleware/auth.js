@@ -1,15 +1,22 @@
 /**
- * Session-cookie authentication for the single-user dashboard.
+ * Authentication for the single-user dashboard.
  *
  * There is exactly one admin identity, configured via USER_EMAIL/
  * USER_PASSWORD env vars (compared with a constant-time check -- no
  * hashing/storage needed since there's no user table, just one
- * operator-set credential pair). Mirrors tokenCrypto.js's
- * requireEncryptionKey() pattern: a boot-time secret check that fails
- * fast rather than silently starting insecure.
+ * operator-set credential pair).
+ *
+ * Auth state itself is a stateless, signed cookie (statelessAuth.js) rather
+ * than express-session -- see that file's header for why: req.session held
+ * exactly one boolean anywhere in this codebase, so server-side session
+ * storage was never actually required. requireSessionSecret() is
+ * re-exported here (implemented in statelessAuth.js) so app.js's existing
+ * boot-time fail-fast check (`requireSessionSecret()` before the DB/
+ * migrations/scheduler start) keeps working unchanged.
  */
 
 const crypto = require('crypto');
+const { isAuthenticated, requireSessionSecret } = require('./statelessAuth');
 
 function timingSafeEqualStr(a, b) {
   const bufA = Buffer.from(String(a ?? ''), 'utf8');
@@ -30,24 +37,13 @@ function checkCredentials(email, password) {
   return timingSafeEqualStr(email, expectedEmail) && timingSafeEqualStr(password, expectedPassword);
 }
 
-function requireSessionSecret() {
-  const secret = process.env.SESSION_SECRET;
-  if (!secret) {
-    throw new Error(
-      'SESSION_SECRET is not set. Login sessions cannot be signed without it. Generate one with:\n' +
-      '  node -e "console.log(require(\'crypto\').randomBytes(32).toString(\'hex\'))"\n' +
-      'and set SESSION_SECRET in your .env file.'
-    );
-  }
-  return secret;
-}
-
 // Mounted at the '/api/v1' prefix, so req.path here is already relative
 // (e.g. '/health', '/campaigns'). '/health' must stay reachable
-// unauthenticated -- it's Railway's healthcheck target (railway.json).
+// unauthenticated -- it's Railway's healthcheck target (railway.json) and
+// would also serve as Vercel's.
 function realRequireAuth(req, res, next) {
   if (req.path === '/health') return next();
-  if (req.session && req.session.authenticated) return next();
+  if (isAuthenticated(req)) return next();
   return res.status(401).json({ error: 'Not authenticated' });
 }
 

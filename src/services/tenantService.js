@@ -19,7 +19,7 @@ function generateId(prefix) {
 /**
  * Create a new tenant
  */
-function createTenant(userId, tenantData) {
+async function createTenant(userId, tenantData) {
   const tenantId = generateId('ten');
   const now = new Date().toISOString();
 
@@ -29,7 +29,7 @@ function createTenant(userId, tenantData) {
     .replace(/[^a-z0-9]+/g, '-')
     .replace(/^-+|-+$/g, '') || crypto.randomBytes(4).toString('hex');
 
-  db.run(`
+  await db.run(`
     INSERT INTO tenants (
       id, owner_user_id, tenant_type, name, slug, logo_url,
       industry, country, timezone, currency, language,
@@ -55,7 +55,7 @@ function createTenant(userId, tenantData) {
 
   // Add owner as tenant member
   const memberId = generateId('tm');
-  db.run(`
+  await db.run(`
     INSERT INTO tenant_memberships (
       id, tenant_id, user_id, role, status, joined_at, created_at, updated_at
     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
@@ -63,14 +63,14 @@ function createTenant(userId, tenantData) {
 
   // Create default tenant settings
   const settingsId = generateId('ts');
-  db.run(`
+  await db.run(`
     INSERT INTO tenant_settings (
       id, tenant_id, theme, date_format, number_format, created_at, updated_at
     ) VALUES (?, ?, ?, ?, ?, ?, ?)
   `, [settingsId, tenantId, 'light', 'MM/DD/YYYY', 'en-US', now, now]);
 
   // Create default quotas from Free plan
-  createTenantQuotas(tenantId);
+  await createTenantQuotas(tenantId);
 
   return getTenant(tenantId);
 }
@@ -78,20 +78,20 @@ function createTenant(userId, tenantData) {
 /**
  * Get tenant details
  */
-function getTenant(tenantId) {
-  const tenant = db.get(`
+async function getTenant(tenantId) {
+  const tenant = await db.get(`
     SELECT t.* FROM tenants t WHERE t.id = ?
   `, [tenantId]);
 
   if (!tenant) return null;
 
-  const subscription = db.get(`
+  const subscription = await db.get(`
     SELECT ts.*, sp.plan_name FROM tenant_subscriptions ts
     LEFT JOIN subscription_plans sp ON ts.plan_id = sp.id
     WHERE ts.tenant_id = ?
   `, [tenantId]);
 
-  const settings = db.get(`
+  const settings = await db.get(`
     SELECT * FROM tenant_settings WHERE tenant_id = ?
   `, [tenantId]);
 
@@ -105,7 +105,7 @@ function getTenant(tenantId) {
 /**
  * List tenants for user
  */
-function getUserTenants(userId) {
+async function getUserTenants(userId) {
   return db.all(`
     SELECT t.* FROM tenants t
     INNER JOIN tenant_memberships tm ON t.id = tm.tenant_id
@@ -117,7 +117,7 @@ function getUserTenants(userId) {
 /**
  * Update tenant
  */
-function updateTenant(tenantId, tenantData) {
+async function updateTenant(tenantId, tenantData) {
   const now = new Date().toISOString();
   const updates = [];
   const params = [];
@@ -142,7 +142,7 @@ function updateTenant(tenantId, tenantData) {
   params.push(now);
   params.push(tenantId);
 
-  db.run(
+  await db.run(
     `UPDATE tenants SET ${updates.join(', ')} WHERE id = ?`,
     params
   );
@@ -158,7 +158,7 @@ function updateTenant(tenantId, tenantData) {
  * Create tenant context from request (for middleware)
  * Used to scope all queries automatically
  */
-function createTenantContext(userId, tenantIdOrApiKey) {
+async function createTenantContext(userId, tenantIdOrApiKey) {
   if (!tenantIdOrApiKey) {
     throw new Error('Tenant context required');
   }
@@ -167,7 +167,7 @@ function createTenantContext(userId, tenantIdOrApiKey) {
 
   // If API key provided, resolve to tenant
   if (tenantIdOrApiKey.startsWith('sk_') || tenantIdOrApiKey.length > 50) {
-    const apiKey = db.get(
+    const apiKey = await db.get(
       'SELECT tenant_id FROM api_keys WHERE api_key = ?',
       [tenantIdOrApiKey]
     );
@@ -176,7 +176,7 @@ function createTenantContext(userId, tenantIdOrApiKey) {
   }
 
   // Verify user has access to tenant
-  const membership = db.get(`
+  const membership = await db.get(`
     SELECT * FROM tenant_memberships
     WHERE tenant_id = ? AND user_id = ? AND status = 'active'
   `, [tenantId, userId]);
@@ -197,8 +197,8 @@ function createTenantContext(userId, tenantIdOrApiKey) {
  * Verify user has access to entity in tenant
  * Usage: verifyTenantAccess(tenantId, userId, 'edit')
  */
-function verifyTenantAccess(tenantId, userId, requiredAction = 'view') {
-  const membership = db.get(`
+async function verifyTenantAccess(tenantId, userId, requiredAction = 'view') {
+  const membership = await db.get(`
     SELECT role FROM tenant_memberships
     WHERE tenant_id = ? AND user_id = ? AND status = 'active'
   `, [tenantId, userId]);
@@ -245,8 +245,8 @@ function getPermissionsForRole(role) {
   return rolePermissions[role] || [];
 }
 
-function canUserPerform(tenantId, userId, action) {
-  const membership = db.get(`
+async function canUserPerform(tenantId, userId, action) {
+  const membership = await db.get(`
     SELECT role FROM tenant_memberships
     WHERE tenant_id = ? AND user_id = ? AND status = 'active'
   `, [tenantId, userId]);
@@ -264,9 +264,9 @@ function canUserPerform(tenantId, userId, action) {
 /**
  * Create default quotas from Free plan
  */
-function createTenantQuotas(tenantId) {
+async function createTenantQuotas(tenantId) {
   const quotasId = generateId('tq');
-  const freePlan = db.get('SELECT * FROM subscription_plans WHERE plan_slug = ?', ['free']);
+  const freePlan = await db.get('SELECT * FROM subscription_plans WHERE plan_slug = ?', ['free']);
 
   if (!freePlan) return;
 
@@ -274,7 +274,7 @@ function createTenantQuotas(tenantId) {
   const resetDate = new Date();
   resetDate.setMonth(resetDate.getMonth() + 1);
 
-  db.run(`
+  await db.run(`
     INSERT INTO tenant_quotas (
       id, tenant_id, max_storage_gb, max_users, max_api_calls_monthly,
       max_ad_accounts, max_dashboards, reset_date, created_at, updated_at
@@ -296,15 +296,15 @@ function createTenantQuotas(tenantId) {
 /**
  * Update tenant quotas from subscription plan
  */
-function updateTenantQuotasFromPlan(tenantId, planId) {
-  const plan = db.get('SELECT * FROM subscription_plans WHERE id = ?', [planId]);
+async function updateTenantQuotasFromPlan(tenantId, planId) {
+  const plan = await db.get('SELECT * FROM subscription_plans WHERE id = ?', [planId]);
   if (!plan) return null;
 
   const now = new Date().toISOString();
   const resetDate = new Date();
   resetDate.setMonth(resetDate.getMonth() + 1);
 
-  db.run(`
+  await db.run(`
     UPDATE tenant_quotas
     SET max_storage_gb = ?, max_users = ?, max_api_calls_monthly = ?,
         max_ad_accounts = ?, max_dashboards = ?, reset_date = ?, updated_at = ?
@@ -326,12 +326,12 @@ function updateTenantQuotasFromPlan(tenantId, planId) {
 /**
  * Get tenant quotas and current usage
  */
-function getTenantQuotasWithUsage(tenantId) {
-  const quotas = db.get('SELECT * FROM tenant_quotas WHERE tenant_id = ?', [tenantId]);
+async function getTenantQuotasWithUsage(tenantId) {
+  const quotas = await db.get('SELECT * FROM tenant_quotas WHERE tenant_id = ?', [tenantId]);
   if (!quotas) return null;
 
   const currentMonth = new Date().toISOString().slice(0, 7); // YYYY-MM
-  const usage = db.get(
+  const usage = await db.get(
     'SELECT * FROM usage_tracking WHERE tenant_id = ? AND tracking_month = ?',
     [tenantId, currentMonth]
   );

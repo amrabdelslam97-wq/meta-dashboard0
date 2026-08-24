@@ -37,27 +37,27 @@ router.get('/', asyncHandler(async (req, res) => {
 }));
 
 router.get('/accounts', asyncHandler(async (req, res) => {
-  const rankings = getAccountRankings(dr(req));
+  const rankings = await getAccountRankings(dr(req));
   return res.json({ data: rankings, total: rankings.length, _governance: buildPortfolioTrace({ decisions: rankings }) });
 }));
 
 router.get('/summary', asyncHandler(async (req, res) => {
-  const summary = getPortfolioSummary(dr(req));
+  const summary = await getPortfolioSummary(dr(req));
   return res.json({ data: summary, _governance: buildPortfolioTrace({ decisions: [] }) });
 }));
 
 router.get('/health', asyncHandler(async (req, res) => {
-  const health = getPortfolioHealth(dr(req));
+  const health = await getPortfolioHealth(dr(req));
   return res.json({ data: health, _governance: buildPortfolioTrace({ decisions: [] }) });
 }));
 
 router.get('/objectives', asyncHandler(async (req, res) => {
-  const summary = getPortfolioObjectiveSummary(dr(req));
+  const summary = await getPortfolioObjectiveSummary(dr(req));
   return res.json({ data: summary, _governance: buildPortfolioTrace({ decisions: [] }) });
 }));
 
 router.get('/alerts', asyncHandler(async (req, res) => {
-  const alerts = getCrossAccountAlerts();
+  const alerts = await getCrossAccountAlerts();
   return res.json({ data: alerts, total: alerts.length, _governance: buildPortfolioTrace({ decisions: alerts }) });
 }));
 

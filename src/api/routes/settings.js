@@ -18,7 +18,7 @@ const smartSyncEngine = require('../../services/smartSyncEngine');
 
 // ── GET /settings ─────────────────────────────────────────────
 router.get('/', asyncHandler(async (req, res) => {
-  const accounts = db.all(`
+  const accounts = await db.all(`
     SELECT id, meta_account_id, account_name, client_label, currency,
            timezone, country_code, attribution_window_days, status,
            token_is_valid, last_token_verified_at, business_name, notes,
@@ -28,17 +28,17 @@ router.get('/', asyncHandler(async (req, res) => {
     FROM ad_accounts ORDER BY account_name
   `);
 
-  const industries = db.all('SELECT * FROM benchmark_industries WHERE is_active = 1 ORDER BY name');
+  const industries = await db.all('SELECT * FROM benchmark_industries WHERE is_active = 1 ORDER BY name');
 
   const targetsByAccount = {};
   for (const acc of accounts) {
-    targetsByAccount[acc.id] = db.all(
+    targetsByAccount[acc.id] = await db.all(
       `SELECT * FROM account_targets WHERE ad_account_id = ? ORDER BY objective, effective_from DESC`,
       [acc.id]
     );
   }
 
-  const benchmarkOverrides = db.all(`
+  const benchmarkOverrides = await db.all(`
     SELECT bm.*, bi.name as industry_name, a.account_name
     FROM benchmark_metrics bm
     LEFT JOIN benchmark_industries bi ON bm.industry_id = bi.id
@@ -46,7 +46,7 @@ router.get('/', asyncHandler(async (req, res) => {
     ORDER BY bi.name, bm.objective, bm.metric_key
   `);
 
-  const scoringConfigs = db.all(
+  const scoringConfigs = await db.all(
     'SELECT * FROM objective_scoring_configs ORDER BY objective, metric_key'
   );
 
@@ -60,7 +60,7 @@ router.get('/', asyncHandler(async (req, res) => {
     targets: targetsByAccount,
     benchmark_overrides: benchmarkOverrides,
     scoring_configs: scoringConfigs,
-    sync_intervals: smartSyncEngine.getScheduleConfig(),
+    sync_intervals: await smartSyncEngine.getScheduleConfig(),
   });
 }));
 
@@ -68,7 +68,7 @@ router.get('/', asyncHandler(async (req, res) => {
 // Configurable cadence (minutes) per entity type for the Smart Auto Sync
 // scheduler — insights/campaigns/adsets/ads/creatives/metadata.
 router.get('/sync-intervals', asyncHandler(async (req, res) => {
-  return res.json({ data: smartSyncEngine.getScheduleConfig() });
+  return res.json({ data: await smartSyncEngine.getScheduleConfig() });
 }));
 
 // ── PATCH /settings/sync-intervals ────────────────────────────
@@ -79,8 +79,8 @@ router.patch('/sync-intervals', asyncHandler(async (req, res) => {
     return res.status(400).json({ error: 'entity_type and interval_minutes are required' });
   }
   try {
-    const updated = smartSyncEngine.setScheduleInterval(entity_type, interval_minutes);
-    return res.json({ data: updated, all: smartSyncEngine.getScheduleConfig() });
+    const updated = await smartSyncEngine.setScheduleInterval(entity_type, interval_minutes);
+    return res.json({ data: updated, all: await smartSyncEngine.getScheduleConfig() });
   } catch (err) {
     return res.status(err.status || 400).json({ error: err.message });
   }
@@ -89,7 +89,7 @@ router.patch('/sync-intervals', asyncHandler(async (req, res) => {
 // ── GET /settings/targets/:account_id ────────────────────────
 router.get('/targets/:account_id', asyncHandler(async (req, res) => {
   const { account_id } = req.params;
-  const targets = db.all(
+  const targets = await db.all(
     'SELECT * FROM account_targets WHERE ad_account_id = ? ORDER BY objective, effective_from DESC',
     [account_id]
   );
@@ -111,21 +111,21 @@ router.post('/targets', asyncHandler(async (req, res) => {
     return res.status(400).json({ error: 'ad_account_id and objective are required' });
   }
 
-  const account = db.get('SELECT id FROM ad_accounts WHERE id = ?', [ad_account_id]);
+  const account = await db.get('SELECT id FROM ad_accounts WHERE id = ?', [ad_account_id]);
   if (!account) return res.status(404).json({ error: 'Account not found' });
 
   const now  = new Date().toISOString();
   const from = effective_from || now.slice(0, 10);
 
   // Close any existing open target for this account+objective
-  db.run(
+  await db.run(
     `UPDATE account_targets SET effective_to = ?, updated_at = ?
      WHERE ad_account_id = ? AND objective = ? AND (effective_to IS NULL OR effective_to >= ?)`,
     [from, now, ad_account_id, objective, from]
   );
 
   const id = uuidv4();
-  db.run(
+  await db.run(
     `INSERT INTO account_targets (
        id, ad_account_id, objective,
        target_cpr, target_cpl, target_cpa, target_roas, target_ctr,
@@ -145,19 +145,19 @@ router.post('/targets', asyncHandler(async (req, res) => {
     ]
   );
 
-  return res.status(201).json({ data: db.get('SELECT * FROM account_targets WHERE id = ?', [id]) });
+  return res.status(201).json({ data: await db.get('SELECT * FROM account_targets WHERE id = ?', [id]) });
 }));
 
 // ── GET /settings/benchmarks ──────────────────────────────────
 router.get('/benchmarks', asyncHandler(async (req, res) => {
-  const rows = db.all(`
+  const rows = await db.all(`
     SELECT bm.*, bi.name as industry_name, a.account_name
     FROM benchmark_metrics bm
     LEFT JOIN benchmark_industries bi ON bm.industry_id = bi.id
     LEFT JOIN ad_accounts a ON bm.ad_account_id = a.id
     ORDER BY bi.name, bm.objective, bm.metric_key
   `);
-  const industries = db.all('SELECT * FROM benchmark_industries WHERE is_active = 1 ORDER BY name');
+  const industries = await db.all('SELECT * FROM benchmark_industries WHERE is_active = 1 ORDER BY name');
   return res.json({ data: rows, industries });
 }));
 
@@ -176,7 +176,7 @@ router.post('/benchmarks', asyncHandler(async (req, res) => {
   const now = new Date().toISOString();
 
   // Upsert: if same combo exists update it
-  const existing = db.get(
+  const existing = await db.get(
     `SELECT id FROM benchmark_metrics
      WHERE objective = ? AND metric_key = ?
        AND (ad_account_id = ? OR (ad_account_id IS NULL AND ? IS NULL))
@@ -186,7 +186,7 @@ router.post('/benchmarks', asyncHandler(async (req, res) => {
   );
 
   if (existing) {
-    db.run(
+    await db.run(
       `UPDATE benchmark_metrics SET
          excellent_threshold=?, good_threshold=?, warning_threshold=?, critical_threshold=?,
          comparison_direction=?, optimal_low=?, optimal_high=?, updated_at=?
@@ -194,11 +194,11 @@ router.post('/benchmarks', asyncHandler(async (req, res) => {
       [excellent_threshold, good_threshold, warning_threshold, critical_threshold,
        comparison_direction, optimal_low ?? null, optimal_high ?? null, now, existing.id]
     );
-    return res.json({ data: db.get('SELECT * FROM benchmark_metrics WHERE id=?', [existing.id]) });
+    return res.json({ data: await db.get('SELECT * FROM benchmark_metrics WHERE id=?', [existing.id]) });
   }
 
   const id = uuidv4();
-  db.run(
+  await db.run(
     `INSERT INTO benchmark_metrics (
        id, industry_id, ad_account_id, objective, metric_key,
        excellent_threshold, good_threshold, warning_threshold, critical_threshold,
@@ -210,15 +210,15 @@ router.post('/benchmarks', asyncHandler(async (req, res) => {
      now.slice(0,10), now, now]
   );
 
-  return res.status(201).json({ data: db.get('SELECT * FROM benchmark_metrics WHERE id=?', [id]) });
+  return res.status(201).json({ data: await db.get('SELECT * FROM benchmark_metrics WHERE id=?', [id]) });
 }));
 
 // ── DELETE /settings/benchmarks/:id ──────────────────────────
 router.delete('/benchmarks/:id', asyncHandler(async (req, res) => {
   const { id } = req.params;
-  const row = db.get('SELECT id FROM benchmark_metrics WHERE id = ?', [id]);
+  const row = await db.get('SELECT id FROM benchmark_metrics WHERE id = ?', [id]);
   if (!row) return res.status(404).json({ error: 'Benchmark not found' });
-  db.run('DELETE FROM benchmark_metrics WHERE id = ?', [id]);
+  await db.run('DELETE FROM benchmark_metrics WHERE id = ?', [id]);
   return res.json({ success: true });
 }));
 

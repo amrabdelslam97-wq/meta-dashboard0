@@ -78,14 +78,14 @@ describe('executiveMemory.measureOutcomes (DB integration)', () => {
     return id;
   }
 
-  test('measures and persists an outcome for a completed decision older than the measurement window', () => {
+  test('measures and persists an outcome for a completed decision older than the measurement window', async () => {
     const eightDaysAgo = new Date(Date.now() - 8 * 86400000).toISOString();
     const decisionId = insertCompletedDecision({
       metaCampaignId: 'camp_mem_1', decisionType: 'REFRESH_CREATIVE',
       supportingMetrics: { ctr: 0.5 }, completedAt: eightDaysAgo,
     });
 
-    const measured = measureOutcomes({ meta_campaign_id: 'camp_mem_1' }, { ctr: 1.2 });
+    const measured = await measureOutcomes({ meta_campaign_id: 'camp_mem_1' }, { ctr: 1.2 });
 
     expect(measured).toHaveLength(1);
     expect(measured[0].decision_history_id).toBe(decisionId);
@@ -99,7 +99,7 @@ describe('executiveMemory.measureOutcomes (DB integration)', () => {
     expect(row.outcome).toBe('improved');
   });
 
-  test('does not re-measure a decision that already has a decision_outcomes row', () => {
+  test('does not re-measure a decision that already has a decision_outcomes row', async () => {
     const eightDaysAgo = new Date(Date.now() - 8 * 86400000).toISOString();
     insertCompletedDecision({
       metaCampaignId: 'camp_mem_1', decisionType: 'REFRESH_CREATIVE',
@@ -107,33 +107,33 @@ describe('executiveMemory.measureOutcomes (DB integration)', () => {
     });
 
     // First call measures the new one from this test + skips the already-measured one from the prior test.
-    const measured = measureOutcomes({ meta_campaign_id: 'camp_mem_1' }, { ctr: 1.2 });
+    const measured = await measureOutcomes({ meta_campaign_id: 'camp_mem_1' }, { ctr: 1.2 });
     expect(measured).toHaveLength(1);
 
     // Second call: nothing left to measure.
-    const measuredAgain = measureOutcomes({ meta_campaign_id: 'camp_mem_1' }, { ctr: 1.2 });
+    const measuredAgain = await measureOutcomes({ meta_campaign_id: 'camp_mem_1' }, { ctr: 1.2 });
     expect(measuredAgain).toHaveLength(0);
   });
 
-  test('does NOT measure a decision younger than the measurement window (completed yesterday)', () => {
+  test('does NOT measure a decision younger than the measurement window (completed yesterday)', async () => {
     const yesterday = new Date(Date.now() - 1 * 86400000).toISOString();
     insertCompletedDecision({
       metaCampaignId: 'camp_mem_2', decisionType: 'REFRESH_CREATIVE',
       supportingMetrics: { ctr: 0.5 }, completedAt: yesterday,
     });
 
-    const measured = measureOutcomes({ meta_campaign_id: 'camp_mem_2' }, { ctr: 1.2 });
+    const measured = await measureOutcomes({ meta_campaign_id: 'camp_mem_2' }, { ctr: 1.2 });
     expect(measured).toHaveLength(0);
   });
 
-  test('skips decision types with no canonical metric (e.g. FIX_TRACKING) -- never fabricates an outcome', () => {
+  test('skips decision types with no canonical metric (e.g. FIX_TRACKING) -- never fabricates an outcome', async () => {
     const eightDaysAgo = new Date(Date.now() - 8 * 86400000).toISOString();
     insertCompletedDecision({
       metaCampaignId: 'camp_mem_3', decisionType: 'FIX_TRACKING',
       supportingMetrics: { ctr: 0.5 }, completedAt: eightDaysAgo,
     });
 
-    const measured = measureOutcomes({ meta_campaign_id: 'camp_mem_3' }, { ctr: 1.2 });
+    const measured = await measureOutcomes({ meta_campaign_id: 'camp_mem_3' }, { ctr: 1.2 });
     expect(measured).toHaveLength(0);
   });
 });
@@ -172,54 +172,54 @@ describe('executiveMemory.getHistoricalEffectiveness + applyHistoricalLearning',
     );
   }
 
-  test('getHistoricalEffectiveness returns zero counts for a campaign/type with no history', () => {
-    const eff = getHistoricalEffectiveness('camp_no_history', 'REFRESH_CREATIVE');
+  test('getHistoricalEffectiveness returns zero counts for a campaign/type with no history', async () => {
+    const eff = await getHistoricalEffectiveness('camp_no_history', 'REFRESH_CREATIVE');
     expect(eff.attempts).toBe(0);
     expect(eff.lastTwoIneffective).toBe(false);
     expect(eff.lastOutcome).toBeNull();
   });
 
-  test('lastTwoIneffective is true after 2 consecutive worsened/no_change outcomes', () => {
+  test('lastTwoIneffective is true after 2 consecutive worsened/no_change outcomes', async () => {
     insertOutcome('camp_mem_4', 'REFRESH_CREATIVE', 'worsened');
     insertOutcome('camp_mem_4', 'REFRESH_CREATIVE', 'no_change');
 
-    const eff = getHistoricalEffectiveness('camp_mem_4', 'REFRESH_CREATIVE');
+    const eff = await getHistoricalEffectiveness('camp_mem_4', 'REFRESH_CREATIVE');
     expect(eff.attempts).toBe(2);
     expect(eff.lastTwoIneffective).toBe(true);
   });
 
-  test('lastTwoIneffective is false if the most recent outcome was improved', () => {
+  test('lastTwoIneffective is false if the most recent outcome was improved', async () => {
     insertOutcome('camp_mem_5', 'REFRESH_CREATIVE', 'worsened');
     insertOutcome('camp_mem_5', 'REFRESH_CREATIVE', 'improved');
 
-    const eff = getHistoricalEffectiveness('camp_mem_5', 'REFRESH_CREATIVE');
+    const eff = await getHistoricalEffectiveness('camp_mem_5', 'REFRESH_CREATIVE');
     expect(eff.lastTwoIneffective).toBe(false);
     expect(eff.lastOutcome).toBe('improved');
   });
 
-  test('applyHistoricalLearning downgrades confidence and attaches historical_note when the rule fires', () => {
+  test('applyHistoricalLearning downgrades confidence and attaches historical_note when the rule fires', async () => {
     insertOutcome('camp_mem_6', 'REFRESH_CREATIVE', 'worsened');
     insertOutcome('camp_mem_6', 'REFRESH_CREATIVE', 'no_change');
 
     const decisions = [{ meta_campaign_id: 'camp_mem_6', decision_type: 'REFRESH_CREATIVE', confidence: 'high' }];
-    const [adjusted] = applyHistoricalLearning(decisions);
+    const [adjusted] = await applyHistoricalLearning(decisions);
 
     expect(adjusted.confidence).toBe('medium'); // downgraded from high
     expect(adjusted.historical_note).toMatch(/Tried twice before/);
     expect(adjusted.historical_effectiveness.lastTwoIneffective).toBe(true);
   });
 
-  test('applyHistoricalLearning leaves confidence unchanged and attaches effectiveness data when the rule does not fire', () => {
+  test('applyHistoricalLearning leaves confidence unchanged and attaches effectiveness data when the rule does not fire', async () => {
     const decisions = [{ meta_campaign_id: 'camp_no_history', decision_type: 'REFRESH_CREATIVE', confidence: 'high' }];
-    const [adjusted] = applyHistoricalLearning(decisions);
+    const [adjusted] = await applyHistoricalLearning(decisions);
 
     expect(adjusted.confidence).toBe('high');
     expect(adjusted.historical_note).toBeUndefined();
     expect(adjusted.historical_effectiveness.attempts).toBe(0);
   });
 
-  test('applyHistoricalLearning never throws on a decision missing meta_campaign_id/decision_type', () => {
+  test('applyHistoricalLearning never throws on a decision missing meta_campaign_id/decision_type', async () => {
     const decisions = [{ confidence: 'high' }];
-    expect(() => applyHistoricalLearning(decisions)).not.toThrow();
+    await expect(applyHistoricalLearning(decisions)).resolves.not.toThrow();
   });
 });

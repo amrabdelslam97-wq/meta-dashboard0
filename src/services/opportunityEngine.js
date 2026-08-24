@@ -190,8 +190,8 @@ function detectOpportunitiesForCampaign(camp, latestScore, scoreHistory, alertCo
 // ─────────────────────────────────────────────
 // MAIN: Run opportunity engine across all campaigns
 // ─────────────────────────────────────────────
-function detectAllOpportunities(limit = 10, accountId = null) {
-  const campaigns = db.all(`
+async function detectAllOpportunities(limit = 10, accountId = null) {
+  const campaigns = await db.all(`
     SELECT c.id, c.meta_campaign_id, c.name, c.objective, c.status, c.effective_status,
            a.account_name, a.currency
     FROM campaigns c
@@ -200,7 +200,7 @@ function detectAllOpportunities(limit = 10, accountId = null) {
     ${accountId ? 'AND c.ad_account_id = ?' : ''}
   `, accountId ? [accountId] : []);
 
-  const activeRecs = db.all(`
+  const activeRecs = await db.all(`
     SELECT rule_code, entity_meta_id, severity FROM recommendation_log
     WHERE dismissed_at IS NULL AND action_taken IS NOT 1
   `);
@@ -208,9 +208,9 @@ function detectAllOpportunities(limit = 10, accountId = null) {
   // Bulk-loaded once for every campaign instead of 3 queries PER campaign
   // (latest score, 10-row history, alert counts) -- same fix and same
   // shared loaders as topWinnersEngine.js/topLosersEngine.js.
-  const latestScores = loadLatestScoresMap('campaign');
-  const scoreHistories = loadScoreHistoryMap('campaign', 10);
-  const alertCountsByEntity = loadAlertCountsMap();
+  const latestScores = await loadLatestScoresMap('campaign');
+  const scoreHistories = await loadScoreHistoryMap('campaign', 10);
+  const alertCountsByEntity = await loadAlertCountsMap();
 
   const allOpportunities = [];
 

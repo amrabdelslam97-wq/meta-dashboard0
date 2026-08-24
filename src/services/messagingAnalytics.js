@@ -33,8 +33,8 @@ function round(n, dp = 2) {
  * @param {string} metaCampaignId
  * @param {{since:string, until:string}} [dateRange]
  */
-function getMessagingDestinationAnalytics(metaCampaignId, dateRange = defaultRange()) {
-  const rows = db.all(
+async function getMessagingDestinationAnalytics(metaCampaignId, dateRange = defaultRange()) {
+  const rows = await db.all(
     `SELECT
        COALESCE(destination_type, 'UNKNOWN') as destination_type,
        SUM(spend) as spend,
@@ -78,8 +78,8 @@ function getMessagingDestinationAnalytics(metaCampaignId, dateRange = defaultRan
  * @param {string} metaCampaignId
  * @param {{since:string, until:string}} [dateRange]
  */
-function getDestinationAttribution(metaCampaignId, dateRange = defaultRange()) {
-  const rows = db.all(
+async function getDestinationAttribution(metaCampaignId, dateRange = defaultRange()) {
+  const rows = await db.all(
     `SELECT
        COALESCE(destination_type, 'UNKNOWN') as destination_type,
        SUM(spend) as spend,
@@ -139,8 +139,8 @@ function getDestinationAttribution(metaCampaignId, dateRange = defaultRange()) {
  * @param {string} metaCampaignId
  * @param {{since:string, until:string}} [dateRange]
  */
-function comparePlatforms(metaCampaignId, dateRange = defaultRange()) {
-  const { destinations, date_range, note } = getDestinationAttribution(metaCampaignId, dateRange);
+async function comparePlatforms(metaCampaignId, dateRange = defaultRange()) {
+  const { destinations, date_range, note } = await getDestinationAttribution(metaCampaignId, dateRange);
   if (destinations.length === 0) {
     return { date_range, platforms: [], winner: null, note };
   }

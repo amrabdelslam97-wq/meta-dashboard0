@@ -120,4 +120,43 @@ describe('adIntelligence.runAdIntelligence — characterization', () => {
     const fired = result.framework_recommendations.find(f => f.rule_id === 'MF4.13.12');
     expect(fired.scope).toEqual({ campaign: false, ad_set: false, ad: true });
   });
+
+  // Neon Development migration (Vercel): a migrated ad_accounts row's
+  // access_token_encrypted was encrypted under a different environment's
+  // TOKEN_ENCRYPTION_KEY, so decryptToken() throws ("Unsupported state or
+  // unable to authenticate data" -- AES-GCM auth tag mismatch) rather than
+  // returning a value. Simulated here with a syntactically well-formed but
+  // corrupted ciphertext (correct enc:v1: prefix/shape, wrong bytes) so the
+  // test doesn't depend on which key is actually configured.
+  test('an undecryptable stored token degrades like "no token", it does not crash mock-mode callers', async () => {
+    const brokenAccountId = uuidv4();
+    testDb.db.run(
+      `INSERT INTO ad_accounts (id, meta_account_id, account_name, access_token_encrypted, created_at, updated_at)
+       VALUES (?, 'act_ad_char_broken', 'Ad Characterization Broken Token', 'enc:v1:000000000000000000000000:000000000000000000000000:deadbeef', datetime('now'), datetime('now'))`,
+      [brokenAccountId]
+    );
+    const brokenCampaignId = uuidv4();
+    testDb.db.run(
+      `INSERT INTO campaigns (id, ad_account_id, meta_campaign_id, name, objective, status, created_at, updated_at)
+       VALUES (?, ?, 'camp_ad_char_broken', 'Broken Token Campaign', 'sales', 'active', datetime('now'), datetime('now'))`,
+      [brokenCampaignId, brokenAccountId]
+    );
+    const brokenAdSetId = uuidv4();
+    testDb.db.run(
+      `INSERT INTO ad_sets (id, campaign_id, ad_account_id, meta_adset_id, name, status, created_at, updated_at)
+       VALUES (?, ?, ?, 'adset_ad_char_broken', 'Broken Token Ad Set', 'active', datetime('now'), datetime('now'))`,
+      [brokenAdSetId, brokenCampaignId, brokenAccountId]
+    );
+    const brokenAdId = uuidv4();
+    testDb.db.run(
+      `INSERT INTO ads (id, ad_set_id, campaign_id, ad_account_id, meta_ad_id, name, status, created_at, updated_at)
+       VALUES (?, ?, ?, ?, 'ad_char_broken_token', 'Broken Token Ad', 'active', datetime('now'), datetime('now'))`,
+      [brokenAdId, brokenAdSetId, brokenCampaignId, brokenAccountId]
+    );
+
+    const result = await runAdIntelligence(brokenAdId, { useMock: true });
+    expect(result).not.toBeNull();
+    expect(result.meta_ad_id).toBe('ad_char_broken_token');
+    expect(result.data_freshness.source).toBe('mock');
+  });
 });

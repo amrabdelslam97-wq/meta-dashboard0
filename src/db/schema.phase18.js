@@ -34,14 +34,14 @@ const { ensureMigrationsTable, markMigrationApplied } = require('./migrationTrac
 
 const MIGRATION_NAME = 'phase18_auto_sync_default_enabled';
 
-function runPhase18Migrations() {
-  ensureMigrationsTable();
-  const existingCols = db.all("PRAGMA table_info(ad_accounts)").map(c => c.name);
+async function runPhase18Migrations() {
+  await ensureMigrationsTable();
+  const existingCols = (await db.all("PRAGMA table_info(ad_accounts)")).map(c => c.name);
 
   let added = 0;
   if (!existingCols.includes('auto_sync_user_configured_at')) {
     try {
-      db.run(`ALTER TABLE ad_accounts ADD COLUMN auto_sync_user_configured_at TEXT`);
+      await db.run(`ALTER TABLE ad_accounts ADD COLUMN auto_sync_user_configured_at TEXT`);
       added++;
     } catch (err) {
       console.warn('[DB] Phase 18: could not add auto_sync_user_configured_at column:', err.message);
@@ -51,17 +51,17 @@ function runPhase18Migrations() {
   // Task 3 — one-time defensive initialization, literal to the spec: only
   // touches rows genuinely NULL, never a row that already holds 0 or 1.
   // db.run() (database.js) returns no row-count, so count first.
-  const nullCount = db.get(
+  const nullCount = await db.get(
     `SELECT COUNT(*) as c FROM ad_accounts WHERE auto_sync_enabled IS NULL`
   )?.c || 0;
   if (nullCount > 0) {
-    db.run(`UPDATE ad_accounts SET auto_sync_enabled = 1 WHERE auto_sync_enabled IS NULL`);
+    await db.run(`UPDATE ad_accounts SET auto_sync_enabled = 1 WHERE auto_sync_enabled IS NULL`);
   }
 
-  markMigrationApplied(MIGRATION_NAME);
+  await markMigrationApplied(MIGRATION_NAME);
 
   if (added > 0 || nullCount > 0) {
-    db.persist();
+    await db.persist();
     console.log(`[DB] Phase 18 migration complete — column added: ${added > 0}, NULL auto_sync_enabled rows initialized: ${nullCount}.`);
   } else {
     console.log('[DB] Phase 18 schema: already present / nothing to initialize, skipping.');

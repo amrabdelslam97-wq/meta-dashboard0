@@ -52,7 +52,7 @@ async function syncAccountAttributionWindows(account, dateRange = defaultRange()
   const accessToken = decryptToken(account.access_token_encrypted);
   const summary = { campaignsProcessed: 0, apiCalls: 0, errors: [] };
 
-  const campaigns = db.all(
+  const campaigns = await db.all(
     `SELECT meta_campaign_id FROM campaigns WHERE ad_account_id = ? AND status = 'active'`,
     [account.id]
   );
@@ -75,7 +75,7 @@ async function syncAccountAttributionWindows(account, dateRange = defaultRange()
         const cpa = metrics.results > 0 ? round(metrics.spend / metrics.results, 2) : null;
         const roas = metrics.spend > 0 && metrics.purchase_value > 0 ? round(metrics.purchase_value / metrics.spend, 2) : null;
 
-        db.transaction(tx => tx.run(
+        await db.transaction(tx => tx.run(
           `INSERT INTO attribution_window_comparison (id, ad_account_id, meta_campaign_id, attribution_window, date_since, date_until, spend, results, cpa, roas, calculated_at)
            VALUES (?,?,?,?,?,?,?,?,?,?,?)
            ON CONFLICT(ad_account_id, meta_campaign_id, attribution_window, date_since, date_until) DO UPDATE SET
@@ -99,8 +99,8 @@ async function syncAccountAttributionWindows(account, dateRange = defaultRange()
  * Shows which window is "most aggressive" (reports highest results) and which
  * is most "conservative" (lowest results).
  */
-function getAttributionWindowComparison(metaCampaignId, dateRange = defaultRange()) {
-  const rows = db.all(
+async function getAttributionWindowComparison(metaCampaignId, dateRange = defaultRange()) {
+  const rows = await db.all(
     `SELECT attribution_window, spend, results, cpa, roas FROM attribution_window_comparison
      WHERE meta_campaign_id = ? AND date_since = ? AND date_until = ?
      ORDER BY attribution_window`,

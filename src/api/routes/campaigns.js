@@ -84,14 +84,14 @@ router.get(
       : '';
 
     // ── Count total matching records ──
-    const countRow = db.get(
+    const countRow = await db.get(
       `SELECT COUNT(*) as total FROM campaigns c ${whereClause}`,
       params
     );
     const total = countRow?.total || 0;
 
     // ── Fetch paginated results with account info ──
-    const campaigns = db.all(
+    const campaigns = await db.all(
       `SELECT
         c.id,
         c.meta_campaign_id,
@@ -122,8 +122,8 @@ router.get(
     // sync-tracking columns, no new Meta calls) so the dashboard can show
     // "Updated N ago" instead of presenting it as live.
     const freshness = account_id
-      ? buildFreshness(db.get('SELECT last_successful_sync_at, last_sync_completed_at FROM ad_accounts WHERE id = ?', [account_id]))
-      : buildPortfolioFreshness(db.all("SELECT last_successful_sync_at, last_sync_completed_at FROM ad_accounts WHERE status = 'active'"));
+      ? buildFreshness(await db.get('SELECT last_successful_sync_at, last_sync_completed_at FROM ad_accounts WHERE id = ?', [account_id]))
+      : buildPortfolioFreshness(await db.all("SELECT last_successful_sync_at, last_sync_completed_at FROM ad_accounts WHERE status = 'active'"));
 
     return res.json({
       data: campaigns,
@@ -154,7 +154,7 @@ router.get(
   asyncHandler(async (req, res) => {
     const { id } = req.params;
 
-    const campaign = db.get(
+    const campaign = await db.get(
       `SELECT
         c.*,
         a.meta_account_id,
@@ -172,7 +172,7 @@ router.get(
     }
 
     // Include ad sets for this campaign
-    const adSets = db.all(
+    const adSets = await db.all(
       `SELECT * FROM ad_sets WHERE campaign_id = ? ORDER BY name ASC`,
       [id]
     );
@@ -190,14 +190,14 @@ router.get(
   '/:id/score-breakdown',
   asyncHandler(async (req, res) => {
     const { id } = req.params;
-    const campaign = db.get(
+    const campaign = await db.get(
       `SELECT c.meta_campaign_id, c.name, a.currency
        FROM campaigns c JOIN ad_accounts a ON c.ad_account_id = a.id
        WHERE c.id = ? OR c.meta_campaign_id = ?`,
       [id, id]
     );
     if (!campaign) return res.status(404).json({ error: 'Campaign not found', id });
-    const breakdown = formatScoreBreakdown(campaign.meta_campaign_id, 'campaign', campaign.currency);
+    const breakdown = await formatScoreBreakdown(campaign.meta_campaign_id, 'campaign', campaign.currency);
     return res.json({ data: breakdown });
   })
 );
@@ -215,7 +215,7 @@ router.get(
     const { days = '30', since, until } = req.query;
     const n = Math.min(Math.max(parseInt(days, 10) || 30, 1), 365);
 
-    const campaign = db.get(
+    const campaign = await db.get(
       'SELECT meta_campaign_id, name FROM campaigns WHERE id = ? OR meta_campaign_id = ?',
       [id, id]
     );
@@ -230,7 +230,7 @@ router.get(
       params = [campaign.meta_campaign_id, 'campaign'];
     }
 
-    const history = db.all(
+    const history = await db.all(
       `SELECT health_score, health_status, score_reference, calculated_at
        FROM health_score_history
        WHERE entity_meta_id = ? AND entity_type = ? ${dateFilter}

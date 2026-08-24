@@ -33,9 +33,9 @@ function stableIndexFromId(id) {
 // ─────────────────────────────────────────────
 // Load ad + parent campaign from DB
 // ─────────────────────────────────────────────
-function loadAdWithParent(id) {
+async function loadAdWithParent(id) {
   // Accept internal UUID or meta_ad_id
-  const ad = db.get(
+  const ad = await db.get(
     `SELECT ad.*, a.access_token_encrypted, a.id as internal_account_id,
              a.meta_account_id, a.account_name, a.currency, a.attribution_window_days
      FROM ads ad
@@ -44,15 +44,33 @@ function loadAdWithParent(id) {
     [id, id]
   );
   if (!ad) return null;
-  ad.access_token_encrypted = decryptToken(ad.access_token_encrypted);
+  // A stored, encrypted token that fails to decrypt (wrong/rotated
+  // TOKEN_ENCRYPTION_KEY, corrupted ciphertext) must degrade exactly like
+  // "no token stored" -- decryptToken() already returns null/undefined
+  // unchanged for that case; catching here makes a *failed* decrypt behave
+  // identically, so mock-mode callers (which never touch the token at all)
+  // and the real-API branch's own existing fetchError/analyzed:false
+  // graceful-degradation path both keep working, instead of this
+  // unconditional, always-run decrypt crashing the entire caller with an
+  // uncaught "Unsupported state or unable to authenticate data" before
+  // useMock is even checked. Found live against Neon Development: migrated
+  // ad_accounts rows carry tokens encrypted under the *old* environment's
+  // key, which this Development environment's freshly-generated
+  // TOKEN_ENCRYPTION_KEY can never decrypt by design.
+  try {
+    ad.access_token_encrypted = decryptToken(ad.access_token_encrypted);
+  } catch (err) {
+    console.warn(`[AdIntelligence] Failed to decrypt access token for ad ${ad.meta_ad_id}: ${err.message}`);
+    ad.access_token_encrypted = null;
+  }
 
-  const campaign = db.get(
+  const campaign = await db.get(
     `SELECT id, meta_campaign_id, name, objective, status
      FROM campaigns WHERE id = ?`,
     [ad.campaign_id]
   );
 
-  const adSet = db.get(
+  const adSet = await db.get(
     `SELECT id, meta_adset_id, name, optimization_goal FROM ad_sets WHERE id = ?`,
     [ad.ad_set_id]
   );
@@ -91,7 +109,7 @@ function getMockAdMetrics(objective, index = 0) {
 async function runAdIntelligence(adId, options = {}) {
   const { useMock = false, dateRange } = options;
 
-  const loaded = loadAdWithParent(adId);
+  const loaded = await loadAdWithParent(adId);
   if (!loaded) return null;
 
   const { ad, campaign, adSet } = loaded;
@@ -127,7 +145,7 @@ async function runAdIntelligence(adId, options = {}) {
       try {
         const previewUrl = await fetchAdPreview(ad.meta_ad_id, ad.access_token_encrypted);
         if (previewUrl) {
-          db.run('UPDATE ads SET preview_url = ? WHERE id = ?', [previewUrl, ad.id]);
+          await db.run('UPDATE ads SET preview_url = ? WHERE id = ?', [previewUrl, ad.id]);
           ad.preview_url = previewUrl;
         }
       } catch (previewErr) {
@@ -203,7 +221,7 @@ async function runAdIntelligence(adId, options = {}) {
   // param so MF4.13.12 (Weak CTA) can evaluate it. Absent for ads that
   // haven't had a creative-analytics sync yet -- the rule simply won't fire
   // (evaluateCondition treats a missing metric as not-matched), never a crash.
-  const creativeRow = db.get(
+  const creativeRow = await db.get(
     `SELECT cta_type FROM creative_analytics WHERE meta_ad_id = ? ORDER BY date_until DESC LIMIT 1`,
     [ad.meta_ad_id]
   );
@@ -219,7 +237,7 @@ async function runAdIntelligence(adId, options = {}) {
   // comment) -- this is a per-detail-view read, not a list view.
   const {
     intelligence, diagnosis, ruleEngineResult, governance,
-  } = orchestrateIntelligence({
+  } = await orchestrateIntelligence({
     campaign: entity,
     entityType: 'ad',
     adAccountId,
@@ -290,18 +308,18 @@ async function runAdIntelligence(adId, options = {}) {
 // ─────────────────────────────────────────────
 // Get ads list with latest health scores
 // ─────────────────────────────────────────────
-function getAdsList(filters = {}) {
+async function getAdsList(filters = {}) {
   const { adset_id, campaign_id, account_id, status } = filters;
 
   const conditions = [];
   const params     = [];
 
   if (adset_id) {
-    const as = db.get('SELECT id FROM ad_sets WHERE id = ? OR meta_adset_id = ?', [adset_id, adset_id]);
+    const as = await db.get('SELECT id FROM ad_sets WHERE id = ? OR meta_adset_id = ?', [adset_id, adset_id]);
     if (as) { conditions.push('ad.ad_set_id = ?'); params.push(as.id); }
   }
   if (campaign_id) {
-    const camp = db.get('SELECT id FROM campaigns WHERE id = ? OR meta_campaign_id = ?', [campaign_id, campaign_id]);
+    const camp = await db.get('SELECT id FROM campaigns WHERE id = ? OR meta_campaign_id = ?', [campaign_id, campaign_id]);
     if (camp) { conditions.push('ad.campaign_id = ?'); params.push(camp.id); }
   }
   if (account_id) { conditions.push('ad.ad_account_id = ?'); params.push(account_id); }
@@ -314,7 +332,7 @@ function getAdsList(filters = {}) {
   // instead of one extra db.get() per row in a .map() -- that N+1 pattern
   // meant listing 2,000 ads issued 1 (list) + 2,000 (score lookups) queries
   // to return a single page.
-  const ads = db.all(
+  const ads = await db.all(
     `SELECT
        ad.id, ad.meta_ad_id, ad.name, ad.status, ad.effective_status,
        ad.ad_set_id, ad.campaign_id, ad.ad_account_id,

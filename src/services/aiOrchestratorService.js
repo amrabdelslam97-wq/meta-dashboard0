@@ -34,8 +34,8 @@ function generateId(prefix) {
  * Get complete AI view of tenant's marketing
  * Integrates data from ALL intelligence engines
  */
-function getAICommandCenter(tenantId) {
-  const campaigns = db.all(
+async function getAICommandCenter(tenantId) {
+  const campaigns = await db.all(
     'SELECT * FROM campaigns WHERE ad_account_id IN (SELECT id FROM ad_accounts WHERE tenant_id = ?)',
     [tenantId]
   );
@@ -52,14 +52,14 @@ function getAICommandCenter(tenantId) {
     tenant_id: tenantId,
     timestamp: new Date().toISOString(),
     campaigns: insights,
-    total_observations: db.get(
+    total_observations: (await db.get(
       'SELECT COUNT(*) as count FROM ai_observations WHERE tenant_id = ?',
       [tenantId]
-    )?.count || 0,
-    pending_recommendations: db.get(
+    ))?.count || 0,
+    pending_recommendations: (await db.get(
       'SELECT COUNT(*) as count FROM ai_recommendations WHERE tenant_id = ? AND status = "pending"',
       [tenantId]
-    )?.count || 0,
+    ))?.count || 0,
   };
 }
 
@@ -71,18 +71,18 @@ function getAICommandCenter(tenantId) {
  * Run full observation cycle
  * Continuously detect anomalies using all intelligence engines
  */
-function observeAnomalies(tenantId) {
+async function observeAnomalies(tenantId) {
   const observations = [];
 
   // Use existing creative intelligence to detect creative fatigue
-  const creatives = db.all(
+  const creatives = await db.all(
     'SELECT * FROM ads WHERE id IN (SELECT id FROM campaigns WHERE ad_account_id IN (SELECT id FROM ad_accounts WHERE tenant_id = ?))',
     [tenantId]
   );
 
   for (const creative of creatives) {
     // Detect creative fatigue (using existing engine)
-    const trendData = creativeIntelligence.analyzeCreativeTrend(creative.id);
+    const trendData = await creativeIntelligence.analyzeCreativeTrend(creative.id);
     if (trendData?.status === 'Fatigued') {
       observations.push({
         tenant_id: tenantId,
@@ -119,7 +119,7 @@ function observeAnomalies(tenantId) {
   const now = new Date().toISOString();
   for (const obs of observations) {
     const obsId = generateId('obs');
-    db.run(`
+    await db.run(`
       INSERT INTO ai_observations (
         id, tenant_id, entity_type, entity_id, observation_type, severity,
         metric_name, metric_value, expected_value, variance_percent,
@@ -154,8 +154,8 @@ function observeAnomalies(tenantId) {
 /**
  * Analyze root cause for each observation
  */
-function reasonAboutObservation(tenantId, observationId) {
-  const observation = db.get(
+async function reasonAboutObservation(tenantId, observationId) {
+  const observation = await db.get(
     'SELECT * FROM ai_observations WHERE id = ? AND tenant_id = ?',
     [observationId, tenantId]
   );
@@ -182,7 +182,7 @@ function reasonAboutObservation(tenantId, observationId) {
   // Store reasoning
   const now = new Date().toISOString();
   const reasoningId = generateId('reas');
-  db.run(`
+  await db.run(`
     INSERT INTO ai_reasoning_chains (
       id, tenant_id, observation_id, primary_cause, secondary_causes_json,
       confidence, evidence_json, alternative_hypotheses_json, risk_level,
@@ -227,8 +227,8 @@ function determineRootCause(observation) {
 /**
  * Generate multiple strategic options
  */
-function generateStrategies(tenantId, reasoningChainId) {
-  const reasoning = db.get(
+async function generateStrategies(tenantId, reasoningChainId) {
+  const reasoning = await db.get(
     'SELECT * FROM ai_reasoning_chains WHERE id = ? AND tenant_id = ?',
     [reasoningChainId, tenantId]
   );
@@ -269,7 +269,7 @@ function generateStrategies(tenantId, reasoningChainId) {
   const now = new Date().toISOString();
   for (const strategy of strategies) {
     const strategyId = generateId('strat');
-    db.run(`
+    await db.run(`
       INSERT INTO ai_strategies (
         id, tenant_id, reasoning_chain_id, strategy_name, description,
         expected_outcome, expected_roi_percent, confidence, risk_level,
@@ -301,14 +301,14 @@ function generateStrategies(tenantId, reasoningChainId) {
 /**
  * Generate final recommendation from strategies
  */
-function makeRecommendation(tenantId, reasoningChainId, selectedStrategyRanking = 1) {
-  const observation = db.get(`
+async function makeRecommendation(tenantId, reasoningChainId, selectedStrategyRanking = 1) {
+  const observation = await db.get(`
     SELECT obs.* FROM ai_observations obs
     INNER JOIN ai_reasoning_chains rc ON obs.id = rc.observation_id
     WHERE rc.id = ?
   `, [reasoningChainId]);
 
-  const strategy = db.get(`
+  const strategy = await db.get(`
     SELECT * FROM ai_strategies
     WHERE reasoning_chain_id = ? AND ranking = ?
   `, [reasoningChainId, selectedStrategyRanking]);
@@ -341,7 +341,7 @@ function makeRecommendation(tenantId, reasoningChainId, selectedStrategyRanking 
   // Store recommendation
   const now = new Date().toISOString();
   const recId = generateId('rec');
-  db.run(`
+  await db.run(`
     INSERT INTO ai_recommendations (
       id, tenant_id, observation_id, reasoning_chain_id, entity_type, entity_id,
       action_type, action_details_json, reason, evidence_json, expected_roi_percent,
@@ -386,8 +386,8 @@ function mapStrategyToAction(strategyName) {
 /**
  * Track recommendation outcomes and learn
  */
-function recordRecommendationOutcome(tenantId, recommendationId, outcome) {
-  const recommendation = db.get(
+async function recordRecommendationOutcome(tenantId, recommendationId, outcome) {
+  const recommendation = await db.get(
     'SELECT * FROM ai_recommendations WHERE id = ? AND tenant_id = ?',
     [recommendationId, tenantId]
   );
@@ -397,7 +397,7 @@ function recordRecommendationOutcome(tenantId, recommendationId, outcome) {
   const now = new Date().toISOString();
   const feedbackId = generateId('fb');
 
-  db.run(`
+  await db.run(`
     INSERT INTO ai_learning_feedback (
       id, tenant_id, recommendation_id, feedback_type, roi_achieved,
       lesson_learned, created_at
@@ -413,7 +413,7 @@ function recordRecommendationOutcome(tenantId, recommendationId, outcome) {
   ]);
 
   // Update recommendation status
-  db.run(
+  await db.run(
     'UPDATE ai_recommendations SET status = ? WHERE id = ?',
     [outcome.feedback_type === 'executed' ? 'executed' : 'rejected', recommendationId]
   );
@@ -424,21 +424,21 @@ function recordRecommendationOutcome(tenantId, recommendationId, outcome) {
 /**
  * Get learning metrics
  */
-function getLearningMetrics(tenantId) {
-  const total = db.get(
+async function getLearningMetrics(tenantId) {
+  const total = (await db.get(
     'SELECT COUNT(*) as count FROM ai_recommendations WHERE tenant_id = ?',
     [tenantId]
-  )?.count || 0;
+  ))?.count || 0;
 
-  const executed = db.get(
+  const executed = (await db.get(
     'SELECT COUNT(*) as count FROM ai_recommendations WHERE tenant_id = ? AND status = "executed"',
     [tenantId]
-  )?.count || 0;
+  ))?.count || 0;
 
-  const successful = db.get(`
+  const successful = (await db.get(`
     SELECT COUNT(*) as count FROM ai_learning_feedback
     WHERE tenant_id = ? AND feedback_type = 'successful'
-  `, [tenantId])?.count || 0;
+  `, [tenantId]))?.count || 0;
 
   const acceptance_rate = total > 0 ? (executed / total * 100).toFixed(1) : 0;
   const success_rate = executed > 0 ? (successful / executed * 100).toFixed(1) : 0;
@@ -459,11 +459,11 @@ function getLearningMetrics(tenantId) {
 /**
  * Record important event in long-term memory
  */
-function rememberEvent(tenantId, eventType, entityType, entityId, description, learnings) {
+async function rememberEvent(tenantId, eventType, entityType, entityId, description, learnings) {
   const eventId = generateId('mem');
   const now = new Date().toISOString();
 
-  db.run(`
+  await db.run(`
     INSERT INTO ai_memory_events (
       id, tenant_id, event_type, entity_type, entity_id, description,
       learning_points_json, created_at
@@ -485,11 +485,11 @@ function rememberEvent(tenantId, eventType, entityType, entityId, description, l
 /**
  * Add relationship to knowledge graph
  */
-function recordRelationship(tenantId, entity1Type, entity1Id, entity2Type, entity2Id, relationshipType, strength = 0.5) {
+async function recordRelationship(tenantId, entity1Type, entity1Id, entity2Type, entity2Id, relationshipType, strength = 0.5) {
   const graphId = generateId('kg');
   const now = new Date().toISOString();
 
-  db.run(`
+  await db.run(`
     INSERT INTO ai_knowledge_graph (
       id, tenant_id, entity1_type, entity1_id, entity2_type, entity2_id,
       relationship_type, strength, created_at, updated_at
@@ -517,17 +517,17 @@ function recordRelationship(tenantId, entity1Type, entity1Id, entity2Type, entit
 /**
  * Generate daily AI briefing
  */
-function generateDailyBriefing(tenantId) {
+async function generateDailyBriefing(tenantId) {
   const briefingId = generateId('brief');
   const now = new Date().toISOString();
   const today = now.split('T')[0];
 
-  const observations = db.all(
+  const observations = await db.all(
     'SELECT * FROM ai_observations WHERE tenant_id = ? AND date(created_at) = ? ORDER BY severity DESC LIMIT 5',
     [tenantId, today]
   );
 
-  const pending_recs = db.all(
+  const pending_recs = await db.all(
     'SELECT * FROM ai_recommendations WHERE tenant_id = ? AND status = "pending" LIMIT 5',
     [tenantId]
   );
@@ -539,7 +539,7 @@ function generateDailyBriefing(tenantId) {
     recommended_actions: pending_recs.slice(0, 3),
   };
 
-  db.run(`
+  await db.run(`
     INSERT INTO ai_briefings (
       id, tenant_id, briefing_type, briefing_date, summary_json,
       risks_json, opportunities_json, recommended_actions_json, generated_at

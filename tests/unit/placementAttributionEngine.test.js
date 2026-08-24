@@ -38,11 +38,11 @@ describe('placementAttributionEngine', () => {
   }
 
   describe('getPlacementAttribution (Step 3)', () => {
-    test('enriches placement rows with ROAS (decoded from actions_json), quality_score, and contribution_pct/budget_pct that sum to 100', () => {
+    test('enriches placement rows with ROAS (decoded from actions_json), quality_score, and contribution_pct/budget_pct that sum to 100', async () => {
       insertRow('placement', 'facebook / feed', 100, 20, 3.5); // efficient: 0.2 results/$
       insertRow('placement', 'audience_network / classic', 100, 2, 0.5); // inefficient: 0.02 results/$
 
-      const result = engine.getPlacementAttribution('camp_place_1', range);
+      const result = await engine.getPlacementAttribution('camp_place_1', range);
       expect(result.current.length).toBe(2);
 
       const feed = result.current.find(r => r.breakdown_value === 'facebook / feed');
@@ -62,43 +62,43 @@ describe('placementAttributionEngine', () => {
   });
 
   describe('getGeographicAttribution (Step 8)', () => {
-    test('defaults to country level and documents unavailable deeper levels honestly', () => {
+    test('defaults to country level and documents unavailable deeper levels honestly', async () => {
       insertRow('country', 'US', 100, 10);
-      const result = engine.getGeographicAttribution('camp_place_1', 'country', range);
+      const result = await engine.getGeographicAttribution('camp_place_1', 'country', range);
       expect(result.level).toBe('country');
       expect(result.current[0].breakdown_value).toBe('US');
       expect(result.not_available_levels).toEqual(['city', 'district', 'neighborhood', 'zip']);
       expect(result.not_available_reason).toMatch(/city\/district\/neighborhood\/zip/);
     });
 
-    test('supports region and comscore_market, falling back to country for an unrecognized level', () => {
+    test('supports region and comscore_market, falling back to country for an unrecognized level', async () => {
       insertRow('region', 'Cairo Governorate', 50, 5);
-      const region = engine.getGeographicAttribution('camp_place_1', 'region', range);
+      const region = await engine.getGeographicAttribution('camp_place_1', 'region', range);
       expect(region.level).toBe('region');
       expect(region.current[0].breakdown_value).toBe('Cairo Governorate');
 
-      const fallback = engine.getGeographicAttribution('camp_place_1', 'not_a_real_level', range);
+      const fallback = await engine.getGeographicAttribution('camp_place_1', 'not_a_real_level', range);
       expect(fallback.level).toBe('country');
     });
   });
 
   describe('getDeviceAttribution (Step 10)', () => {
-    test('reads impression_device by default and device_platform when requested', () => {
+    test('reads impression_device by default and device_platform when requested', async () => {
       insertRow('impression_device', 'android_smartphone', 100, 10);
       insertRow('device_platform', 'mobile', 100, 10);
 
-      const device = engine.getDeviceAttribution('camp_place_1', undefined, range);
+      const device = await engine.getDeviceAttribution('camp_place_1', undefined, range);
       expect(device.current[0].breakdown_value).toBe('android_smartphone');
 
-      const platform = engine.getDeviceAttribution('camp_place_1', 'device_platform', range);
+      const platform = await engine.getDeviceAttribution('camp_place_1', 'device_platform', range);
       expect(platform.current[0].breakdown_value).toBe('mobile');
     });
   });
 
-  test('recommends "Reduce budget" for a high-spend-share, low-quality dimension value', () => {
+  test('recommends "Reduce budget" for a high-spend-share, low-quality dimension value', async () => {
     insertRow('placement', 'expensive_low_quality', 500, 2); // huge spend share, terrible efficiency
     insertRow('placement', 'small_share', 10, 5);
-    const result = engine.getPlacementAttribution('camp_place_1', range);
+    const result = await engine.getPlacementAttribution('camp_place_1', range);
     const bad = result.current.find(r => r.breakdown_value === 'expensive_low_quality');
     expect(bad.recommendation).toMatch(/Reduce budget/);
   });

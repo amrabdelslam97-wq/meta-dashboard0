@@ -37,7 +37,7 @@ router.get('/', asyncHandler(async (req, res) => {
   // since it answers "how many accounts exist", which is meaningful
   // regardless of which single account the rest of the dashboard is
   // currently filtered to) ──
-  const accountCounts = db.get(`
+  const accountCounts = await db.get(`
     SELECT
       COUNT(*) as total,
       SUM(CASE WHEN status = 'active' THEN 1 ELSE 0 END) as active
@@ -45,7 +45,7 @@ router.get('/', asyncHandler(async (req, res) => {
   `);
 
   // ── Campaign counts ──
-  const campaignCounts = db.get(
+  const campaignCounts = await db.get(
     `SELECT
       COUNT(*) as total,
       SUM(CASE WHEN status = 'active' THEN 1 ELSE 0 END) as active
@@ -55,7 +55,7 @@ router.get('/', asyncHandler(async (req, res) => {
   );
 
   // ── Average health score from history (latest per campaign) ──
-  const avgHealth = db.get(
+  const avgHealth = await db.get(
     `SELECT AVG(h.health_score) as avg_score
      FROM health_score_history h
      INNER JOIN (
@@ -69,7 +69,7 @@ router.get('/', asyncHandler(async (req, res) => {
   );
 
   // ── Alert counts ──
-  const alertCounts = db.get(
+  const alertCounts = await db.get(
     `SELECT
       SUM(CASE WHEN severity = 'critical' THEN 1 ELSE 0 END) as critical,
       SUM(CASE WHEN severity = 'warning'  THEN 1 ELSE 0 END) as warning,
@@ -83,7 +83,7 @@ router.get('/', asyncHandler(async (req, res) => {
   );
 
   // ── Recommendation counts ──
-  const recCounts = db.get(
+  const recCounts = await db.get(
     `SELECT
       COUNT(*) as total,
       SUM(CASE WHEN severity = 'critical' THEN 1 ELSE 0 END) as critical,
@@ -98,7 +98,7 @@ router.get('/', asyncHandler(async (req, res) => {
   // ── Top 10 campaigns by latest health score (scoped to account_id and
   // to the requested date range, matching what the response's date_range/
   // account_filter fields already claim to represent) ──
-  const topCampaigns = db.all(
+  const topCampaigns = await db.all(
     `SELECT
       c.id,
       c.meta_campaign_id,
@@ -140,8 +140,8 @@ router.get('/', asyncHandler(async (req, res) => {
   );
 
   // ── Campaigns needing attention (critical/warning), scoped the same way ──
-  const needsAttention = db.all(
-    `SELECT DISTINCT
+  const needsAttention = await db.all(
+    `SELECT
       c.id,
       c.meta_campaign_id,
       c.name,
@@ -163,7 +163,7 @@ router.get('/', asyncHandler(async (req, res) => {
       AND al.severity = 'critical'
     WHERE (h.health_status IN ('warning','critical') OR al.id IS NOT NULL)
       ${account_id ? 'AND c.ad_account_id = ?' : ''}
-    GROUP BY c.id
+    GROUP BY c.id, h.health_score, h.health_status
     ORDER BY COALESCE(h.health_score, 100) ASC
     LIMIT 5`,
     [...dateParams, ...(account_id ? [account_id] : [])]
@@ -175,8 +175,8 @@ router.get('/', asyncHandler(async (req, res) => {
   // no new Meta calls), so the dashboard can show "Updated N ago" instead
   // of presenting synced data as if it were live.
   const freshness = account_id
-    ? buildFreshness(db.get('SELECT last_successful_sync_at, last_sync_completed_at FROM ad_accounts WHERE id = ?', [account_id]))
-    : buildPortfolioFreshness(db.all("SELECT last_successful_sync_at, last_sync_completed_at FROM ad_accounts WHERE status = 'active'"));
+    ? buildFreshness(await db.get('SELECT last_successful_sync_at, last_sync_completed_at FROM ad_accounts WHERE id = ?', [account_id]))
+    : buildPortfolioFreshness(await db.all("SELECT last_successful_sync_at, last_sync_completed_at FROM ad_accounts WHERE status = 'active'"));
 
   return res.json({
     summary: {

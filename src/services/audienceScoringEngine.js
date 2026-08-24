@@ -42,8 +42,8 @@ function pctChange(current, prior) {
  * - Saturation (10%) — frequency and CPM trend
  * - Stability (5%) — metric consistency over time
  */
-function scoreAudienceSegment(metaCampaignId, dimension = 'age_gender', segmentValue, dateRange = defaultRange()) {
-  const current = db.get(
+async function scoreAudienceSegment(metaCampaignId, dimension = 'age_gender', segmentValue, dateRange = defaultRange()) {
+  const current = await db.get(
     `SELECT * FROM analytics_breakdown_history
      WHERE entity_meta_id = ? AND breakdown_type = ? AND breakdown_value = ?
      AND date_since = ? AND date_until = ?`,
@@ -64,7 +64,7 @@ function scoreAudienceSegment(metaCampaignId, dimension = 'age_gender', segmentV
 
   // 1. VOLUME SCORE (20% weight)
   // Get total campaign spend to calculate contribution
-  const totalSpend = db.get(
+  const totalSpend = await db.get(
     `SELECT SUM(spend) as total FROM analytics_breakdown_history
      WHERE entity_meta_id = ? AND breakdown_type = ? AND date_since = ? AND date_until = ?`,
     [metaCampaignId, dimension, dateRange.since, dateRange.until]
@@ -122,7 +122,7 @@ function scoreAudienceSegment(metaCampaignId, dimension = 'age_gender', segmentV
 
   // 6. STABILITY SCORE (5% weight)
   // Check if this segment has prior period data for variance analysis
-  const prior = db.get(
+  const prior = await db.get(
     `SELECT * FROM analytics_breakdown_history
      WHERE entity_meta_id = ? AND breakdown_type = ? AND breakdown_value = ?
      AND date_since < ? AND date_until <= ?
@@ -199,8 +199,8 @@ function scoreAudienceSegment(metaCampaignId, dimension = 'age_gender', segmentV
  * Score all segments in a dimension for a campaign.
  * Returns ranked list with scores.
  */
-function scoreAudienceDimension(metaCampaignId, dimension = 'age_gender', dateRange = defaultRange()) {
-  const segments = db.all(
+async function scoreAudienceDimension(metaCampaignId, dimension = 'age_gender', dateRange = defaultRange()) {
+  const segments = await db.all(
     `SELECT DISTINCT breakdown_value FROM analytics_breakdown_history
      WHERE entity_meta_id = ? AND breakdown_type = ? AND date_since = ? AND date_until = ?`,
     [metaCampaignId, dimension, dateRange.since, dateRange.until]
@@ -215,7 +215,9 @@ function scoreAudienceDimension(metaCampaignId, dimension = 'age_gender', dateRa
     };
   }
 
-  const scored = segments.map(s => scoreAudienceSegment(metaCampaignId, dimension, s.breakdown_value, dateRange));
+  // Promise.all is safe here: each segment's scoreAudienceSegment() read is
+  // independent (own breakdown_value, no shared mutable state).
+  const scored = await Promise.all(segments.map(s => scoreAudienceSegment(metaCampaignId, dimension, s.breakdown_value, dateRange)));
 
   // Sort by score descending
   scored.sort((a, b) => (b.score || 0) - (a.score || 0));
@@ -239,12 +241,12 @@ function scoreAudienceDimension(metaCampaignId, dimension = 'age_gender', dateRa
 /**
  * Get ranking across all major dimensions.
  */
-function getRankingAcrossAllDimensions(metaCampaignId, dateRange = defaultRange()) {
+async function getRankingAcrossAllDimensions(metaCampaignId, dateRange = defaultRange()) {
   const dimensions = ['age_gender', 'gender', 'age', 'country', 'region', 'placement', 'impression_device', 'device_platform'];
 
   const results = {};
   for (const dim of dimensions) {
-    const scored = scoreAudienceDimension(metaCampaignId, dim, dateRange);
+    const scored = await scoreAudienceDimension(metaCampaignId, dim, dateRange);
     results[dim] = {
       top_3: scored.segments.slice(0, 3),
       bottom_3: scored.segments.slice(-3).reverse(),

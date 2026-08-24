@@ -18,17 +18,17 @@ const { runPhase11Migrations } = require('../../src/db/schema.phase11');
 const { runPhase12Migrations } = require('../../src/db/schema.phase12');
 const { runPhase13Migrations } = require('../../src/db/schema.phase13');
 
-function runFullMigrationSet() {
-  runMigrations();
-  runPhase2Migrations();
-  runPhase5Migrations();
-  runPhase6Migrations();
-  runPhase7BMigrations();
-  runPhase8Migrations();
-  runUniqueConstraintsMigration();
-  runPhase11Migrations();
-  runPhase12Migrations();
-  runPhase13Migrations();
+async function runFullMigrationSet() {
+  await runMigrations();
+  await runPhase2Migrations();
+  await runPhase5Migrations();
+  await runPhase6Migrations();
+  await runPhase7BMigrations();
+  await runPhase8Migrations();
+  await runUniqueConstraintsMigration();
+  await runPhase11Migrations();
+  await runPhase12Migrations();
+  await runPhase13Migrations();
 }
 
 describe('database migrations', () => {
@@ -43,8 +43,8 @@ describe('database migrations', () => {
     if (fs.existsSync(dbPath)) fs.unlinkSync(dbPath);
   });
 
-  test('running the full migration set creates every expected core and intelligence table', () => {
-    runFullMigrationSet();
+  test('running the full migration set creates every expected core and intelligence table', async () => {
+    await runFullMigrationSet();
     const tables = database.all(
       "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name"
     ).map(r => r.name);
@@ -60,11 +60,11 @@ describe('database migrations', () => {
     }
   });
 
-  test('running the full migration set twice is idempotent (no errors, no duplicate rows)', () => {
-    expect(() => {
-      runFullMigrationSet();
-      runFullMigrationSet();
-    }).not.toThrow();
+  test('running the full migration set twice is idempotent (no errors, no duplicate rows)', async () => {
+    await expect((async () => {
+      await runFullMigrationSet();
+      await runFullMigrationSet();
+    })()).resolves.not.toThrow();
 
     const migrationRows = database.all('SELECT name, COUNT(*) as c FROM schema_migrations GROUP BY name');
     for (const row of migrationRows) {
@@ -72,8 +72,8 @@ describe('database migrations', () => {
     }
   });
 
-  test('schema_migrations records every migration by name after a full run', () => {
-    runFullMigrationSet();
+  test('schema_migrations records every migration by name after a full run', async () => {
+    await runFullMigrationSet();
     const names = database.all('SELECT name FROM schema_migrations').map(r => r.name);
     expect(names).toEqual(expect.arrayContaining([
       'phase1_core_tables',
@@ -87,8 +87,8 @@ describe('database migrations', () => {
     ]));
   });
 
-  test('diagnosis_history and decision_outcomes have the expected Phase 13 columns', () => {
-    runFullMigrationSet();
+  test('diagnosis_history and decision_outcomes have the expected Phase 13 columns', async () => {
+    await runFullMigrationSet();
     const diagCols = database.all("PRAGMA table_info(diagnosis_history)").map(c => c.name);
     const outcomeCols = database.all("PRAGMA table_info(decision_outcomes)").map(c => c.name);
     expect(diagCols).toEqual(expect.arrayContaining([
@@ -102,24 +102,24 @@ describe('database migrations', () => {
     ]));
   });
 
-  test('recommendation_log and active_alerts have the Phase 12 governance_state column', () => {
-    runFullMigrationSet();
+  test('recommendation_log and active_alerts have the Phase 12 governance_state column', async () => {
+    await runFullMigrationSet();
     const recCols = database.all("PRAGMA table_info(recommendation_log)").map(c => c.name);
     const alertCols = database.all("PRAGMA table_info(active_alerts)").map(c => c.name);
     expect(recCols).toContain('governance_state');
     expect(alertCols).toContain('governance_state');
   });
 
-  test('ads table has the Phase 7B creative preview columns', () => {
-    runFullMigrationSet();
+  test('ads table has the Phase 7B creative preview columns', async () => {
+    await runFullMigrationSet();
     const columns = database.all("PRAGMA table_info(ads)").map(c => c.name);
     expect(columns).toEqual(expect.arrayContaining([
       'creative_id', 'thumbnail_url', 'image_url', 'preview_url',
     ]));
   });
 
-  test('account_targets rejects a duplicate (ad_account_id, objective, effective_from) row', () => {
-    runFullMigrationSet();
+  test('account_targets rejects a duplicate (ad_account_id, objective, effective_from) row', async () => {
+    await runFullMigrationSet();
     const accountId = uuidv4();
     database.run(
       `INSERT INTO ad_accounts (id, meta_account_id, account_name, access_token_encrypted, created_at, updated_at)
@@ -137,8 +137,8 @@ describe('database migrations', () => {
     expect(insert).toThrow();
   });
 
-  test('benchmark_metrics rejects a duplicate global benchmark even with NULL ad_account_id/industry_id (COALESCE fix)', () => {
-    runFullMigrationSet();
+  test('benchmark_metrics rejects a duplicate global benchmark even with NULL ad_account_id/industry_id (COALESCE fix)', async () => {
+    await runFullMigrationSet();
 
     const insertGlobalBenchmark = () => database.run(
       `INSERT INTO benchmark_metrics
@@ -155,8 +155,8 @@ describe('database migrations', () => {
 
   // ── Phase 8: campaigns.objective enum widen + ad_sets.optimization_goal ──
 
-  test('campaigns accepts every new objective value and rejects the old "messaging" value', () => {
-    runFullMigrationSet();
+  test('campaigns accepts every new objective value and rejects the old "messaging" value', async () => {
+    await runFullMigrationSet();
     const accountId = uuidv4();
     database.run(
       `INSERT INTO ad_accounts (id, meta_account_id, account_name, access_token_encrypted, created_at, updated_at)
@@ -176,21 +176,21 @@ describe('database migrations', () => {
     expect(() => insertCampaign('messaging')).toThrow();
   });
 
-  test('ad_sets has the optimization_goal column after migration, nullable with no CHECK', () => {
-    runFullMigrationSet();
+  test('ad_sets has the optimization_goal column after migration, nullable with no CHECK', async () => {
+    await runFullMigrationSet();
     const columns = database.all('PRAGMA table_info(ad_sets)');
     const optGoalCol = columns.find(c => c.name === 'optimization_goal');
     expect(optGoalCol).toBeDefined();
     expect(optGoalCol.notnull).toBe(0);
   });
 
-  test('phase8 remaps pre-existing objective="messaging" campaign rows to "engagement"', () => {
+  test('phase8 remaps pre-existing objective="messaging" campaign rows to "engagement"', async () => {
     // Run migrations UP TO (not including) phase8.
-    runMigrations();
-    runPhase2Migrations();
-    runPhase5Migrations();
-    runPhase6Migrations();
-    runPhase7BMigrations();
+    await runMigrations();
+    await runPhase2Migrations();
+    await runPhase5Migrations();
+    await runPhase6Migrations();
+    await runPhase7BMigrations();
 
     // schema.js's own CHECK constraint was corrected to match the post-phase8
     // 7-value shape, so it no longer permits inserting a legacy 'messaging'
@@ -233,15 +233,15 @@ describe('database migrations', () => {
       [campaignId, accountId]
     );
 
-    runPhase8Migrations();
-    runUniqueConstraintsMigration();
+    await runPhase8Migrations();
+    await runUniqueConstraintsMigration();
 
     const row = database.get('SELECT objective FROM campaigns WHERE id = ?', [campaignId]);
     expect(row.objective).toBe('engagement');
   });
 
-  test('benchmark_metrics still allows distinct account-specific rows for the same objective/metric', () => {
-    runFullMigrationSet();
+  test('benchmark_metrics still allows distinct account-specific rows for the same objective/metric', async () => {
+    await runFullMigrationSet();
     const accountA = uuidv4();
     const accountB = uuidv4();
     database.run(

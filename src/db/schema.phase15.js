@@ -31,25 +31,25 @@ const MIGRATION_NAME = 'phase15_meta_lifecycle_status';
 
 const TABLES_WITH_NEW_COLUMN = ['campaigns', 'ad_sets', 'ads'];
 
-function runPhase15Migrations() {
-  ensureMigrationsTable();
+async function runPhase15Migrations() {
+  await ensureMigrationsTable();
 
   let added = 0;
   for (const table of TABLES_WITH_NEW_COLUMN) {
-    const existingCols = db.all(`PRAGMA table_info(${table})`).map(c => c.name);
+    const existingCols = (await db.all(`PRAGMA table_info(${table})`)).map(c => c.name);
     if (existingCols.includes('effective_status')) continue; // idempotent guard
     try {
-      db.run(`ALTER TABLE ${table} ADD COLUMN effective_status TEXT`);
+      await db.run(`ALTER TABLE ${table} ADD COLUMN effective_status TEXT`);
       added++;
     } catch (err) {
       console.warn(`[DB] Phase 15: could not add effective_status to ${table}:`, err.message);
     }
   }
 
-  markMigrationApplied(MIGRATION_NAME);
+  await markMigrationApplied(MIGRATION_NAME);
 
   if (added > 0) {
-    db.persist();
+    await db.persist();
     console.log(`[DB] Phase 15 migration complete — added effective_status to ${added} table(s).`);
   } else {
     console.log('[DB] Phase 15 schema: effective_status columns already present, skipping.');

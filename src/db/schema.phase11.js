@@ -54,12 +54,12 @@ CREATE INDEX IF NOT EXISTS idx_rule_engine_log_account
 
 `;
 
-function runPhase11Migrations() {
-  ensureMigrationsTable();
+async function runPhase11Migrations() {
+  await ensureMigrationsTable();
   console.log('[DB] Running Phase 11 schema migrations...');
   const stmts = PHASE11_SCHEMA.split(';').map(s => s.trim()).filter(s => s.length > 0);
-  for (const stmt of stmts) db.run(stmt + ';');
-  markMigrationApplied(MIGRATION_NAME);
+  for (const stmt of stmts) await db.run(stmt + ';');
+  await markMigrationApplied(MIGRATION_NAME);
   console.log('[DB] Phase 11 schema complete.');
 }
 

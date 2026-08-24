@@ -13,7 +13,7 @@ const { asyncHandler } = require('../../middleware/errorHandler');
 const { getBusinessLogicInventory } = require('../../services/ruleInventory');
 
 router.get('/inventory', asyncHandler(async (req, res) => {
-  const inventory = getBusinessLogicInventory();
+  const inventory = await getBusinessLogicInventory();
   return res.json({ data: inventory });
 }));
 

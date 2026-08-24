@@ -37,7 +37,7 @@ function evaluateCondition(condition, metrics) {
 // Load all active rules applicable to an objective
 // (objective IS NULL means the rule applies to every objective)
 // ─────────────────────────────────────────────
-function loadApplicableRules(objective) {
+async function loadApplicableRules(objective) {
   return db.all(
     `SELECT * FROM recommendation_rules
      WHERE is_active = 1

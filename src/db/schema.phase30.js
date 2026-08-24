@@ -387,22 +387,22 @@ CREATE INDEX IF NOT EXISTS idx_ai_approval_queue_status
 
 `;
 
-function runPhase30Migrations() {
+async function runPhase30Migrations() {
   try {
     // Ensure migration registry exists
-    ensureMigrationsTable();
+    await ensureMigrationsTable();
 
     // Skip if env var set
     if (process.env.SKIP_MIGRATIONS) return;
 
     // Check if migration already applied (idempotent)
-    if (isMigrationApplied(MIGRATION_NAME)) return;
+    if (await isMigrationApplied(MIGRATION_NAME)) return;
 
     // Run migration
-    db.run(SCHEMA_SQL);
+    await db.run(SCHEMA_SQL);
 
     // Mark as applied
-    markMigrationApplied(MIGRATION_NAME);
+    await markMigrationApplied(MIGRATION_NAME);
     console.log('✓ Phase 30 (Autonomous AI Marketing OS) migrations applied');
   } catch (e) {
     console.error(`Phase 30 migration error: ${e.message}`);

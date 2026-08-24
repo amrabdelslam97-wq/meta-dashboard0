@@ -105,4 +105,33 @@ describe('adSetIntelligence.runAdSetIntelligence — characterization', () => {
     const result = await runAdSetIntelligence('does-not-exist', { useMock: true });
     expect(result).toBeNull();
   });
+
+  // Neon Development migration (Vercel): same class of bug as
+  // adIntelligence.characterization.test.js's equivalent test -- see that
+  // file's comment for the full explanation.
+  test('an undecryptable stored token degrades like "no token", it does not crash mock-mode callers', async () => {
+    const brokenAccountId = uuidv4();
+    testDb.db.run(
+      `INSERT INTO ad_accounts (id, meta_account_id, account_name, access_token_encrypted, created_at, updated_at)
+       VALUES (?, 'act_adset_char_broken', 'Ad Set Characterization Broken Token', 'enc:v1:000000000000000000000000:000000000000000000000000:deadbeef', datetime('now'), datetime('now'))`,
+      [brokenAccountId]
+    );
+    const brokenCampaignId = uuidv4();
+    testDb.db.run(
+      `INSERT INTO campaigns (id, ad_account_id, meta_campaign_id, name, objective, status, created_at, updated_at)
+       VALUES (?, ?, 'camp_adset_char_broken', 'Broken Token Campaign', 'leads', 'active', datetime('now'), datetime('now'))`,
+      [brokenCampaignId, brokenAccountId]
+    );
+    const brokenAdSetId = uuidv4();
+    testDb.db.run(
+      `INSERT INTO ad_sets (id, campaign_id, ad_account_id, meta_adset_id, name, status, created_at, updated_at)
+       VALUES (?, ?, ?, 'adset_char_broken_token', 'Broken Token Ad Set', 'active', datetime('now'), datetime('now'))`,
+      [brokenAdSetId, brokenCampaignId, brokenAccountId]
+    );
+
+    const result = await runAdSetIntelligence(brokenAdSetId, { useMock: true });
+    expect(result).not.toBeNull();
+    expect(result.meta_adset_id).toBe('adset_char_broken_token');
+    expect(result.data_freshness.source).toBe('mock');
+  });
 });

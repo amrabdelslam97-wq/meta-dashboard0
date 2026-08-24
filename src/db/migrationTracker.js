@@ -22,10 +22,10 @@ const db = require('./database');
  * Creates the table if it doesn't exist (idempotent).
  * Always succeeds - never throws, logs errors only.
  */
-function ensureMigrationsTable() {
+async function ensureMigrationsTable() {
   try {
     // Create the migration registry table if it doesn't exist
-    db.run(`
+    await db.run(`
       CREATE TABLE IF NOT EXISTS schema_migrations (
         name       TEXT PRIMARY KEY,
         applied_at TEXT NOT NULL DEFAULT (datetime('now'))
@@ -45,13 +45,13 @@ function ensureMigrationsTable() {
  * Uses the migration registry table.
  * Safe to call even if table is missing (returns false).
  */
-function isMigrationApplied(name) {
+async function isMigrationApplied(name) {
   try {
     // First ensure table exists
-    ensureMigrationsTable();
+    await ensureMigrationsTable();
 
     // Then check if migration is applied
-    const row = db.get(
+    const row = await db.get(
       'SELECT name FROM schema_migrations WHERE name = ?',
       [name]
     );
@@ -69,13 +69,13 @@ function isMigrationApplied(name) {
  * Records the migration name and timestamp in the registry.
  * Safe to call multiple times (INSERT OR IGNORE).
  */
-function markMigrationApplied(name) {
+async function markMigrationApplied(name) {
   try {
     // First ensure table exists
-    ensureMigrationsTable();
+    await ensureMigrationsTable();
 
     // Then record the migration
-    db.run(
+    await db.run(
       'INSERT OR IGNORE INTO schema_migrations (name, applied_at) VALUES (?, ?)',
       [name, new Date().toISOString()]
     );
@@ -91,11 +91,11 @@ function markMigrationApplied(name) {
  * Get list of all applied migrations.
  * Useful for debugging and verification.
  */
-function getAppliedMigrations() {
+async function getAppliedMigrations() {
   try {
-    ensureMigrationsTable();
+    await ensureMigrationsTable();
 
-    return db.all(
+    return await db.all(
       'SELECT name, applied_at FROM schema_migrations ORDER BY applied_at ASC'
     );
   } catch (e) {
@@ -108,9 +108,9 @@ function getAppliedMigrations() {
  * Clear all migration records.
  * ONLY for testing - never use in production.
  */
-function clearMigrationRegistry() {
+async function clearMigrationRegistry() {
   try {
-    db.run('DELETE FROM schema_migrations');
+    await db.run('DELETE FROM schema_migrations');
     return true;
   } catch (e) {
     console.warn(`[Migration] Warning clearing registry: ${e.message}`);

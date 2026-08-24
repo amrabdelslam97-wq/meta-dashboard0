@@ -28,11 +28,11 @@ function pctChange(current, prior) {
 /**
  * Analyze creative fatigue by comparing recent performance to historical.
  */
-function detectCreativeFatigue(metaAdId, lookbackDays = 30) {
+async function detectCreativeFatigue(metaAdId, lookbackDays = 30) {
   // Get creative analytics history (if available as time series)
   // For now, we use the snapshot approach from creative_analytics
 
-  const latest = db.get(
+  const latest = await db.get(
     `SELECT * FROM creative_analytics WHERE meta_ad_id = ? ORDER BY date_until DESC LIMIT 1`,
     [metaAdId]
   );
@@ -46,7 +46,7 @@ function detectCreativeFatigue(metaAdId, lookbackDays = 30) {
   }
 
   // Get prior period data if available (assuming multiple date ranges in table)
-  const prior = db.get(
+  const prior = await db.get(
     `SELECT * FROM creative_analytics WHERE meta_ad_id = ?
      AND date_until < ? ORDER BY date_until DESC LIMIT 1`,
     [metaAdId, latest.date_since]
@@ -168,14 +168,17 @@ function getRefreshRecommendation(status) {
 /**
  * Batch detect fatigue for all creatives in campaign.
  */
-function detectCampaignFatigue(metaCampaignId) {
-  const ads = db.all(
+async function detectCampaignFatigue(metaCampaignId) {
+  const ads = await db.all(
     `SELECT a.meta_ad_id FROM ads a
      WHERE a.campaign_id = (SELECT id FROM campaigns WHERE meta_campaign_id = ?)`,
     [metaCampaignId]
   );
 
-  const results = ads.map(ad => detectCreativeFatigue(ad.meta_ad_id));
+  // Promise.all is safe here: each ad's detectCreativeFatigue() read is
+  // independent (own meta_ad_id, no shared mutable state), and Promise.all
+  // preserves the same output order as the .map() it replaces.
+  const results = await Promise.all(ads.map(ad => detectCreativeFatigue(ad.meta_ad_id)));
   const byStatus = {
     'Fresh': 0,
     'Stable': 0,

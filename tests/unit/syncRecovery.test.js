@@ -39,13 +39,13 @@ describe('syncService.recoverInterruptedSyncs', () => {
     testDb.db.run('DELETE FROM ad_accounts');
   });
 
-  test('marks a sync stuck "running" past the timeout as failed, with completed_at set and a recovery note', () => {
+  test('marks a sync stuck "running" past the timeout as failed, with completed_at set and a recovery note', async () => {
     const id = insertAccount(testDb, {
       last_sync_status: 'running',
       last_sync_started_at: new Date(Date.now() - 45 * 60000).toISOString(), // 45 min ago
     });
 
-    const result = recoverInterruptedSyncs(30); // 30 min timeout
+    const result = await recoverInterruptedSyncs(30); // 30 min timeout
 
     expect(result.recovered).toBe(1);
     expect(result.accounts).toContain(id);
@@ -58,13 +58,13 @@ describe('syncService.recoverInterruptedSyncs', () => {
     expect(row.last_sync_error).toBe('Recovered after interrupted server shutdown.');
   });
 
-  test('does not touch a sync that is "running" but still within the timeout window (genuinely in progress)', () => {
+  test('does not touch a sync that is "running" but still within the timeout window (genuinely in progress)', async () => {
     const id = insertAccount(testDb, {
       last_sync_status: 'running',
       last_sync_started_at: new Date(Date.now() - 5 * 60000).toISOString(), // 5 min ago
     });
 
-    const result = recoverInterruptedSyncs(30);
+    const result = await recoverInterruptedSyncs(30);
 
     expect(result.recovered).toBe(0);
     const row = testDb.db.get('SELECT * FROM ad_accounts WHERE id = ?', [id]);
@@ -72,46 +72,46 @@ describe('syncService.recoverInterruptedSyncs', () => {
     expect(row.last_sync_completed_at).toBeNull();
   });
 
-  test('does not touch accounts that are not "running" (idle/success/failed)', () => {
+  test('does not touch accounts that are not "running" (idle/success/failed)', async () => {
     insertAccount(testDb, { last_sync_status: 'idle', last_sync_started_at: null });
     insertAccount(testDb, {
       last_sync_status: 'success',
       last_sync_started_at: new Date(Date.now() - 60 * 60000).toISOString(),
     });
 
-    const result = recoverInterruptedSyncs(30);
+    const result = await recoverInterruptedSyncs(30);
     expect(result.recovered).toBe(0);
   });
 
-  test('a "running" row with no last_sync_started_at at all is left alone (cannot determine staleness)', () => {
+  test('a "running" row with no last_sync_started_at at all is left alone (cannot determine staleness)', async () => {
     const id = insertAccount(testDb, { last_sync_status: 'running', last_sync_started_at: null });
 
-    const result = recoverInterruptedSyncs(30);
+    const result = await recoverInterruptedSyncs(30);
 
     expect(result.recovered).toBe(0);
     const row = testDb.db.get('SELECT * FROM ad_accounts WHERE id = ?', [id]);
     expect(row.last_sync_status).toBe('running');
   });
 
-  test('appends to (does not clobber) a pre-existing last_sync_error', () => {
+  test('appends to (does not clobber) a pre-existing last_sync_error', async () => {
     const id = insertAccount(testDb, {
       last_sync_status: 'running',
       last_sync_started_at: new Date(Date.now() - 45 * 60000).toISOString(),
       last_sync_error: 'Some earlier error message',
     });
 
-    recoverInterruptedSyncs(30);
+    await recoverInterruptedSyncs(30);
 
     const row = testDb.db.get('SELECT last_sync_error FROM ad_accounts WHERE id = ?', [id]);
     expect(row.last_sync_error).toBe('Some earlier error message | Recovered after interrupted server shutdown.');
   });
 
-  test('recovers multiple stuck accounts in one pass and leaves a fresh one alone', () => {
+  test('recovers multiple stuck accounts in one pass and leaves a fresh one alone', async () => {
     const stuck1 = insertAccount(testDb, { last_sync_status: 'running', last_sync_started_at: new Date(Date.now() - 40 * 60000).toISOString() });
     const stuck2 = insertAccount(testDb, { last_sync_status: 'running', last_sync_started_at: new Date(Date.now() - 120 * 60000).toISOString() });
     const fresh  = insertAccount(testDb, { last_sync_status: 'running', last_sync_started_at: new Date(Date.now() - 2 * 60000).toISOString() });
 
-    const result = recoverInterruptedSyncs(30);
+    const result = await recoverInterruptedSyncs(30);
 
     expect(result.recovered).toBe(2);
     expect(result.accounts.sort()).toEqual([stuck1, stuck2].sort());
@@ -119,19 +119,19 @@ describe('syncService.recoverInterruptedSyncs', () => {
     expect(freshRow.last_sync_status).toBe('running');
   });
 
-  test('respects the SYNC_RECOVERY_TIMEOUT_MINUTES default (30) when no argument is passed', () => {
+  test('respects the SYNC_RECOVERY_TIMEOUT_MINUTES default (30) when no argument is passed', async () => {
     const id = insertAccount(testDb, {
       last_sync_status: 'running',
       last_sync_started_at: new Date(Date.now() - 31 * 60000).toISOString(),
     });
 
-    const result = recoverInterruptedSyncs(); // no arg -> default 30
+    const result = await recoverInterruptedSyncs(); // no arg -> default 30
 
     expect(result.recovered).toBe(1);
     expect(result.accounts).toContain(id);
   });
 
-  test('a recovered account becomes eligible for the Smart Scheduler\'s normal due-check again (no permanent lock)', () => {
+  test('a recovered account becomes eligible for the Smart Scheduler\'s normal due-check again (no permanent lock)', async () => {
     const id = insertAccount(testDb, {
       last_sync_status: 'running',
       last_sync_started_at: new Date(Date.now() - 45 * 60000).toISOString(),
@@ -141,7 +141,7 @@ describe('syncService.recoverInterruptedSyncs', () => {
       [id]
     );
 
-    recoverInterruptedSyncs(30);
+    await recoverInterruptedSyncs(30);
 
     // Same query shape autoSyncScheduler.runDueAccounts() uses to find
     // eligible accounts -- proves recovery doesn't add any exclusion.

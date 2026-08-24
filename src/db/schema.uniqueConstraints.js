@@ -26,27 +26,27 @@ const { ensureMigrationsTable, isMigrationApplied, markMigrationApplied } = requ
 
 const MIGRATION_NAME = 'unique_constraints_benchmark_metrics_account_targets';
 
-function runUniqueConstraintsMigration() {
-  ensureMigrationsTable();
-  if (isMigrationApplied(MIGRATION_NAME)) {
+async function runUniqueConstraintsMigration() {
+  await ensureMigrationsTable();
+  if (await isMigrationApplied(MIGRATION_NAME)) {
     console.log('[DB] Unique constraints migration: already applied, skipping.');
     return;
   }
 
   console.log('[DB] Running unique constraints migration...');
 
-  db.run(`
+  await db.run(`
     CREATE UNIQUE INDEX IF NOT EXISTS idx_benchmark_metrics_unique
       ON benchmark_metrics(objective, metric_key, COALESCE(ad_account_id, ''), COALESCE(industry_id, ''))
   `);
 
-  db.run(`
+  await db.run(`
     CREATE UNIQUE INDEX IF NOT EXISTS idx_account_targets_unique
       ON account_targets(ad_account_id, objective, effective_from)
   `);
 
-  markMigrationApplied(MIGRATION_NAME);
-  db.persist();
+  await markMigrationApplied(MIGRATION_NAME);
+  await db.persist();
   console.log('[DB] Unique constraints migration complete.');
 }
 

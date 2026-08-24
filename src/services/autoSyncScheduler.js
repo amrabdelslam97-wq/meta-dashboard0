@@ -35,6 +35,7 @@
 const db = require('../db/database');
 const smartSyncEngine = require('./smartSyncEngine');
 const rateLimitMemory = require('./rateLimitMemory');
+const { DEFAULT_SYNC_RECOVERY_TIMEOUT_MINUTES } = require('./syncService');
 
 const CHECK_INTERVAL_MS = 2 * 60 * 1000; // re-check every 2 minutes
 const MAX_COOLDOWN_MS = rateLimitMemory.MAX_BACKOFF_MS; // cap account backoff at 60 minutes
@@ -108,7 +109,7 @@ async function runDueAccountsCycle() {
   // (last_sync_completed_at ASC) is the tiebreaker in every tier -- so
   // "stale data" (tier 2) is naturally folded into whichever tier an
   // account already falls into rather than needing a separate pass.
-  const accounts = db.all(
+  const accounts = await db.all(
     `SELECT * FROM ad_accounts
      WHERE auto_sync_enabled = 1 AND status = 'active' AND token_is_valid = 1
      ORDER BY
@@ -140,13 +141,13 @@ async function runDueAccountsCycle() {
       await smartSyncEngine.runDueForAccount(account, 'scheduler', (entityType) => {
         state.currentEntityType = entityType;
       });
-      rateLimitMemory.clearBackoff(account.id);
+      await rateLimitMemory.clearBackoff(account.id);
     } catch (err) {
       state.lastError = err.message;
       state.lastErrorAt = new Date().toISOString();
       if (smartSyncEngine.isRateLimitError(err)) {
         state.retryCounter++;
-        const { backoffMs } = rateLimitMemory.recordRateLimitHit(account.id);
+        const { backoffMs } = await rateLimitMemory.recordRateLimitHit(account.id);
         console.warn(`[AutoSync] Rate limited on account ${account.id} — cooling down ${Math.round(backoffMs / 1000)}s (Automatic Recovery: remaining accounts continue this cycle)`);
       } else {
         console.error(`[AutoSync] Sync failed for account ${account.id}:`, err.message);
@@ -176,12 +177,12 @@ function stopAutoSyncScheduler() {
   }
 }
 
-function pauseScheduler() {
+async function pauseScheduler() {
   state.status = 'paused';
   return getSchedulerStatus();
 }
 
-function resumeScheduler() {
+async function resumeScheduler() {
   state.status = 'running';
   return getSchedulerStatus();
 }
@@ -197,21 +198,30 @@ function minutesToMs(minutes) {
  * in-memory queue/cooldown state + smartSyncEngine's freshness helper), no
  * new sync mechanism, no duplicated scheduling logic.
  */
-function getPerAccountStatus() {
-  const accounts = db.all(
+async function getPerAccountStatus() {
+  const accounts = await db.all(
     `SELECT id, account_name, status, auto_sync_enabled, auto_sync_interval_minutes,
             last_sync_completed_at, last_sync_started_at, last_successful_sync_at,
-            last_failed_sync_at, last_sync_status, last_sync_error,
-            last_full_sync_at, rate_limit_backoff_until
+            last_failed_sync_at, last_sync_status, last_sync_error, last_sync_partial_reason,
+            last_full_sync_at, rate_limit_backoff_until,
+            initial_sync_completed_at, sync_batch_cursor
      FROM ad_accounts
      ORDER BY account_name ASC`
   );
 
-  return accounts.map(a => {
+  // Promise.all is safe here: each account's getEntityFreshness() read is
+  // independent (own account id, no shared mutable state), and Promise.all
+  // preserves the same output order as the .map() it replaces.
+  return Promise.all(accounts.map(async a => {
     const enabled = Boolean(a.auto_sync_enabled);
     const inCooldown = rateLimitMemory.isInBackoff(a);
     const queueIndex = state.queue.indexOf(a.id);
-    const isCurrent = state.currentAccountId === a.id;
+    // DB-backed running check (Phase 2) -- accurate on Vercel too, where
+    // `state.currentAccountId` is never set (see getSchedulerStatus()'s own
+    // comment on why the in-memory queue is Railway-only).
+    const isRunningInDb = a.last_sync_status === 'running' && a.last_sync_started_at &&
+      (Date.now() - new Date(a.last_sync_started_at).getTime()) / 60000 < DEFAULT_SYNC_RECOVERY_TIMEOUT_MINUTES;
+    const isCurrent = state.currentAccountId === a.id || isRunningInDb;
 
     const dueAt = a.last_sync_completed_at || a.last_sync_started_at;
     const nextScheduledAt = enabled && a.status === 'active' && dueAt
@@ -236,36 +246,76 @@ function getPerAccountStatus() {
       last_full_sync_at: a.last_full_sync_at || null,
       last_sync_status: a.last_sync_status || 'idle',
       last_sync_error: a.last_sync_error || null,
+      last_sync_partial_reason: a.last_sync_partial_reason || null,
       next_scheduled_sync_at: nextScheduledAt,
       queue_position: queueIndex !== -1 ? queueIndex + 1 : null,
       queue_size: state.queue.length || null,
-      current_sync_tier: isCurrent ? state.currentEntityType : null,
+      current_sync_tier: isCurrent ? (state.currentEntityType || 'syncing') : null,
       cooldown_resumes_at: inCooldown ? a.rate_limit_backoff_until : null,
-      freshness: smartSyncEngine.getEntityFreshness(a.id),
+      // Bounded/Resumable Initial Sync observability (AP-POS Sync
+      // Architecture Audit, requirement 17): whether this account has ever
+      // completed a full (non-active-only) hierarchy sweep, and -- while it
+      // hasn't -- whether a sweep is actively resuming from a prior batch
+      // (sync_batch_cursor non-null means "in progress, picking up where
+      // the last invocation left off", not stalled -- see
+      // syncService.runBatchedFullSweep()).
+      sync_mode: a.initial_sync_completed_at ? 'recurring_active_only' : 'initial_full_sweep',
+      initial_sync_completed_at: a.initial_sync_completed_at || null,
+      initial_sync_in_progress: !a.initial_sync_completed_at && !!a.sync_batch_cursor,
+      freshness: await smartSyncEngine.getEntityFreshness(a.id),
     };
-  });
+  }));
 }
 
 /** Live snapshot for the dashboard's Executive Sync Status section. */
-function getSchedulerStatus() {
-  const eligible = db.get(
+async function getSchedulerStatus() {
+  const eligible = await db.get(
     `SELECT COUNT(*) as count FROM ad_accounts WHERE auto_sync_enabled = 1 AND status = 'active' AND token_is_valid = 1`
   );
-  const totals = db.get(`
+  const totals = await db.get(`
     SELECT
       (SELECT COUNT(*) FROM ad_accounts) as accounts,
       (SELECT COUNT(*) FROM campaigns) as campaigns,
       (SELECT COUNT(*) FROM ad_sets) as ad_sets,
       (SELECT COUNT(*) FROM ads) as ads
   `);
-  const lastSuccess = db.get(`SELECT MAX(last_successful_sync_at) as t FROM ad_accounts`);
-  const lastFailed = db.get(`SELECT MAX(last_failed_sync_at) as t FROM ad_accounts`);
-  const avgDuration = db.get(
+  const lastSuccess = await db.get(`SELECT MAX(last_successful_sync_at) as t FROM ad_accounts`);
+  const lastFailed = await db.get(`SELECT MAX(last_failed_sync_at) as t FROM ad_accounts`);
+  const avgDuration = await db.get(
     `SELECT AVG(duration_ms) as avg_ms FROM sync_execution_log WHERE started_at >= datetime('now', '-24 hours')`
   );
 
+  // Phase 2 (PHASE_2_SYNC_EXECUTION_OBSERVABILITY_REPORT.md) -- DB-backed,
+  // accurate on every deployment target. `state` below (queue/
+  // currentAccountId/completedThisCycle/etc.) is populated ONLY by
+  // autoSyncScheduler.js's own setInterval loop, which is started ONLY from
+  // src/app.js's start() -- itself only called when this process is run
+  // directly (`node src/app.js`, i.e. Railway/local). On Vercel,
+  // api/index.js calls createApp()/initializeApp() directly and NEVER
+  // start(), so `state` stays frozen at its module-load defaults forever
+  // (empty queue, no current account) -- which is exactly why the
+  // "Accounts/Current Cycle" boxes previously always showed
+  // Waiting/Syncing/Completed: 0 and Progress: 100% on Vercel regardless of
+  // what was actually happening. These two DB queries are the real source
+  // of truth, independent of which scheduler model is active.
+  const runningRows = await db.all(
+    `SELECT id, account_name, last_sync_started_at, sync_progress_phase FROM ad_accounts
+     WHERE last_sync_status = 'running' AND last_sync_started_at IS NOT NULL`
+  );
+  const nowMs = Date.now();
+  const activelyRunning = runningRows.filter(a =>
+    (nowMs - new Date(a.last_sync_started_at).getTime()) / 60000 < DEFAULT_SYNC_RECOVERY_TIMEOUT_MINUTES
+  );
+  const recentOutcomes = await db.get(`
+    SELECT
+      SUM(CASE WHEN last_sync_status = 'success' THEN 1 ELSE 0 END) as success,
+      SUM(CASE WHEN last_sync_status = 'partial' THEN 1 ELSE 0 END) as partial,
+      SUM(CASE WHEN last_sync_status = 'failed' THEN 1 ELSE 0 END) as failed
+    FROM ad_accounts WHERE status = 'active'
+  `);
+
   const currentAccount = state.currentAccountId
-    ? db.get('SELECT id, account_name FROM ad_accounts WHERE id = ?', [state.currentAccountId])
+    ? await db.get('SELECT id, account_name FROM ad_accounts WHERE id = ?', [state.currentAccountId])
     : null;
 
   // Backoff Memory (requirement 9): read the persisted per-account
@@ -275,10 +325,19 @@ function getSchedulerStatus() {
   // toISOString() string ("...T...Z") while SQLite's datetime('now') uses
   // a different format ("... ..."), so a raw SQL string comparison between
   // them is not reliably chronological.
-  const accountsInCooldown = db.all(
+  const accountsInCooldown = (await db.all(
     `SELECT id, rate_limit_backoff_until FROM ad_accounts WHERE rate_limit_backoff_until IS NOT NULL`
-  ).filter(a => new Date(a.rate_limit_backoff_until).getTime() > Date.now());
+  )).filter(a => new Date(a.rate_limit_backoff_until).getTime() > Date.now());
 
+  // has_live_scheduler tells the dashboard whether the queue_position/
+  // queue_size/progress_pct/current_account/current_entity_type/
+  // accounts.{waiting,syncing,completed} fields below reflect a real,
+  // in-process queue (Railway, intervalHandle set by
+  // startAutoSyncScheduler()) or are structurally not applicable (Vercel) --
+  // the DB-backed fields (currently_running, no_sync_currently_running,
+  // accounts.running/recent_*) are what the dashboard should prefer when
+  // this is false, instead of a fake "Progress: 100%".
+  const hasLiveScheduler = intervalHandle !== null;
   const queueSize = state.queue.length;
   const queuePosition = state.currentIndex >= 0 ? state.currentIndex + 1 : 0;
   const completed = state.completedThisCycle.length;
@@ -286,20 +345,31 @@ function getSchedulerStatus() {
   const syncing = state.currentAccountId ? 1 : 0;
 
   return {
-    scheduler_status: state.status,
+    scheduler_status: hasLiveScheduler ? state.status : 'not_applicable',
+    has_live_scheduler: hasLiveScheduler,
     cycle_started_at: state.cycleStartedAt,
     next_scheduled_at: intervalHandle ? new Date(Date.now() + CHECK_INTERVAL_MS).toISOString() : null,
     current_account: currentAccount ? { id: currentAccount.id, name: currentAccount.account_name } : null,
     current_entity_type: state.currentEntityType,
     queue_position: queuePosition,
     queue_size: queueSize,
-    progress_pct: queueSize > 0 ? Math.round((completed / queueSize) * 100) : 100,
+    progress_pct: hasLiveScheduler ? (queueSize > 0 ? Math.round((completed / queueSize) * 100) : 100) : null,
+    // DB-backed current-execution state -- accurate everywhere, this is
+    // what "is a sync running right now" should actually be read from.
+    currently_running: activelyRunning.map(a => ({
+      id: a.id, name: a.account_name, started_at: a.last_sync_started_at, phase: a.sync_progress_phase || null,
+    })),
+    no_sync_currently_running: activelyRunning.length === 0,
     accounts: {
       connected: totals.accounts,
       eligible_for_auto_sync: eligible.count,
       waiting,
       syncing,
       completed,
+      running: activelyRunning.length,
+      recent_success: recentOutcomes.success || 0,
+      recent_partial: recentOutcomes.partial || 0,
+      recent_failed: recentOutcomes.failed || 0,
     },
     last_successful_sync_at: lastSuccess.t || null,
     last_failed_sync_at: lastFailed.t || null,
@@ -316,7 +386,7 @@ function getSchedulerStatus() {
     },
     last_error: state.lastError,
     last_error_at: state.lastErrorAt,
-    per_account: getPerAccountStatus(),
+    per_account: await getPerAccountStatus(),
   };
 }
 

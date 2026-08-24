@@ -91,8 +91,8 @@ const ALERT_TO_DECISION = {
 // recommendation-/alert-derived decision's priority score never reflected
 // whether the campaign was actually improving or declining.
 // ─────────────────────────────────────────────
-function getTrendForEntity(entityMetaId) {
-  const history = db.all(`
+async function getTrendForEntity(entityMetaId) {
+  const history = await db.all(`
     SELECT health_score, calculated_at FROM health_score_history
     WHERE entity_meta_id = ? ORDER BY calculated_at DESC LIMIT 10
   `, [entityMetaId]);
@@ -229,11 +229,11 @@ function findingShapeForCard(source, row) {
 // decisionsFromAlerts() above, and any direct SELECT * against these
 // tables) -- never recomputed.
 // ─────────────────────────────────────────────
-function persistGovernanceState(table, codeColumn, code, entityMetaId, governanceState, dbHandle = db) {
+async function persistGovernanceState(table, codeColumn, code, entityMetaId, governanceState, dbHandle = db) {
   const activeCondition = table === 'recommendation_log'
     ? 'dismissed_at IS NULL'
     : `status IN ('active','snoozed')`;
-  dbHandle.run(
+  await dbHandle.run(
     `UPDATE ${table} SET governance_state = ? WHERE ${codeColumn} = ? AND entity_meta_id = ? AND ${activeCondition}`,
     [governanceState, code, entityMetaId]
   );
@@ -242,8 +242,8 @@ function persistGovernanceState(table, codeColumn, code, entityMetaId, governanc
 // ─────────────────────────────────────────────
 // Build a decision object from a recommendation
 // ─────────────────────────────────────────────
-function decisionsFromRecommendations(adAccountId) {
-  const recs = db.all(`
+async function decisionsFromRecommendations(adAccountId) {
+  const recs = await db.all(`
     SELECT r.*, c.name as campaign_name, c.objective, c.status
     FROM recommendation_log r
     LEFT JOIN campaigns c ON c.meta_campaign_id = r.entity_meta_id
@@ -256,7 +256,7 @@ function decisionsFromRecommendations(adAccountId) {
     const mapping = resolveDecisionMapping(rec.objective, rec.rule_code, REC_TO_DECISION);
     if (!mapping) continue;
 
-    const latestScore = db.get(`
+    const latestScore = await db.get(`
       SELECT health_score FROM health_score_history
       WHERE entity_meta_id = ? ORDER BY calculated_at DESC LIMIT 1
     `, [rec.entity_meta_id]);
@@ -265,7 +265,7 @@ function decisionsFromRecommendations(adAccountId) {
       healthScore:     latestScore?.health_score || 50,
       alertSeverity:   rec.severity,
       alertCount:      1,
-      trendDirection:  getTrendForEntity(rec.entity_meta_id),
+      trendDirection:  await getTrendForEntity(rec.entity_meta_id),
       objectiveWeight: resolveProfile(rec.objective).priorityWeight ?? 1.0,
     });
 
@@ -304,8 +304,8 @@ function decisionsFromRecommendations(adAccountId) {
 // ─────────────────────────────────────────────
 // Build decisions from active alerts
 // ─────────────────────────────────────────────
-function decisionsFromAlerts(adAccountId) {
-  const alerts = db.all(`
+async function decisionsFromAlerts(adAccountId) {
+  const alerts = await db.all(`
     SELECT a.*, c.name as campaign_name, c.objective
     FROM active_alerts a
     LEFT JOIN campaigns c ON c.meta_campaign_id = a.entity_meta_id
@@ -319,7 +319,7 @@ function decisionsFromAlerts(adAccountId) {
     const mapping = resolveDecisionMapping(alert.objective, alert.alert_code, ALERT_TO_DECISION);
     if (!mapping) continue;
 
-    const latestScore = db.get(`
+    const latestScore = await db.get(`
       SELECT health_score FROM health_score_history
       WHERE entity_meta_id = ? ORDER BY calculated_at DESC LIMIT 1
     `, [alert.entity_meta_id]);
@@ -328,7 +328,7 @@ function decisionsFromAlerts(adAccountId) {
       healthScore:     latestScore?.health_score || 50,
       alertSeverity:   alert.severity,
       alertCount:      alert.occurrence_count || 1,
-      trendDirection:  getTrendForEntity(alert.entity_meta_id),
+      trendDirection:  await getTrendForEntity(alert.entity_meta_id),
       objectiveWeight: resolveProfile(alert.objective).priorityWeight ?? 1.0,
     });
 
@@ -368,8 +368,8 @@ function decisionsFromAlerts(adAccountId) {
 // ─────────────────────────────────────────────
 // Build decisions from opportunities
 // ─────────────────────────────────────────────
-function decisionsFromOpportunities() {
-  const opportunities = detectAllOpportunities(20);
+async function decisionsFromOpportunities() {
+  const opportunities = await detectAllOpportunities(20);
   return opportunities.map(opp => {
     const mapping = resolveDecisionMapping(opp.objective, opp.type, OPPORTUNITY_TO_DECISION)
       || { type: 'REVIEW_PERFORMANCE', base_priority: 'low' };
@@ -414,18 +414,25 @@ function decisionsFromOpportunities() {
 // decision source, with the addition of rule_id/framework/rule_name/
 // evidence fields for full Framework/Rule traceability.
 // ─────────────────────────────────────────────
-function decisionsFromRuleEngine(campaign, adAccountId, ruleEngineFired = []) {
-  const latestScore = db.get(`
+async function decisionsFromRuleEngine(campaign, adAccountId, ruleEngineFired = []) {
+  const latestScore = await db.get(`
     SELECT health_score FROM health_score_history
     WHERE entity_meta_id = ? ORDER BY calculated_at DESC LIMIT 1
   `, [campaign.meta_campaign_id]);
+
+  // A trend lookup shared by every fired rule for this one campaign --
+  // computed once, before the map, since it does not vary per-rule (same
+  // entity_meta_id for all of them). Previously computed once per rule
+  // (same value, recomputed) when this was synchronous; hoisting it here
+  // also avoids N redundant awaited DB round-trips inside the map below.
+  const trendDirection = await getTrendForEntity(campaign.meta_campaign_id);
 
   return ruleEngineFired.map(fired => {
     const priorityResult = computePriorityScore({
       healthScore:     latestScore?.health_score || 50,
       alertSeverity:   fired.severity,
       alertCount:      1,
-      trendDirection:  getTrendForEntity(campaign.meta_campaign_id),
+      trendDirection,
       objectiveWeight: resolveProfile(campaign.objective).priorityWeight ?? 1.0,
     });
     const conf = severityConfidence(fired.severity);
@@ -471,7 +478,7 @@ function decisionsFromRuleEngine(campaign, adAccountId, ruleEngineFired = []) {
 // moment, exactly like it already does for recommendation_log/
 // active_alerts.
 // ─────────────────────────────────────────────
-function persistRuleEngineFirings(adAccountId, campaign, ruleEngineFired = [], entityType = 'campaign') {
+async function persistRuleEngineFirings(adAccountId, campaign, ruleEngineFired = [], entityType = 'campaign') {
   const now = new Date().toISOString();
 
   // Phase X.1 (Runtime Unification) fix: entity_type was previously
@@ -487,21 +494,21 @@ function persistRuleEngineFirings(adAccountId, campaign, ruleEngineFired = [], e
   // rewrites the entire DB file on every write outside a transaction
   // (see CLAUDE.md), so this was previously up to (fired-rules + 1)
   // full-DB rewrites per request; now it's one.
-  db.transaction(tx => {
+  await db.transaction(async tx => {
     for (const fired of ruleEngineFired) {
-      const existing = tx.get(
+      const existing = await tx.get(
         `SELECT id FROM rule_engine_log WHERE rule_id = ? AND entity_meta_id = ? AND dismissed_at IS NULL`,
         [fired.rule_id, campaign.meta_campaign_id]
       );
       if (existing) {
-        tx.run(
+        await tx.run(
           `UPDATE rule_engine_log
            SET last_generated_at = ?, evidence = ?, category = ?, governance_state = ?
            WHERE id = ?`,
           [now, JSON.stringify(fired.evidence || []), fired.category || null, fired.governance_state || null, existing.id]
         );
       } else {
-        tx.run(
+        await tx.run(
           `INSERT INTO rule_engine_log
              (id, rule_id, framework, rule_name, ad_account_id, entity_type, entity_meta_id,
               entity_label, objective, category, severity, reason, evidence, decision_type,
@@ -522,13 +529,13 @@ function persistRuleEngineFirings(adAccountId, campaign, ruleEngineFired = [], e
     // auto-dismiss behavior so stale findings don't linger indefinitely.
     const firedIds = ruleEngineFired.map(f => f.rule_id);
     if (firedIds.length > 0) {
-      tx.run(
+      await tx.run(
         `UPDATE rule_engine_log SET dismissed_at = ?
          WHERE entity_meta_id = ? AND dismissed_at IS NULL AND rule_id NOT IN (${firedIds.map(() => '?').join(',')})`,
         [now, campaign.meta_campaign_id, ...firedIds]
       );
     } else {
-      tx.run(
+      await tx.run(
         `UPDATE rule_engine_log SET dismissed_at = ? WHERE entity_meta_id = ? AND dismissed_at IS NULL`,
         [now, campaign.meta_campaign_id]
       );
@@ -542,15 +549,16 @@ function persistRuleEngineFirings(adAccountId, campaign, ruleEngineFired = [], e
 // same read-then-shape pattern decisionsFromRecommendations()/
 // decisionsFromAlerts() already use against their own DB tables.
 // ─────────────────────────────────────────────
-function decisionsFromRuleEngineLog(adAccountId) {
-  const rows = db.all(
+async function decisionsFromRuleEngineLog(adAccountId) {
+  const rows = await db.all(
     `SELECT * FROM rule_engine_log WHERE ad_account_id = ? AND dismissed_at IS NULL
      ORDER BY last_generated_at DESC`,
     [adAccountId]
   );
 
-  return rows.map(row => {
-    const latestScore = db.get(
+  const decisions = [];
+  for (const row of rows) {
+    const latestScore = await db.get(
       `SELECT health_score FROM health_score_history WHERE entity_meta_id = ? ORDER BY calculated_at DESC LIMIT 1`,
       [row.entity_meta_id]
     );
@@ -558,7 +566,7 @@ function decisionsFromRuleEngineLog(adAccountId) {
       healthScore:     latestScore?.health_score || 50,
       alertSeverity:   row.severity,
       alertCount:      1,
-      trendDirection:  getTrendForEntity(row.entity_meta_id),
+      trendDirection:  await getTrendForEntity(row.entity_meta_id),
       objectiveWeight: resolveProfile(row.objective).priorityWeight ?? 1.0,
     });
 
@@ -569,7 +577,7 @@ function decisionsFromRuleEngineLog(adAccountId) {
     const priority = row.governance_state === 'failed' ? 'observation_only' : priorityResult.priority;
     const conf = severityConfidence(row.severity);
 
-    return {
+    decisions.push({
       id:              uuidv4(),
       source:          'rule_engine',
       source_id:       row.rule_id,
@@ -592,8 +600,9 @@ function decisionsFromRuleEngineLog(adAccountId) {
       rule_name:       row.rule_name,
       category:        row.category,
       governance_state: row.governance_state,
-    };
-  });
+    });
+  }
+  return decisions;
 }
 
 // ─────────────────────────────────────────────
@@ -636,22 +645,29 @@ function deduplicateDecisions(decisions) {
 // ─────────────────────────────────────────────
 // MAIN: Generate today's priority actions
 // ─────────────────────────────────────────────
-function generateTodaysDecisions(adAccountId) {
-  const fromRecs       = decisionsFromRecommendations(adAccountId);
-  const fromAlerts     = decisionsFromAlerts(adAccountId);
-  const fromOpps       = decisionsFromOpportunities();
-  // Phase 11 — Rule Engine findings persisted by insights.js's routes via
-  // persistRuleEngineFirings(), read back here so the Decision Center
-  // reflects Framework rule activity even for campaigns not being viewed
-  // in this exact moment (closing the Decision Engine/Rule Engine
-  // disconnect the Framework Runtime Evidence audit found).
-  const fromRuleEngine = decisionsFromRuleEngineLog(adAccountId);
+async function generateTodaysDecisions(adAccountId) {
+  // These four reads are fully independent (no data dependency between
+  // them -- confirmed: each queries its own table, none consumes another's
+  // output) and run in parallel via Promise.all rather than sequential
+  // awaits, matching the migration's Step 8 guidance to parallelize
+  // independent reads once identified. Order of the awaited results below
+  // is fixed by array position, not completion order, so downstream
+  // behavior (allDecisions ordering, dedup, sort) is unchanged.
+  const [fromRecs, fromAlerts, fromRuleEngine, campaignRows] = await Promise.all([
+    decisionsFromRecommendations(adAccountId),
+    decisionsFromAlerts(adAccountId),
+    // Phase 11 — Rule Engine findings persisted by insights.js's routes via
+    // persistRuleEngineFirings(), read back here so the Decision Center
+    // reflects Framework rule activity even for campaigns not being viewed
+    // in this exact moment (closing the Decision Engine/Rule Engine
+    // disconnect the Framework Runtime Evidence audit found).
+    decisionsFromRuleEngineLog(adAccountId),
+    db.all('SELECT meta_campaign_id FROM campaigns WHERE ad_account_id = ?', [adAccountId]),
+  ]);
+  const fromOpps = await decisionsFromOpportunities();
 
   // Filter opportunities to this account's campaigns
-  const accountCampaignIds = new Set(
-    db.all('SELECT meta_campaign_id FROM campaigns WHERE ad_account_id = ?', [adAccountId])
-      .map(c => c.meta_campaign_id)
-  );
+  const accountCampaignIds = new Set(campaignRows.map(c => c.meta_campaign_id));
   const filteredOpps = fromOpps.filter(d => accountCampaignIds.has(d.meta_campaign_id));
 
   const allDecisions = [...fromAlerts, ...fromRecs, ...fromRuleEngine, ...filteredOpps];
@@ -676,18 +692,18 @@ function generateTodaysDecisions(adAccountId) {
 // ─────────────────────────────────────────────
 // Persist decisions to decision_history
 // ─────────────────────────────────────────────
-function persistDecisions(adAccountId, decisions) {
+async function persistDecisions(adAccountId, decisions) {
   const now = new Date().toISOString();
   // Only persist if table exists
   try {
-    db.get('SELECT id FROM decision_history LIMIT 1');
+    await db.get('SELECT id FROM decision_history LIMIT 1');
   } catch {
     return; // table not yet created
   }
 
   for (const d of decisions) {
     // Skip if already persisted today (same campaign + type)
-    const existing = db.get(`
+    const existing = await db.get(`
       SELECT id FROM decision_history
       WHERE meta_campaign_id = ? AND decision_type = ?
         AND date(created_at) = date('now') AND status = 'pending'
@@ -695,7 +711,7 @@ function persistDecisions(adAccountId, decisions) {
 
     if (existing) continue;
 
-    db.run(`
+    await db.run(`
       INSERT INTO decision_history (
         id, ad_account_id, meta_campaign_id, campaign_name, objective,
         decision_type, priority, priority_score, reason, supporting_metrics,
@@ -715,11 +731,11 @@ function persistDecisions(adAccountId, decisions) {
 // ─────────────────────────────────────────────
 // Load decision history from DB
 // ─────────────────────────────────────────────
-function getDecisionHistory(adAccountId, limit = 50, status = null) {
+async function getDecisionHistory(adAccountId, limit = 50, status = null) {
   const params = [adAccountId];
   let where = 'WHERE dh.ad_account_id = ?';
   if (status) { where += ' AND dh.status = ?'; params.push(status); }
-  return db.all(`
+  return await db.all(`
     SELECT dh.*
     FROM decision_history dh
     ${where}

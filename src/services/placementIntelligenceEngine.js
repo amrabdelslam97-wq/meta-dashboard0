@@ -51,8 +51,8 @@ const PLACEMENT_CATEGORIES = {
 /**
  * Get placement performance breakdown.
  */
-function getPlacementPerformance(metaCampaignId, dateRange = defaultRange()) {
-  const rows = db.all(
+async function getPlacementPerformance(metaCampaignId, dateRange = defaultRange()) {
+  const rows = await db.all(
     `SELECT * FROM analytics_breakdown_history
      WHERE meta_campaign_id = ? AND breakdown_type = 'placement' AND date_since = ? AND date_until = ?
      ORDER BY spend DESC`,
@@ -129,8 +129,8 @@ function getPlacementPerformance(metaCampaignId, dateRange = defaultRange()) {
 /**
  * Detect placement-specific issues and opportunities.
  */
-function detectPlacementIssues(metaCampaignId, dateRange = defaultRange()) {
-  const performance = getPlacementPerformance(metaCampaignId, dateRange);
+async function detectPlacementIssues(metaCampaignId, dateRange = defaultRange()) {
+  const performance = await getPlacementPerformance(metaCampaignId, dateRange);
   if (performance.placements.length === 0) {
     return { issues: [], opportunities: [] };
   }
@@ -202,9 +202,9 @@ function detectPlacementIssues(metaCampaignId, dateRange = defaultRange()) {
 /**
  * Generate AI recommendations for placement optimization.
  */
-function generatePlacementRecommendations(metaCampaignId, dateRange = defaultRange()) {
-  const performance = getPlacementPerformance(metaCampaignId, dateRange);
-  const issues = detectPlacementIssues(metaCampaignId, dateRange);
+async function generatePlacementRecommendations(metaCampaignId, dateRange = defaultRange()) {
+  const performance = await getPlacementPerformance(metaCampaignId, dateRange);
+  const issues = await detectPlacementIssues(metaCampaignId, dateRange);
 
   const recommendations = [];
 

@@ -8,6 +8,7 @@ const express = require('express');
 const rateLimit = require('express-rate-limit');
 const router = express.Router();
 const { checkCredentials } = require('../../middleware/auth');
+const { setAuthCookie, clearAuthCookie, isAuthenticated } = require('../../middleware/statelessAuth');
 
 // Brute-force protection on the login endpoint specifically -- mirrors the
 // syncLimiter precedent in app.js (a tighter limit on a sensitive route,
@@ -25,21 +26,19 @@ const loginLimiter = isTest ? (req, res, next) => next() : rateLimit({
 router.post('/login', loginLimiter, (req, res) => {
   const { email, password } = req.body || {};
   if (checkCredentials(email, password)) {
-    req.session.authenticated = true;
+    setAuthCookie(res);
     return res.json({ authenticated: true });
   }
   return res.status(401).json({ error: 'Invalid email or password' });
 });
 
 router.post('/logout', (req, res) => {
-  if (!req.session) return res.json({ authenticated: false });
-  req.session.destroy(() => {
-    res.json({ authenticated: false });
-  });
+  clearAuthCookie(res);
+  res.json({ authenticated: false });
 });
 
 router.get('/status', (req, res) => {
-  res.json({ authenticated: !!(req.session && req.session.authenticated) });
+  res.json({ authenticated: isAuthenticated(req) });
 });
 
 module.exports = router;

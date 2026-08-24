@@ -76,12 +76,12 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_decision_outcomes_unique
 
 `;
 
-function runPhase13Migrations() {
-  ensureMigrationsTable();
+async function runPhase13Migrations() {
+  await ensureMigrationsTable();
   console.log('[DB] Running Phase 13 schema migrations...');
   const stmts = PHASE13_SCHEMA.split(';').map(s => s.trim()).filter(s => s.length > 0);
-  for (const stmt of stmts) db.run(stmt + ';');
-  markMigrationApplied(MIGRATION_NAME);
+  for (const stmt of stmts) await db.run(stmt + ';');
+  await markMigrationApplied(MIGRATION_NAME);
   console.log('[DB] Phase 13 schema complete.');
 }
 

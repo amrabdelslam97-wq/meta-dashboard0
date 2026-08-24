@@ -47,23 +47,23 @@ describe('smartSyncEngine', () => {
   });
 
   describe('schedule config', () => {
-    test('returns the spec default intervals when nothing has been customized', () => {
-      const config = smartSyncEngine.getScheduleConfig();
+    test('returns the spec default intervals when nothing has been customized', async () => {
+      const config = await smartSyncEngine.getScheduleConfig();
       expect(config).toEqual({
         insights: 15, campaigns: 60, adsets: 60, ads: 60, creatives: 1440, metadata: 1440,
         analytics: 360, // Executive Marketing Analytics Layer tier (Phase 17)
       });
     });
 
-    test('setScheduleInterval persists a custom interval and rejects invalid input', () => {
-      smartSyncEngine.setScheduleInterval('insights', 5);
-      expect(smartSyncEngine.getScheduleConfig().insights).toBe(5);
+    test('setScheduleInterval persists a custom interval and rejects invalid input', async () => {
+      await smartSyncEngine.setScheduleInterval('insights', 5);
+      expect((await smartSyncEngine.getScheduleConfig()).insights).toBe(5);
 
-      expect(() => smartSyncEngine.setScheduleInterval('not_a_real_tier', 10)).toThrow();
-      expect(() => smartSyncEngine.setScheduleInterval('insights', 0)).toThrow();
+      await expect(smartSyncEngine.setScheduleInterval('not_a_real_tier', 10)).rejects.toThrow();
+      await expect(smartSyncEngine.setScheduleInterval('insights', 0)).rejects.toThrow();
 
       // restore default so later tests in this file aren't affected
-      smartSyncEngine.setScheduleInterval('insights', 15);
+      await smartSyncEngine.setScheduleInterval('insights', 15);
     });
   });
 
@@ -148,6 +148,275 @@ describe('smartSyncEngine', () => {
       expect(logRow.rate_limited).toBe(1);
       expect(logRow.status).toBe('failed');
     }, 45_000);
+
+    // AUTONOMOUS META SYNC RECOVERY mission (Phase 1/2): a decrypt failure
+    // (e.g. a stale/rotated TOKEN_ENCRYPTION_KEY -- the exact real-world
+    // condition that produced a raw, unrecorded 500 "Unsupported state or
+    // unable to authenticate data" on a real Preview Force Sync attempt,
+    // forensically traced via Vercel runtime logs before this fix) must now
+    // be caught, durably recorded, and returned gracefully -- never an
+    // uncaught throw reaching Express's generic error handler.
+    test('a token decrypt failure is caught, durably recorded, and returned gracefully -- never thrown uncaught', async () => {
+      const account = insertAccount(testDb);
+      // Corrupt the stored ciphertext so decryptToken() genuinely fails
+      // AES-GCM auth-tag verification, the same failure class proven live.
+      testDb.db.run(
+        `UPDATE ad_accounts SET access_token_encrypted = ? WHERE id = ?`,
+        ['enc:v1:000000000000000000000000:00000000000000000000000000000000:deadbeef', account.id]
+      );
+
+      const fullAccount = testDb.db.get('SELECT * FROM ad_accounts WHERE id = ?', [account.id]);
+      const result = await smartSyncEngine.runDueForAccount(fullAccount, 'force');
+
+      expect(result.ranAny).toBe(false);
+      expect(result.errorCode).toBe('TOKEN_DECRYPT_FAILED');
+      expect(result.executionId).toBeTruthy();
+
+      const execution = testDb.db.get('SELECT * FROM sync_live_executions WHERE id = ?', [result.executionId]);
+      expect(execution.status).toBe('failed');
+      expect(execution.error_code).toBe('TOKEN_DECRYPT_FAILED');
+      expect(execution.finished_at).toBeTruthy();
+      // No tier ever ran -- confirms this returned before any Meta contact,
+      // not after a failed one.
+      const logRows = testDb.db.all('SELECT * FROM sync_execution_log WHERE ad_account_id = ?', [account.id]);
+      expect(logRows.length).toBe(0);
+    });
+
+    test('sync_live_executions is created immediately (status=running) before any tier runs, and finished on success', async () => {
+      const account = insertAccount(testDb);
+      nock(BASE).get(`/${VERSION}/${account.meta_account_id}/campaigns`).query(true).reply(200, { data: [] });
+      mockAccountInfo(account.meta_account_id);
+
+      const fullAccount = testDb.db.get('SELECT * FROM ad_accounts WHERE id = ?', [account.id]);
+      const result = await smartSyncEngine.runDueForAccount(fullAccount, 'force');
+
+      expect(result.executionId).toBeTruthy();
+      const execution = testDb.db.get('SELECT * FROM sync_live_executions WHERE id = ?', [result.executionId]);
+      expect(execution.ad_account_id).toBe(account.id);
+      expect(execution.source).toBe('force');
+      expect(execution.status).toBe('completed');
+      expect(execution.started_at).toBeTruthy();
+      expect(execution.finished_at).toBeTruthy();
+
+      const events = testDb.db.all('SELECT stage FROM sync_live_events WHERE execution_id = ? ORDER BY ts ASC', [result.executionId]);
+      expect(events.map(e => e.stage)).toEqual(expect.arrayContaining(['TOKEN_DECRYPT_SUCCESS', 'INSIGHTS', 'CAMPAIGNS', 'METADATA', 'ANALYTICS']));
+    });
+
+    // AUTONOMOUS META SYNC RECOVERY mission (Phase 9/11): the actual root
+    // cause of the live `Vercel Runtime Timeout Error: Task timed out after
+    // 60 seconds` traced this session -- Force Sync runs ALL tiers
+    // (insights -> campaign tree -> metadata -> analytics) in one
+    // invocation, but only the campaign tree tier had any deadline
+    // awareness. A single shared deadline must now cause later tiers to be
+    // skipped/deferred (not attempted) once the budget is gone, producing a
+    // clean 'partial' result instead of running until the platform kills it.
+    test('tiers still due when the shared deadline is already exhausted are deferred, not attempted -- status becomes partial', async () => {
+      const account = insertAccount(testDb);
+      const originalBudget = process.env.SYNC_TIME_BUDGET_MS;
+      process.env.SYNC_TIME_BUDGET_MS = '1'; // exhausted almost immediately after being read
+
+      try {
+        // No nock interceptors registered at all -- if any tier actually
+        // attempted a Meta call, the request would throw and fail the test.
+        const fullAccount = testDb.db.get('SELECT * FROM ad_accounts WHERE id = ?', [account.id]);
+        // Give the 1ms budget time to actually elapse before entering the
+        // tier loop (createExecution/decryptToken both take non-zero time).
+        const result = await smartSyncEngine.runDueForAccount(fullAccount, 'force');
+
+        expect(result.deferredTiers.length).toBeGreaterThan(0);
+        const execution = testDb.db.get('SELECT * FROM sync_live_executions WHERE id = ?', [result.executionId]);
+        expect(execution.status).toBe('partial');
+        expect(execution.partial_reason).toBe('timed_out');
+      } finally {
+        if (originalBudget === undefined) delete process.env.SYNC_TIME_BUDGET_MS;
+        else process.env.SYNC_TIME_BUDGET_MS = originalBudget;
+      }
+    });
+  });
+
+  // AUTONOMOUS META SYNC RECOVERY mission -- live forensic evidence
+  // (executionId 7ae47b40-3719-48a6-b0b3-6b310b5c8646, real Preview Force
+  // Sync against act_665699145095366) proved runInsightsTier's unbounded
+  // per-campaign loop consumed an entire invocation's shared time budget
+  // (37 sequential Meta calls, all HTTP 200) before the campaign-tree tier
+  // ever got a turn. These tests prove the bounded/resumable replacement
+  // directly, using deterministic campaign counts/timing rather than
+  // depending on any live account state.
+  describe('runInsightsTier — bounded/resumable', () => {
+    const cacheService = require('../../src/services/cacheService');
+    const executionTracker = require('../../src/services/syncExecutionTracker');
+
+    function insertInsightsCampaign(accountId, metaCampaignId) {
+      const id = uuidv4();
+      testDb.db.run(
+        `INSERT INTO campaigns (id, ad_account_id, meta_campaign_id, name, objective, status, effective_status, created_at, updated_at)
+         VALUES (?, ?, ?, 'Insights Test Campaign', 'engagement', 'active', 'ACTIVE', datetime('now'), datetime('now'))`,
+        [id, accountId, metaCampaignId]
+      );
+      return id;
+    }
+
+    function mockInsightsForCampaign(metaCampaignId) {
+      // fetchCampaignMetrics makes two calls per campaign (current + prior
+      // period) -- .persist() so exact call-count bookkeeping isn't needed
+      // in tests that only care about batch/cursor behavior.
+      nock(BASE).persist().get(`/${VERSION}/${metaCampaignId}/insights`).query(true)
+        .reply(200, { data: [] });
+    }
+
+    async function freshAccount(accountId) {
+      return testDb.db.get('SELECT * FROM ad_accounts WHERE id = ?', [accountId]);
+    }
+
+    beforeEach(() => {
+      cacheService.flush();
+    });
+
+    // Test A (mission spec): the engine must NOT attempt all N campaigns if
+    // the batch cap is insufficient -- it must stop, checkpoint, and leave
+    // the rest genuinely still-due. Calls runInsightsTier() directly (not
+    // the full runDueForAccount) so this is a focused test of the tier
+    // itself, unaffected by the other tiers' own Meta calls.
+    test('Test A — a batch of campaigns exceeding the count cap is not fully attempted in one pass; the rest remain pending via a persisted cursor', async () => {
+      const account = insertAccount(testDb);
+      const originalBatchSize = process.env.INSIGHTS_BATCH_SIZE;
+      process.env.INSIGHTS_BATCH_SIZE = '5';
+      try {
+        for (let i = 0; i < 12; i++) {
+          const metaCampaignId = `insights_camp_${account.id}_${i}`;
+          insertInsightsCampaign(account.id, metaCampaignId);
+          mockInsightsForCampaign(metaCampaignId);
+        }
+
+        const result = await smartSyncEngine.runInsightsTier(await freshAccount(account.id), 'fake-token', 'force');
+
+        expect(result.complete).toBe(false);
+        expect(result.processed).toBe(5);
+        expect(result.remaining).toBe(7);
+
+        const row = testDb.db.get('SELECT insights_sync_cursor FROM ad_accounts WHERE id = ?', [account.id]);
+        expect(row.insights_sync_cursor).toBeTruthy();
+      } finally {
+        if (originalBatchSize === undefined) delete process.env.INSIGHTS_BATCH_SIZE;
+        else process.env.INSIGHTS_BATCH_SIZE = originalBatchSize;
+      }
+    });
+
+    // Test B (mission spec): the next execution must resume from the
+    // persisted cursor, not redo already-completed campaigns.
+    test('Test B — the next invocation resumes from the persisted cursor instead of restarting from the first campaign', async () => {
+      const account = insertAccount(testDb);
+      const originalBatchSize = process.env.INSIGHTS_BATCH_SIZE;
+      process.env.INSIGHTS_BATCH_SIZE = '3';
+      try {
+        for (let i = 0; i < 7; i++) {
+          const metaCampaignId = `resume_camp_${account.id}_${i}`;
+          insertInsightsCampaign(account.id, metaCampaignId);
+          mockInsightsForCampaign(metaCampaignId);
+        }
+
+        const first = await smartSyncEngine.runInsightsTier(await freshAccount(account.id), 'fake-token', 'force');
+        expect(first.processed).toBe(3);
+        const cursorAfterFirst = testDb.db.get('SELECT insights_sync_cursor FROM ad_accounts WHERE id = ?', [account.id]).insights_sync_cursor;
+        expect(cursorAfterFirst).toBeTruthy();
+
+        // Re-fetch the account row (picks up the persisted cursor) and run again.
+        const second = await smartSyncEngine.runInsightsTier(await freshAccount(account.id), 'fake-token', 'force');
+        expect(second.processed).toBe(3);
+        // 3 (run 1) + 3 (run 2) = 6 distinct campaigns of 7 -- if items were
+        // being redone instead of resumed, remaining would still be 4, not 1.
+        expect(second.remaining).toBe(1);
+      } finally {
+        if (originalBatchSize === undefined) delete process.env.INSIGHTS_BATCH_SIZE;
+        else process.env.INSIGHTS_BATCH_SIZE = originalBatchSize;
+      }
+    });
+
+    // Test E (mission spec): enough resumed invocations must eventually
+    // process every campaign and mark the tier genuinely complete.
+    test('Test E — repeated resume eventually processes every campaign and clears the cursor', async () => {
+      const account = insertAccount(testDb);
+      const originalBatchSize = process.env.INSIGHTS_BATCH_SIZE;
+      process.env.INSIGHTS_BATCH_SIZE = '4';
+      try {
+        const total = 10;
+        for (let i = 0; i < total; i++) {
+          const metaCampaignId = `full_camp_${account.id}_${i}`;
+          insertInsightsCampaign(account.id, metaCampaignId);
+          mockInsightsForCampaign(metaCampaignId);
+        }
+
+        let processedTotal = 0;
+        let complete = false;
+        for (let iteration = 0; iteration < 10 && !complete; iteration++) {
+          const result = await smartSyncEngine.runInsightsTier(await freshAccount(account.id), 'fake-token', 'force');
+          processedTotal += result.processed;
+          complete = result.complete;
+        }
+
+        expect(complete).toBe(true);
+        expect(processedTotal).toBe(total);
+        const row = testDb.db.get('SELECT insights_sync_cursor FROM ad_accounts WHERE id = ?', [account.id]);
+        expect(row.insights_sync_cursor).toBeNull();
+      } finally {
+        if (originalBatchSize === undefined) delete process.env.INSIGHTS_BATCH_SIZE;
+        else process.env.INSIGHTS_BATCH_SIZE = originalBatchSize;
+      }
+    });
+
+    // Test G (mission spec): idempotency -- if the cursor's campaign is no
+    // longer resolvable (deleted upstream), the tier falls back to the
+    // start rather than corrupting state, and never duplicates DB rows
+    // (campaigns table itself is untouched by this tier -- it only reads).
+    test('Test G — a stale cursor pointing at a deleted campaign safely falls back to the start, no corruption', async () => {
+      const account = insertAccount(testDb);
+      insertInsightsCampaign(account.id, `still_here_${account.id}`);
+      mockInsightsForCampaign(`still_here_${account.id}`);
+      testDb.db.run(`UPDATE ad_accounts SET insights_sync_cursor = ? WHERE id = ?`, ['deleted_campaign_id', account.id]);
+
+      const result = await smartSyncEngine.runInsightsTier(await freshAccount(account.id), 'fake-token', 'force');
+
+      expect(result.complete).toBe(true);
+      expect(result.processed).toBe(1);
+      const row = testDb.db.get('SELECT insights_sync_cursor FROM ad_accounts WHERE id = ?', [account.id]);
+      expect(row.insights_sync_cursor).toBeNull();
+    });
+
+    // Test C (mission spec, adapted -- see this tier's own header comment:
+    // Insights is cache-warming only, it has never durably written rows to
+    // the campaigns/ad_sets/ads tables, unlike the campaign tree tier which
+    // already proves Meta-200 -> persisted -> checkpoint via
+    // writeCampaignBatch()/sync_batch_cursor, covered by
+    // boundedResumableInitialSync.test.js). What Insights DOES durably
+    // persist is its own resumable position -- proven here, using a real
+    // executionId/recorder exactly like runDueForAccount() wires one up.
+    test('Test C — every bounded pass is followed by a durable cursor checkpoint event, not just an in-memory counter', async () => {
+      const account = insertAccount(testDb);
+      const originalBatchSize = process.env.INSIGHTS_BATCH_SIZE;
+      process.env.INSIGHTS_BATCH_SIZE = '2';
+      try {
+        for (let i = 0; i < 5; i++) {
+          const metaCampaignId = `checkpoint_camp_${account.id}_${i}`;
+          insertInsightsCampaign(account.id, metaCampaignId);
+          mockInsightsForCampaign(metaCampaignId);
+        }
+
+        const executionId = await executionTracker.createExecution(account.id, 'force');
+        const recorder = executionTracker.createRecorder(executionId);
+        await smartSyncEngine.runInsightsTier(await freshAccount(account.id), 'fake-token', 'force', { recorder });
+
+        const execution = testDb.db.get('SELECT * FROM sync_live_executions WHERE id = ?', [executionId]);
+        expect(execution.cursor_after).toBeTruthy();
+        const checkpointEvents = testDb.db.all(
+          "SELECT * FROM sync_live_events WHERE execution_id = ? AND stage = 'CHECKPOINT_PERSISTED'",
+          [executionId]
+        );
+        expect(checkpointEvents.length).toBe(1);
+      } finally {
+        if (originalBatchSize === undefined) delete process.env.INSIGHTS_BATCH_SIZE;
+        else process.env.INSIGHTS_BATCH_SIZE = originalBatchSize;
+      }
+    });
   });
 
   describe('getEntityFreshness', () => {
@@ -159,7 +428,7 @@ describe('smartSyncEngine', () => {
       const fullAccount = testDb.db.get('SELECT * FROM ad_accounts WHERE id = ?', [account.id]);
       await smartSyncEngine.runDueForAccount(fullAccount, 'scheduler');
 
-      const freshness = smartSyncEngine.getEntityFreshness(account.id);
+      const freshness = await smartSyncEngine.getEntityFreshness(account.id);
       const insights = freshness.find(f => f.entity_type === 'insights');
       expect(insights.is_stale).toBe(false);
       expect(insights.interval_minutes).toBe(15);
@@ -180,18 +449,18 @@ describe('smartSyncEngine', () => {
       return id;
     }
 
-    test('needsLifecycleBackfill is true when a campaign has NULL effective_status, false once populated', () => {
+    test('needsLifecycleBackfill is true when a campaign has NULL effective_status, false once populated', async () => {
       const account = insertAccount(testDb);
       insertLegacyCampaign(account.id, 'camp_legacy_1');
-      expect(smartSyncEngine.needsLifecycleBackfill(account.id)).toBe(true);
+      expect(await smartSyncEngine.needsLifecycleBackfill(account.id)).toBe(true);
 
       testDb.db.run(`UPDATE campaigns SET effective_status = 'ACTIVE' WHERE ad_account_id = ?`, [account.id]);
-      expect(smartSyncEngine.needsLifecycleBackfill(account.id)).toBe(false);
+      expect(await smartSyncEngine.needsLifecycleBackfill(account.id)).toBe(false);
     });
 
-    test('needsLifecycleBackfill is false for an account with no campaigns at all (nothing to backfill)', () => {
+    test('needsLifecycleBackfill is false for an account with no campaigns at all (nothing to backfill)', async () => {
       const account = insertAccount(testDb);
-      expect(smartSyncEngine.needsLifecycleBackfill(account.id)).toBe(false);
+      expect(await smartSyncEngine.needsLifecycleBackfill(account.id)).toBe(false);
     });
 
     test('a legacy account with NULL effective_status gets its campaigns/adsets/ads tree force-synced even though nothing was due on its own interval, and is then marked complete', async () => {
@@ -261,11 +530,11 @@ describe('smartSyncEngine', () => {
       expect(result.ranAny).toBe(false);
     });
 
-    test('markLifecycleBackfillCompleteIfDone is a no-op (returns false) while NULLs remain', () => {
+    test('markLifecycleBackfillCompleteIfDone is a no-op (returns false) while NULLs remain', async () => {
       const account = insertAccount(testDb);
       insertLegacyCampaign(account.id, 'camp_legacy_4');
 
-      expect(smartSyncEngine.markLifecycleBackfillCompleteIfDone(account.id)).toBe(false);
+      expect(await smartSyncEngine.markLifecycleBackfillCompleteIfDone(account.id)).toBe(false);
       const row = testDb.db.get('SELECT lifecycle_backfill_completed_at FROM ad_accounts WHERE id = ?', [account.id]);
       expect(row.lifecycle_backfill_completed_at).toBeNull();
     });

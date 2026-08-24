@@ -37,7 +37,7 @@ function worstStatus(statuses) {
 // ─────────────────────────────────────────────
 // Load active targets for an account + objective
 // ─────────────────────────────────────────────
-function loadTargets(adAccountId, objective) {
+async function loadTargets(adAccountId, objective) {
   const today = new Date().toISOString().slice(0, 10);
   return db.get(
     `SELECT * FROM account_targets
@@ -138,8 +138,8 @@ const TARGET_TO_METRIC = {
 // ─────────────────────────────────────────────
 // MAIN: Evaluate goal achievement for a campaign
 // ─────────────────────────────────────────────
-function evaluateGoalAchievement(campaign, metrics, adAccountId) {
-  const targets = loadTargets(adAccountId, campaign.objective);
+async function evaluateGoalAchievement(campaign, metrics, adAccountId) {
+  const targets = await loadTargets(adAccountId, campaign.objective);
 
   if (!targets) {
     return {

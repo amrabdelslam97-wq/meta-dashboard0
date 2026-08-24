@@ -18,23 +18,23 @@ function generateId(prefix) {
 /**
  * Track API call for tenant
  */
-function trackApiCall(tenantId) {
+async function trackApiCall(tenantId) {
   const currentMonth = new Date().toISOString().slice(0, 7);
 
-  const existing = db.get(
+  const existing = await db.get(
     'SELECT id FROM usage_tracking WHERE tenant_id = ? AND tracking_month = ?',
     [tenantId, currentMonth]
   );
 
   if (existing) {
-    db.run(
+    await db.run(
       'UPDATE usage_tracking SET api_calls_count = api_calls_count + 1 WHERE id = ?',
       [existing.id]
     );
   } else {
     const trackingId = generateId('utk');
     const now = new Date().toISOString();
-    db.run(`
+    await db.run(`
       INSERT INTO usage_tracking (
         id, tenant_id, tracking_month, api_calls_count, created_at, updated_at
       ) VALUES (?, ?, ?, ?, ?, ?)
@@ -45,23 +45,23 @@ function trackApiCall(tenantId) {
 /**
  * Track AI request for tenant
  */
-function trackAiRequest(tenantId) {
+async function trackAiRequest(tenantId) {
   const currentMonth = new Date().toISOString().slice(0, 7);
 
-  const existing = db.get(
+  const existing = await db.get(
     'SELECT id FROM usage_tracking WHERE tenant_id = ? AND tracking_month = ?',
     [tenantId, currentMonth]
   );
 
   if (existing) {
-    db.run(
+    await db.run(
       'UPDATE usage_tracking SET ai_requests_count = ai_requests_count + 1 WHERE id = ?',
       [existing.id]
     );
   } else {
     const trackingId = generateId('utk');
     const now = new Date().toISOString();
-    db.run(`
+    await db.run(`
       INSERT INTO usage_tracking (
         id, tenant_id, tracking_month, ai_requests_count, created_at, updated_at
       ) VALUES (?, ?, ?, ?, ?, ?)
@@ -72,16 +72,16 @@ function trackAiRequest(tenantId) {
 /**
  * Track sync job for tenant
  */
-function trackSyncJob(tenantId) {
+async function trackSyncJob(tenantId) {
   const currentMonth = new Date().toISOString().slice(0, 7);
 
-  const existing = db.get(
+  const existing = await db.get(
     'SELECT id FROM usage_tracking WHERE tenant_id = ? AND tracking_month = ?',
     [tenantId, currentMonth]
   );
 
   if (existing) {
-    db.run(
+    await db.run(
       'UPDATE usage_tracking SET sync_jobs_count = sync_jobs_count + 1 WHERE id = ?',
       [existing.id]
     );
@@ -91,10 +91,10 @@ function trackSyncJob(tenantId) {
 /**
  * Get current month usage for tenant
  */
-function getCurrentMonthUsage(tenantId) {
+async function getCurrentMonthUsage(tenantId) {
   const currentMonth = new Date().toISOString().slice(0, 7);
 
-  const usage = db.get(
+  const usage = await db.get(
     'SELECT * FROM usage_tracking WHERE tenant_id = ? AND tracking_month = ?',
     [tenantId, currentMonth]
   );
@@ -117,7 +117,7 @@ function getCurrentMonthUsage(tenantId) {
 /**
  * Create license key
  */
-function createLicenseKey(tenantId, licenseData) {
+async function createLicenseKey(tenantId, licenseData) {
   const licenseId = generateId('lic');
   const licenseKey = `lic_${crypto.randomBytes(32).toString('hex')}`;
   const now = new Date().toISOString();
@@ -129,7 +129,7 @@ function createLicenseKey(tenantId, licenseData) {
     expiresAt = expiry.toISOString();
   }
 
-  db.run(`
+  await db.run(`
     INSERT INTO license_keys (
       id, tenant_id, license_key, license_type, max_campaigns, max_users,
       expires_at, status, created_at, updated_at
@@ -153,7 +153,7 @@ function createLicenseKey(tenantId, licenseData) {
 /**
  * Get license key
  */
-function getLicenseKey(licenseId) {
+async function getLicenseKey(licenseId) {
   return db.get(`
     SELECT * FROM license_keys WHERE id = ?
   `, [licenseId]);
@@ -162,8 +162,8 @@ function getLicenseKey(licenseId) {
 /**
  * Validate license key
  */
-function validateLicenseKey(licenseKey) {
-  const license = db.get(`
+async function validateLicenseKey(licenseKey) {
+  const license = await db.get(`
     SELECT * FROM license_keys WHERE license_key = ?
   `, [licenseKey]);
 
@@ -183,7 +183,7 @@ function validateLicenseKey(licenseKey) {
 /**
  * Get tenant's active license
  */
-function getTenantLicense(tenantId) {
+async function getTenantLicense(tenantId) {
   return db.get(`
     SELECT * FROM license_keys
     WHERE tenant_id = ? AND status = 'active'
@@ -198,12 +198,12 @@ function getTenantLicense(tenantId) {
 /**
  * Create API key for tenant
  */
-function createApiKey(tenantId, keyData) {
+async function createApiKey(tenantId, keyData) {
   const apiKeyId = generateId('key');
   const apiKey = `sk_${crypto.randomBytes(32).toString('hex')}`;
   const now = new Date().toISOString();
 
-  db.run(`
+  await db.run(`
     INSERT INTO api_keys (
       id, tenant_id, api_key, key_name, description,
       rate_limit_per_minute, scopes_json, is_active, created_at, updated_at
@@ -227,8 +227,8 @@ function createApiKey(tenantId, keyData) {
 /**
  * Get API key (only first time, for security)
  */
-function getApiKey(apiKeyId) {
-  const key = db.get(`
+async function getApiKey(apiKeyId) {
+  const key = await db.get(`
     SELECT id, tenant_id, key_name, description, rate_limit_per_minute,
            scopes_json, is_active, last_used_at, created_at
     FROM api_keys WHERE id = ?
@@ -244,8 +244,8 @@ function getApiKey(apiKeyId) {
 /**
  * List API keys for tenant
  */
-function listApiKeys(tenantId) {
-  const keys = db.all(`
+async function listApiKeys(tenantId) {
+  const keys = await db.all(`
     SELECT id, tenant_id, key_name, description, rate_limit_per_minute,
            is_active, last_used_at, created_at
     FROM api_keys WHERE tenant_id = ? AND is_active = 1
@@ -258,9 +258,9 @@ function listApiKeys(tenantId) {
 /**
  * Revoke API key
  */
-function revokeApiKey(apiKeyId) {
+async function revokeApiKey(apiKeyId) {
   const now = new Date().toISOString();
-  db.run(
+  await db.run(
     'UPDATE api_keys SET is_active = 0, updated_at = ? WHERE id = ?',
     [now, apiKeyId]
   );
@@ -270,8 +270,8 @@ function revokeApiKey(apiKeyId) {
 /**
  * Validate and track API key usage
  */
-function validateApiKey(apiKey) {
-  const key = db.get(`
+async function validateApiKey(apiKey) {
+  const key = await db.get(`
     SELECT id, tenant_id, rate_limit_per_minute, is_active
     FROM api_keys WHERE api_key = ?
   `, [apiKey]);
@@ -282,7 +282,7 @@ function validateApiKey(apiKey) {
 
   // Update last used
   const now = new Date().toISOString();
-  db.run(
+  await db.run(
     'UPDATE api_keys SET last_used_at = ? WHERE id = ?',
     [now, key.id]
   );
@@ -301,12 +301,12 @@ function validateApiKey(apiKey) {
 /**
  * Subscribe to webhook event
  */
-function subscribeToWebhook(tenantId, eventType, webhookUrl) {
+async function subscribeToWebhook(tenantId, eventType, webhookUrl) {
   const webhookId = generateId('wh');
   const webhookSecret = crypto.randomBytes(32).toString('hex');
   const now = new Date().toISOString();
 
-  db.run(`
+  await db.run(`
     INSERT INTO webhook_subscriptions (
       id, tenant_id, event_type, webhook_url, webhook_secret,
       is_active, created_at, updated_at
@@ -328,7 +328,7 @@ function subscribeToWebhook(tenantId, eventType, webhookUrl) {
 /**
  * Get webhook subscription
  */
-function getWebhookSubscription(webhookId) {
+async function getWebhookSubscription(webhookId) {
   return db.get(`
     SELECT * FROM webhook_subscriptions WHERE id = ?
   `, [webhookId]);
@@ -337,7 +337,7 @@ function getWebhookSubscription(webhookId) {
 /**
  * List webhook subscriptions for tenant
  */
-function listWebhooks(tenantId, eventType = null) {
+async function listWebhooks(tenantId, eventType = null) {
   let query = 'SELECT * FROM webhook_subscriptions WHERE tenant_id = ?';
   const params = [tenantId];
 
@@ -354,7 +354,7 @@ function listWebhooks(tenantId, eventType = null) {
 /**
  * Get webhooks for event delivery
  */
-function getWebhooksForEvent(tenantId, eventType) {
+async function getWebhooksForEvent(tenantId, eventType) {
   return db.all(`
     SELECT * FROM webhook_subscriptions
     WHERE tenant_id = ? AND event_type = ? AND is_active = 1
@@ -364,11 +364,11 @@ function getWebhooksForEvent(tenantId, eventType) {
 /**
  * Queue webhook for delivery
  */
-function queueWebhook(tenantId, eventType, payload) {
+async function queueWebhook(tenantId, eventType, payload) {
   const jobId = generateId('job');
   const now = new Date().toISOString();
 
-  db.run(`
+  await db.run(`
     INSERT INTO background_jobs (
       id, tenant_id, job_type, status, priority, payload_json, created_at, updated_at
     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)

@@ -217,8 +217,20 @@ function resetPacing() {
  * @param {object} params - Query parameters
  * @param {string} accessToken - Meta access token
  * @param {number} attempt - Internal retry counter, starts at 0
+ * @param {number|null} deadlineAt - ms-epoch deadline (Force Sync Deadline
+ *   Propagation fix, FORCE_SYNC_END_TO_END_VERIFICATION_REPORT.md). Optional
+ *   and additive -- every existing call site that doesn't pass it keeps
+ *   behaving exactly as before (unlimited retries up to MAX_RETRIES/
+ *   NETWORK_MAX_RETRIES). When provided, a retry is skipped -- and the
+ *   underlying error thrown immediately instead, tagged
+ *   `error.deadlineExceeded = true` for observability -- if honoring it
+ *   would sleep past the deadline. This does NOT abort an already-in-flight
+ *   request (no AbortController -- a genuinely slow single Meta response is
+ *   still bounded only by axios's own 30s `timeout`, not this deadline);
+ *   it only stops *starting new, likely-futile* retry attempts once the
+ *   budget is essentially gone.
  */
-async function metaGet(endpoint, params = {}, accessToken, attempt = 0) {
+async function metaGet(endpoint, params = {}, accessToken, attempt = 0, deadlineAt = null) {
   const url = `${META_API_BASE}/${API_VERSION}/${endpoint}`;
 
   const delay = getAdaptiveDelayMs();
@@ -240,16 +252,26 @@ async function metaGet(endpoint, params = {}, accessToken, attempt = 0) {
     const status = err.response?.status;
     const metaError = err.response?.data?.error;
     const isRateLimited = status === 429 || (metaError && isRateLimitErrorCode(metaError.code));
+    let deadlineExceeded = false;
 
     if (isRateLimited && attempt < MAX_RETRIES) {
-      recordThrottleSignal();
       const backoff = BASE_RETRY_DELAY_MS * Math.pow(2, attempt);
-      console.warn(
-        `[Meta API] Rate limited (${status ?? 'no status'}${metaError ? `, code=${metaError.code}` : ''}) — ` +
-        `retry ${attempt + 1}/${MAX_RETRIES} in ${backoff / 1000}s...`
-      );
-      await sleep(backoff);
-      return metaGet(endpoint, params, accessToken, attempt + 1);
+      if (deadlineAt && Date.now() + backoff >= deadlineAt) {
+        deadlineExceeded = true;
+        console.warn(`[Meta API] Rate limited (${status ?? 'no status'}${metaError ? `, code=${metaError.code}` : ''}) — skipping retry, sync deadline would be exceeded before the ${backoff / 1000}s backoff completes.`);
+        // Falls through to the classified-error throw below instead of
+        // retrying -- same error shape as exhausting MAX_RETRIES, just
+        // tagged (deadlineExceeded, set above) with the real reason it
+        // actually stopped, for callers/observability that care.
+      } else {
+        recordThrottleSignal();
+        console.warn(
+          `[Meta API] Rate limited (${status ?? 'no status'}${metaError ? `, code=${metaError.code}` : ''}) — ` +
+          `retry ${attempt + 1}/${MAX_RETRIES} in ${backoff / 1000}s...`
+        );
+        await sleep(backoff);
+        return metaGet(endpoint, params, accessToken, attempt + 1, deadlineAt);
+      }
     }
 
     // Build a descriptive, classified error (Error Classification, requirement 14).
@@ -264,6 +286,7 @@ async function metaGet(endpoint, params = {}, accessToken, attempt = 0) {
       error.isAuthError = cls.isAuth;
       error.isPermissionError = cls.isPermission;
       error.isValidationError = cls.isValidation;
+      error.deadlineExceeded = deadlineExceeded;
       throw error;
     }
 
@@ -281,13 +304,16 @@ async function metaGet(endpoint, params = {}, accessToken, attempt = 0) {
     // (which will never succeed on retry), a transient network blip often
     // clears within a couple of seconds.
     if (!err.response && NETWORK_ERROR_CODES.has(err.code)) {
-      if (attempt < NETWORK_MAX_RETRIES) {
+      const netBackoff = NETWORK_RETRY_DELAY_MS * (attempt + 1);
+      const netDeadlineExceeded = !!(deadlineAt && Date.now() + netBackoff >= deadlineAt);
+      if (attempt < NETWORK_MAX_RETRIES && !netDeadlineExceeded) {
         console.warn(`[Meta API] Network error (${err.code || err.message}) — retry ${attempt + 1}/${NETWORK_MAX_RETRIES} in ${NETWORK_RETRY_DELAY_MS / 1000}s...`);
-        await sleep(NETWORK_RETRY_DELAY_MS * (attempt + 1));
-        return metaGet(endpoint, params, accessToken, attempt + 1);
+        await sleep(netBackoff);
+        return metaGet(endpoint, params, accessToken, attempt + 1, deadlineAt);
       }
       const error = new Error(err.message || 'Meta API network error');
       error.isNetworkError = true;
+      error.deadlineExceeded = netDeadlineExceeded;
       throw error;
     }
 
@@ -303,21 +329,53 @@ async function metaGet(endpoint, params = {}, accessToken, attempt = 0) {
  * part of a normal array) properties so existing callers that just treat
  * the result as a plain array keep working unchanged, while callers that
  * care can check them:
- *   .incomplete       - true if the safety limit was hit or a page fetch
- *                        failed mid-stream (i.e. this is NOT the full set)
- *   .incompleteReason - 'safety_limit' | 'page_fetch_error' | undefined
+ *   .incomplete       - true if the safety limit was hit, a page fetch
+ *                        failed mid-stream, or the sync deadline was reached
+ *                        (i.e. this is NOT the full set)
+ *   .incompleteReason - 'safety_limit' | 'page_fetch_error' |
+ *                        'deadline_exceeded' | undefined
  *
  * @param {string} endpoint
  * @param {object} params - Initial query params
  * @param {string} accessToken
+ * @param {number|null} deadlineAt - ms-epoch deadline (Force Sync Deadline
+ *   Propagation fix). Optional and additive, same as metaGet()'s own
+ *   parameter -- every existing call site that omits it keeps fetching
+ *   every page exactly as before. When provided: (1) forwarded to every
+ *   metaGet() call so a single page's own retry/backoff also respects it,
+ *   and (2) checked at the top of the pagination loop, BEFORE requesting
+ *   each additional page -- if already past the deadline, no further page
+ *   is requested; whatever was already fetched is returned, marked
+ *   incomplete/'deadline_exceeded', exactly like the existing 5000-item
+ *   safety-limit case. The first page is always requested unconditionally
+ *   (the caller needs at least some data to make progress/resume from;
+ *   see syncService.js's own top-level deadline check for the "don't even
+ *   start" case).
+ * @param {object|null} recorder - optional syncExecutionTracker.createRecorder()
+ *   instance (Phase 4, live sync observability). When provided, every real
+ *   Meta HTTP request made by this call is durably logged to
+ *   sync_live_executions/sync_live_events (metaRequestStart/metaRequestEnd)
+ *   BEFORE and immediately AFTER each request -- this is what lets a hard
+ *   Vercel platform kill still leave proof of whether Meta was actually
+ *   contacted. Purely additive/optional; omitting it changes no behavior.
  * @returns {Array} All records across all pages (see above for flags)
  */
-async function metaGetAll(endpoint, params = {}, accessToken) {
+async function metaGetAll(endpoint, params = {}, accessToken, deadlineAt = null, recorder = null) {
   const allItems = [];
   allItems.incomplete = false;
+  let page = 1;
 
   // First request
-  let response = await metaGet(endpoint, params, accessToken);
+  if (recorder) await recorder.metaRequestStart({ resource: endpoint, page });
+  const firstStartedAt = Date.now();
+  let response;
+  try {
+    response = await metaGet(endpoint, params, accessToken, 0, deadlineAt);
+  } catch (err) {
+    if (recorder) await recorder.metaRequestEnd({ resource: endpoint, page, status: err.httpStatus || null, durationMs: Date.now() - firstStartedAt, error: err.message });
+    throw err;
+  }
+  if (recorder) await recorder.metaRequestEnd({ resource: endpoint, page, status: 200, count: response.data?.length ?? null, durationMs: Date.now() - firstStartedAt });
 
   if (response.data) {
     allItems.push(...response.data);
@@ -329,10 +387,47 @@ async function metaGetAll(endpoint, params = {}, accessToken) {
   // used as the request parameter when available (cheaper than following
   // a full URL), but paging.next is the loop's actual continuation signal.
   while (response.paging?.next) {
+    // Deadline check BEFORE requesting the next page (Force Sync Deadline
+    // Propagation fix) -- this is what actually closes the gap: pagination
+    // no longer keeps requesting further pages once the sync's overall time
+    // budget is gone, instead of only finding out via a platform-level
+    // 60s kill with zero opportunity to persist/checkpoint what was already
+    // fetched.
+    if (deadlineAt && Date.now() >= deadlineAt) {
+      console.warn(`[Meta API] Sync deadline reached during pagination of ${endpoint} — stopping after ${allItems.length} item(s), not requesting further pages.`);
+      allItems.incomplete = true;
+      allItems.incompleteReason = 'deadline_exceeded';
+      break;
+    }
+
+    page++;
     const after = response.paging?.cursors?.after;
+    const pageStartedAt = Date.now();
+    if (recorder) await recorder.metaRequestStart({ resource: endpoint, page });
 
     if (after) {
-      response = await metaGet(endpoint, { ...params, after }, accessToken);
+      try {
+        response = await metaGet(endpoint, { ...params, after }, accessToken, 0, deadlineAt);
+      } catch (err) {
+        // Previously unhandled here (propagated straight out of
+        // metaGetAll) -- a deadline-driven stop must degrade gracefully to
+        // the same incomplete-but-not-thrown contract as every other stop
+        // reason in this function, not blow up the whole call chain purely
+        // because it happened to occur on the "after cursor" pagination
+        // path rather than the "next URL" one below (which already had
+        // this same graceful handling). Any OTHER error through this path
+        // still rethrows unchanged -- this only softens the specific,
+        // expected, cooperative deadline-stop case.
+        if (err.deadlineExceeded) {
+          console.warn(`[Meta API] Sync deadline reached mid-request for ${endpoint} — stopping after ${allItems.length} item(s).`);
+          if (recorder) await recorder.metaRequestEnd({ resource: endpoint, page, status: null, durationMs: Date.now() - pageStartedAt, error: 'deadline_exceeded' });
+          allItems.incomplete = true;
+          allItems.incompleteReason = 'deadline_exceeded';
+          break;
+        }
+        if (recorder) await recorder.metaRequestEnd({ resource: endpoint, page, status: err.httpStatus || null, durationMs: Date.now() - pageStartedAt, error: err.message });
+        throw err;
+      }
     } else {
       // Use next URL directly (Meta sometimes returns full next URL)
       try {
@@ -340,11 +435,14 @@ async function metaGetAll(endpoint, params = {}, accessToken) {
         response = nextResponse.data;
       } catch (err) {
         console.error('[Meta API] Pagination error:', err.message);
+        if (recorder) await recorder.metaRequestEnd({ resource: endpoint, page, status: err.response?.status || null, durationMs: Date.now() - pageStartedAt, error: err.message });
         allItems.incomplete = true;
         allItems.incompleteReason = 'page_fetch_error';
         break;
       }
     }
+
+    if (recorder) await recorder.metaRequestEnd({ resource: endpoint, page, status: 200, count: response.data?.length ?? null, durationMs: Date.now() - pageStartedAt });
 
     if (response.data) {
       allItems.push(...response.data);
@@ -384,10 +482,12 @@ function buildEffectiveStatusFilter(statuses) {
  *   to effective_status=ACTIVE only (Full Sync must pass false/omit to see
  *   paused/archived campaigns too -- never deletes what's already stored,
  *   just doesn't re-request it on an incremental pass).
+ * @param {number|null} [options.deadlineAt] - forwarded to metaGetAll()
+ *   (Force Sync Deadline Propagation fix) -- optional, additive.
  * @returns {Array} Raw campaign objects from Meta
  */
 async function fetchCampaigns(metaAccountId, accessToken, options = {}) {
-  const { activeOnly = false } = options;
+  const { activeOnly = false, deadlineAt = null, recorder = null } = options;
   console.log(`[Meta API] Fetching ${activeOnly ? 'ACTIVE ' : ''}campaigns for account ${metaAccountId}...`);
 
   const params = {
@@ -400,9 +500,9 @@ async function fetchCampaigns(metaAccountId, accessToken, options = {}) {
   };
   if (activeOnly) params.filtering = buildEffectiveStatusFilter(['ACTIVE']);
 
-  const campaigns = await metaGetAll(`${metaAccountId}/campaigns`, params, accessToken);
+  const campaigns = await metaGetAll(`${metaAccountId}/campaigns`, params, accessToken, deadlineAt, recorder);
 
-  console.log(`[Meta API] Fetched ${campaigns.length} campaigns for ${metaAccountId}`);
+  console.log(`[Meta API] Fetched ${campaigns.length} campaigns for ${metaAccountId}${campaigns.incomplete ? ` (incomplete: ${campaigns.incompleteReason})` : ''}`);
   return campaigns;
 }
 
@@ -434,7 +534,7 @@ function extractNonexistingField(message) {
  * @returns {Array} Raw ad set objects from Meta
  */
 async function fetchAdSets(metaCampaignId, accessToken, options = {}) {
-  const { activeOnly = false } = options;
+  const { activeOnly = false, deadlineAt = null, recorder = null } = options;
   const filterParam = activeOnly ? { filtering: buildEffectiveStatusFilter(['ACTIVE']) } : {};
   const baseFields = 'id,name,status,effective_status,daily_budget,lifetime_budget,created_time,updated_time,optimization_goal';
   // locales -- Language Analytics' configuration view (Phase 17).
@@ -461,7 +561,7 @@ async function fetchAdSets(metaCampaignId, accessToken, options = {}) {
       : baseFields;
 
     try {
-      return await metaGetAll(`${metaCampaignId}/adsets`, { fields, limit: 100, ...filterParam }, accessToken);
+      return await metaGetAll(`${metaCampaignId}/adsets`, { fields, limit: 100, ...filterParam }, accessToken, deadlineAt, recorder);
     } catch (err) {
       const badField = extractNonexistingField(err.message);
       if (badField && targetingFields.includes(badField)) {
@@ -474,7 +574,7 @@ async function fetchAdSets(metaCampaignId, accessToken, options = {}) {
   }
 
   // All targeting sub-fields were rejected -- fall back to base fields only.
-  return metaGetAll(`${metaCampaignId}/adsets`, { fields: baseFields, limit: 100, ...filterParam }, accessToken);
+  return metaGetAll(`${metaCampaignId}/adsets`, { fields: baseFields, limit: 100, ...filterParam }, accessToken, deadlineAt, recorder);
 }
 
 /**
@@ -488,7 +588,7 @@ async function fetchAdSets(metaCampaignId, accessToken, options = {}) {
  * @returns {Array} Raw ad objects from Meta
  */
 async function fetchAds(metaAdSetId, accessToken, options = {}) {
-  const { activeOnly = false } = options;
+  const { activeOnly = false, deadlineAt = null, recorder = null } = options;
   const params = {
     // creative{...} requests the AdCreative sub-object inline on the same
     // call -- no extra request needed for id/thumbnail_url/image_url.
@@ -504,7 +604,7 @@ async function fetchAds(metaAdSetId, accessToken, options = {}) {
   };
   if (activeOnly) params.filtering = buildEffectiveStatusFilter(['ACTIVE']);
 
-  const ads = await metaGetAll(`${metaAdSetId}/ads`, params, accessToken);
+  const ads = await metaGetAll(`${metaAdSetId}/ads`, params, accessToken, deadlineAt, recorder);
 
   return ads;
 }
@@ -630,13 +730,19 @@ async function fetchVideoDetail(videoId, accessToken) {
  *
  * @param {string} metaAccountId - e.g. act_123456
  * @param {string} accessToken
+ * @param {object} [options]
+ * @param {number|null} [options.deadlineAt] - forwarded to metaGetAll()
+ *   (Force Sync Deadline Propagation fix) -- optional, additive.
  * @returns {Array<{id:string, name:string, subtype:string|null}>}
  */
-async function fetchCustomAudiences(metaAccountId, accessToken) {
+async function fetchCustomAudiences(metaAccountId, accessToken, options = {}) {
+  const { deadlineAt = null, recorder = null } = options;
   const audiences = await metaGetAll(
     `${metaAccountId}/customaudiences`,
     { fields: 'id,name,subtype', limit: 100 },
-    accessToken
+    accessToken,
+    deadlineAt,
+    recorder
   );
   return audiences;
 }

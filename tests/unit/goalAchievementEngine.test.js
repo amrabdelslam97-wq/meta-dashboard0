@@ -37,23 +37,23 @@ describe('goalAchievementEngine.evaluateGoalAchievement', () => {
     );
   }
 
-  test('no targets configured returns has_targets:false', () => {
-    const result = evaluateGoalAchievement({ objective: 'traffic' }, {}, accountId);
+  test('no targets configured returns has_targets:false', async () => {
+    const result = await evaluateGoalAchievement({ objective: 'traffic' }, {}, accountId);
     expect(result.has_targets).toBe(false);
     expect(result.composite_status).toBeNull();
   });
 
-  test('lower-is-better target: actual below target is Exceeded', () => {
+  test('lower-is-better target: actual below target is Exceeded', async () => {
     insertTargets('messaging', { target_cpr: 10 });
-    const result = evaluateGoalAchievement({ objective: 'messaging' }, { cpr: 5 }, accountId);
+    const result = await evaluateGoalAchievement({ objective: 'messaging' }, { cpr: 5 }, accountId);
     expect(result.has_targets).toBe(true);
     expect(result.metric_results.cpr.status).toBe('Exceeded');
     expect(result.metric_results.cpr.achievement_pct).toBe(200); // 10/5*100
   });
 
-  test('higher-is-better target: actual above target is Exceeded', () => {
+  test('higher-is-better target: actual above target is Exceeded', async () => {
     insertTargets('sales', { target_roas: 2 });
-    const result = evaluateGoalAchievement({ objective: 'sales' }, { roas: 4 }, accountId);
+    const result = await evaluateGoalAchievement({ objective: 'sales' }, { roas: 4 }, accountId);
     expect(result.metric_results.roas.status).toBe('Exceeded');
     expect(result.metric_results.roas.achievement_pct).toBe(200); // 4/2*100
   });
@@ -65,33 +65,33 @@ describe('goalAchievementEngine.evaluateGoalAchievement', () => {
   // status for a campaign that's actually under-delivering impressions
   // per user, not performing well. The fix caps achievement at 100% for
   // any value at or below the ceiling.
-  test('ceiling target (frequency_max): value below the ceiling is capped at 100%, not treated as "exceeded" (T4-17)', () => {
+  test('ceiling target (frequency_max): value below the ceiling is capped at 100%, not treated as "exceeded" (T4-17)', async () => {
     insertTargets('leads', { target_frequency_max: 4.0 });
-    const result = evaluateGoalAchievement({ objective: 'leads' }, { frequency: 0.5 }, accountId);
+    const result = await evaluateGoalAchievement({ objective: 'leads' }, { frequency: 0.5 }, accountId);
     expect(result.metric_results.frequency.achievement_pct).toBe(100);
     expect(result.metric_results.frequency.status).toBe('On Track');
   });
 
-  test('ceiling target: exceeding the ceiling degrades achievement below 100%', () => {
+  test('ceiling target: exceeding the ceiling degrades achievement below 100%', async () => {
     insertTargets('awareness', { target_frequency_max: 4.0 });
-    const result = evaluateGoalAchievement({ objective: 'awareness' }, { frequency: 8.0 }, accountId);
+    const result = await evaluateGoalAchievement({ objective: 'awareness' }, { frequency: 8.0 }, accountId);
     expect(result.metric_results.frequency.achievement_pct).toBe(50); // 4/8*100
     expect(result.metric_results.frequency.status).toBe('Missed');
   });
 
-  test('missing actual metric value yields "No Data" without crashing', () => {
+  test('missing actual metric value yields "No Data" without crashing', async () => {
     insertTargets('traffic', { target_ctr: 2 });
-    const result = evaluateGoalAchievement({ objective: 'traffic' }, {}, accountId);
+    const result = await evaluateGoalAchievement({ objective: 'traffic' }, {}, accountId);
     expect(result.metric_results.ctr.status).toBe('No Data');
   });
 
-  test('composite_status is the worst status across all evaluated metrics', () => {
+  test('composite_status is the worst status across all evaluated metrics', async () => {
     // Distinct fake objective string (this table has no CHECK constraint
     // on objective) so this insert's (ad_account_id, objective,
     // effective_from) tuple doesn't collide with the 'sales' target
     // already inserted by the earlier "higher-is-better" test above.
     insertTargets('sales_composite_test', { target_roas: 4, target_cpa: 20, target_ctr: 3 });
-    const result = evaluateGoalAchievement(
+    const result = await evaluateGoalAchievement(
       { objective: 'sales_composite_test' },
       { roas: 4, cpa: 20, ctr: 0.1 }, // ctr wildly missed
       accountId

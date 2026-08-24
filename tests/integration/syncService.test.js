@@ -211,10 +211,10 @@ describe('syncService upsert functions (idempotency)', () => {
     testDb.cleanup();
   });
 
-  test('upsertCampaign updates in place on the second call instead of duplicating', () => {
+  test('upsertCampaign updates in place on the second call instead of duplicating', async () => {
     const metaCampaign = { id: 'camp_idempotent', name: 'First Name', objective: 'MESSAGES', status: 'ACTIVE' };
-    const id1 = upsertCampaign(accountId, metaCampaign);
-    const id2 = upsertCampaign(accountId, { ...metaCampaign, name: 'Updated Name' });
+    const id1 = await upsertCampaign(accountId, metaCampaign);
+    const id2 = await upsertCampaign(accountId, { ...metaCampaign, name: 'Updated Name' });
 
     expect(id1).toBe(id2);
     const rows = testDb.db.all('SELECT * FROM campaigns WHERE meta_campaign_id = ?', ['camp_idempotent']);
@@ -222,31 +222,31 @@ describe('syncService upsert functions (idempotency)', () => {
     expect(rows[0].name).toBe('Updated Name');
   });
 
-  test('upsertCampaign tracks objective_effective_from only when the objective actually changes', () => {
+  test('upsertCampaign tracks objective_effective_from only when the objective actually changes', async () => {
     const metaCampaign = { id: 'camp_objective_track', name: 'Obj Test', objective: 'MESSAGES', status: 'ACTIVE' };
-    upsertCampaign(accountId, metaCampaign);
+    await upsertCampaign(accountId, metaCampaign);
     const before = testDb.db.get('SELECT objective_effective_from FROM campaigns WHERE meta_campaign_id = ?', ['camp_objective_track']);
 
     // Same objective again -- effective_from must not change.
-    upsertCampaign(accountId, metaCampaign);
+    await upsertCampaign(accountId, metaCampaign);
     const unchanged = testDb.db.get('SELECT objective_effective_from FROM campaigns WHERE meta_campaign_id = ?', ['camp_objective_track']);
     expect(unchanged.objective_effective_from).toBe(before.objective_effective_from);
 
     // Objective changes -- effective_from must update.
-    upsertCampaign(accountId, { ...metaCampaign, objective: 'LINK_CLICKS' });
+    await upsertCampaign(accountId, { ...metaCampaign, objective: 'LINK_CLICKS' });
     const changed = testDb.db.get('SELECT objective, objective_effective_from FROM campaigns WHERE meta_campaign_id = ?', ['camp_objective_track']);
     expect(changed.objective).toBe('traffic');
     expect(changed.objective_effective_from).not.toBe(before.objective_effective_from);
   });
 
-  test('upsertAdSet and upsertAd are also idempotent by their Meta ID', () => {
-    const campaignId = upsertCampaign(accountId, { id: 'camp_for_adset', name: 'Parent', objective: 'MESSAGES', status: 'ACTIVE' });
-    const adSetId1 = upsertAdSet(accountId, campaignId, { id: 'adset_idempotent', name: 'AS1', status: 'ACTIVE' });
-    const adSetId2 = upsertAdSet(accountId, campaignId, { id: 'adset_idempotent', name: 'AS1 renamed', status: 'PAUSED' });
+  test('upsertAdSet and upsertAd are also idempotent by their Meta ID', async () => {
+    const campaignId = await upsertCampaign(accountId, { id: 'camp_for_adset', name: 'Parent', objective: 'MESSAGES', status: 'ACTIVE' });
+    const adSetId1 = await upsertAdSet(accountId, campaignId, { id: 'adset_idempotent', name: 'AS1', status: 'ACTIVE' });
+    const adSetId2 = await upsertAdSet(accountId, campaignId, { id: 'adset_idempotent', name: 'AS1 renamed', status: 'PAUSED' });
     expect(adSetId1).toBe(adSetId2);
 
-    const adId1 = upsertAd(accountId, campaignId, adSetId1, { id: 'ad_idempotent', name: 'Ad1', status: 'ACTIVE' });
-    const adId2 = upsertAd(accountId, campaignId, adSetId1, { id: 'ad_idempotent', name: 'Ad1 renamed', status: 'PAUSED' });
+    const adId1 = await upsertAd(accountId, campaignId, adSetId1, { id: 'ad_idempotent', name: 'Ad1', status: 'ACTIVE' });
+    const adId2 = await upsertAd(accountId, campaignId, adSetId1, { id: 'ad_idempotent', name: 'Ad1 renamed', status: 'PAUSED' });
     expect(adId1).toBe(adId2);
 
     const adSetRows = testDb.db.all('SELECT * FROM ad_sets WHERE meta_adset_id = ?', ['adset_idempotent']);
@@ -262,21 +262,21 @@ describe('syncService upsert functions (idempotency)', () => {
   // the field the Video Views KPI sub-profile and the Optimization Goal
   // filter depend on, and it's easy to silently drop if only the INSERT
   // branch is updated and the UPDATE branch is missed (or vice versa).
-  test('upsertAdSet persists optimization_goal on both insert and update', () => {
-    const campaignId = upsertCampaign(accountId, { id: 'camp_for_optgoal', name: 'Parent', objective: 'MESSAGES', status: 'ACTIVE' });
+  test('upsertAdSet persists optimization_goal on both insert and update', async () => {
+    const campaignId = await upsertCampaign(accountId, { id: 'camp_for_optgoal', name: 'Parent', objective: 'MESSAGES', status: 'ACTIVE' });
 
-    upsertAdSet(accountId, campaignId, { id: 'adset_optgoal', name: 'Video AdSet', status: 'ACTIVE', optimization_goal: 'THRUPLAY' });
+    await upsertAdSet(accountId, campaignId, { id: 'adset_optgoal', name: 'Video AdSet', status: 'ACTIVE', optimization_goal: 'THRUPLAY' });
     const inserted = testDb.db.get('SELECT optimization_goal FROM ad_sets WHERE meta_adset_id = ?', ['adset_optgoal']);
     expect(inserted.optimization_goal).toBe('THRUPLAY');
 
-    upsertAdSet(accountId, campaignId, { id: 'adset_optgoal', name: 'Video AdSet', status: 'ACTIVE', optimization_goal: 'REACH' });
+    await upsertAdSet(accountId, campaignId, { id: 'adset_optgoal', name: 'Video AdSet', status: 'ACTIVE', optimization_goal: 'REACH' });
     const updated = testDb.db.get('SELECT optimization_goal FROM ad_sets WHERE meta_adset_id = ?', ['adset_optgoal']);
     expect(updated.optimization_goal).toBe('REACH');
   });
 
-  test('upsertAdSet stores NULL optimization_goal when Meta does not return one, without throwing', () => {
-    const campaignId = upsertCampaign(accountId, { id: 'camp_for_no_optgoal', name: 'Parent', objective: 'MESSAGES', status: 'ACTIVE' });
-    expect(() => upsertAdSet(accountId, campaignId, { id: 'adset_no_optgoal', name: 'No OptGoal', status: 'ACTIVE' })).not.toThrow();
+  test('upsertAdSet stores NULL optimization_goal when Meta does not return one, without throwing', async () => {
+    const campaignId = await upsertCampaign(accountId, { id: 'camp_for_no_optgoal', name: 'Parent', objective: 'MESSAGES', status: 'ACTIVE' });
+    await expect(upsertAdSet(accountId, campaignId, { id: 'adset_no_optgoal', name: 'No OptGoal', status: 'ACTIVE' })).resolves.not.toThrow();
     const row = testDb.db.get('SELECT optimization_goal FROM ad_sets WHERE meta_adset_id = ?', ['adset_no_optgoal']);
     expect(row.optimization_goal).toBeNull();
   });

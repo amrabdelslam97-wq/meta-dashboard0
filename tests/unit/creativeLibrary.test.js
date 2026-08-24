@@ -90,21 +90,21 @@ describe('creativeLibrary', () => {
   });
 
   describe('getCreativeTimeline', () => {
-    test('returns no_data for an ad with zero snapshots', () => {
-      expect(getCreativeTimeline('nonexistent_ad')).toEqual({ status: 'no_data', events: [], snapshots: [] });
+    test('returns no_data for an ad with zero snapshots', async () => {
+      expect(await getCreativeTimeline('nonexistent_ad')).toEqual({ status: 'no_data', events: [], snapshots: [] });
     });
 
-    test('returns insufficient_data (launch only) for a single snapshot', () => {
+    test('returns insufficient_data (launch only) for a single snapshot', async () => {
       const adId = 'ad_timeline_single';
       insertAd(adId);
       insertSnapshot({ metaAdId: adId, since: '2026-01-01', until: '2026-01-07', scoreOverall: 70 });
 
-      const result = getCreativeTimeline(adId);
+      const result = await getCreativeTimeline(adId);
       expect(result.status).toBe('insufficient_data');
       expect(result.events).toEqual([{ type: 'launch', date: '2026-01-01', score_overall: 70, fatigue_status: 'none' }]);
     });
 
-    test('detects launch, peak, decline, fatigue, recovery, and a content change across a realistic multi-period history', () => {
+    test('detects launch, peak, decline, fatigue, recovery, and a content change across a realistic multi-period history', async () => {
       const adId = 'ad_timeline_full';
       insertAd(adId);
       insertSnapshot({ metaAdId: adId, since: '2026-01-01', until: '2026-01-07', scoreOverall: 60, headline: 'Original Headline' });
@@ -112,7 +112,7 @@ describe('creativeLibrary', () => {
       insertSnapshot({ metaAdId: adId, since: '2026-01-15', until: '2026-01-21', scoreOverall: 60, fatigueStatus: 'moderate', fatigueRecommendation: 'refresh', headline: 'Original Headline' }); // decline (85->60 = 29% drop) + fatigue
       insertSnapshot({ metaAdId: adId, since: '2026-01-22', until: '2026-01-28', scoreOverall: 82, fatigueStatus: 'none', headline: 'Refreshed Headline' }); // recovery + content change
 
-      const result = getCreativeTimeline(adId);
+      const result = await getCreativeTimeline(adId);
       expect(result.status).toBe('ok');
       const types = result.events.map(e => e.type);
       expect(types).toEqual(expect.arrayContaining(['launch', 'peak', 'decline', 'fatigue', 'recovery', 'change']));
@@ -133,43 +133,43 @@ describe('creativeLibrary', () => {
   });
 
   describe('searchCreativeLibrary', () => {
-    test('filters by campaign, score range, and search text; flags winner/loser within the ad set', () => {
+    test('filters by campaign, score range, and search text; flags winner/loser within the ad set', async () => {
       insertAd('ad_search_winner', 'Winner Ad');
       insertAd('ad_search_loser', 'Loser Ad');
       insertSnapshot({ metaAdId: 'ad_search_winner', since: '2026-02-01', until: '2026-02-07', scoreOverall: 90, headline: 'Great Deal Today' });
       insertSnapshot({ metaAdId: 'ad_search_loser', since: '2026-02-01', until: '2026-02-07', scoreOverall: 30, headline: 'Buy Stuff' });
 
-      const result = searchCreativeLibrary({ campaign_id: 'camp_lib_1', date_since: '2026-02-01', date_until: '2026-02-07' });
+      const result = await searchCreativeLibrary({ campaign_id: 'camp_lib_1', date_since: '2026-02-01', date_until: '2026-02-07' });
       expect(result.creatives.length).toBe(2);
       const winner = result.creatives.find(c => c.meta_ad_id === 'ad_search_winner');
       const loser = result.creatives.find(c => c.meta_ad_id === 'ad_search_loser');
       expect(winner.library_role).toBe('winner');
       expect(loser.library_role).toBe('loser');
 
-      const searched = searchCreativeLibrary({ campaign_id: 'camp_lib_1', date_since: '2026-02-01', date_until: '2026-02-07', search: 'Great Deal' });
+      const searched = await searchCreativeLibrary({ campaign_id: 'camp_lib_1', date_since: '2026-02-01', date_until: '2026-02-07', search: 'Great Deal' });
       expect(searched.creatives.map(c => c.meta_ad_id)).toEqual(['ad_search_winner']);
 
-      const scored = searchCreativeLibrary({ campaign_id: 'camp_lib_1', date_since: '2026-02-01', date_until: '2026-02-07', min_score: 50 });
+      const scored = await searchCreativeLibrary({ campaign_id: 'camp_lib_1', date_since: '2026-02-01', date_until: '2026-02-07', min_score: 50 });
       expect(scored.creatives.map(c => c.meta_ad_id)).toEqual(['ad_search_winner']);
 
-      const winnersOnly = searchCreativeLibrary({ campaign_id: 'camp_lib_1', date_since: '2026-02-01', date_until: '2026-02-07', is_winner: true });
+      const winnersOnly = await searchCreativeLibrary({ campaign_id: 'camp_lib_1', date_since: '2026-02-01', date_until: '2026-02-07', is_winner: true });
       expect(winnersOnly.creatives.map(c => c.meta_ad_id)).toEqual(['ad_search_winner']);
     });
 
-    test('honestly reports the language filter as unsupported instead of silently ignoring or fabricating it', () => {
-      const result = searchCreativeLibrary({ campaign_id: 'camp_lib_1', date_since: '2026-02-01', date_until: '2026-02-07', language: 'en' });
+    test('honestly reports the language filter as unsupported instead of silently ignoring or fabricating it', async () => {
+      const result = await searchCreativeLibrary({ campaign_id: 'camp_lib_1', date_since: '2026-02-01', date_until: '2026-02-07', language: 'en' });
       expect(result.warnings.some(w => w.includes('language'))).toBe(true);
     });
   });
 
   describe('getAdSetComparison', () => {
-    test('ranks the ad set\'s creatives for the given date range using creativeIntelligenceEngine.compareCreativesInAdSet', () => {
+    test('ranks the ad set\'s creatives for the given date range using creativeIntelligenceEngine.compareCreativesInAdSet', async () => {
       insertAd('ad_comp_winner', 'Comparison Winner');
       insertAd('ad_comp_loser', 'Comparison Loser');
       insertSnapshot({ metaAdId: 'ad_comp_winner', since: '2026-04-01', until: '2026-04-07', scoreOverall: 92 });
       insertSnapshot({ metaAdId: 'ad_comp_loser', since: '2026-04-01', until: '2026-04-07', scoreOverall: 20 });
 
-      const result = getAdSetComparison('adset_lib_1', { since: '2026-04-01', until: '2026-04-07' });
+      const result = await getAdSetComparison('adset_lib_1', { since: '2026-04-01', until: '2026-04-07' });
       expect(result.winner.meta_ad_id).toBe('ad_comp_winner');
       expect(result.worst.meta_ad_id).toBe('ad_comp_loser');
       expect(result.ranking.length).toBeGreaterThanOrEqual(2);
@@ -323,13 +323,13 @@ describe('creativeLibrary', () => {
   });
 
   describe('getAccountBestWorstCreative (Phase 44, Task 5)', () => {
-    test('reports insufficient_data (null best/worst) honestly for an account with no scored creatives', () => {
-      const result = getAccountBestWorstCreative(uuidv4(), 'no-such-ad');
+    test('reports insufficient_data (null best/worst) honestly for an account with no scored creatives', async () => {
+      const result = await getAccountBestWorstCreative(uuidv4(), 'no-such-ad');
       expect(result.best).toBeNull();
       expect(result.worst).toBeNull();
     });
 
-    test('identifies the real best/worst scored creative, excluding the given ad', () => {
+    test('identifies the real best/worst scored creative, excluding the given ad', async () => {
       // Isolated account (not the shared fixture accountId other describe
       // blocks in this file also write to) so this test's expectations
       // don't depend on how many other creatives happen to be in the DB.
@@ -350,20 +350,20 @@ describe('creativeLibrary', () => {
       insertBw('ad_bw_2', 15);
       insertBw('ad_bw_3', 90);
 
-      const result = getAccountBestWorstCreative(bwAccountId, 'ad_bw_1');
+      const result = await getAccountBestWorstCreative(bwAccountId, 'ad_bw_1');
       expect(result.best.meta_ad_id).toBe('ad_bw_3');
       expect(result.worst.meta_ad_id).toBe('ad_bw_2');
     });
   });
 
   describe('getCrossModuleSignals (Phase 45, Task 13)', () => {
-    test('reports both signals as null honestly when neither table has a row for this campaign', () => {
-      const result = getCrossModuleSignals(accountId, 'camp_with_no_intelligence_data');
+    test('reports both signals as null honestly when neither table has a row for this campaign', async () => {
+      const result = await getCrossModuleSignals(accountId, 'camp_with_no_intelligence_data');
       expect(result.budget).toBeNull();
       expect(result.audience).toBeNull();
     });
 
-    test('reads a real budget-waste flag and a real averaged audience-saturation score', () => {
+    test('reads a real budget-waste flag and a real averaged audience-saturation score', async () => {
       testDb.db.run(
         `INSERT INTO budget_analysis_history (id, ad_account_id, level, entity_meta_id, date_since, date_until, waste_detected, waste_amount, efficiency_status, calculated_at)
          VALUES (?,?,?,?,?,?,?,?,?,datetime('now'))`,
@@ -375,7 +375,7 @@ describe('creativeLibrary', () => {
         [uuidv4(), accountId, 'camp_lib_1', 'age', '25-34', '2026-04-01', '2026-04-07', 80]
       );
 
-      const result = getCrossModuleSignals(accountId, 'camp_lib_1');
+      const result = await getCrossModuleSignals(accountId, 'camp_lib_1');
       expect(result.budget).toEqual({ waste_detected: true, waste_amount: 42.5, efficiency_status: 'poor' });
       expect(result.audience.saturation_score).toBe(80);
     });

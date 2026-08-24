@@ -43,8 +43,8 @@ const PLATFORM_MAPPING = {
 /**
  * Get platform-level performance aggregation.
  */
-function getPlatformPerformance(metaCampaignId, dateRange = defaultRange()) {
-  const rows = db.all(
+async function getPlatformPerformance(metaCampaignId, dateRange = defaultRange()) {
+  const rows = await db.all(
     `SELECT * FROM analytics_breakdown_history
      WHERE meta_campaign_id = ? AND breakdown_type = 'placement'
      AND date_since = ? AND date_until = ?`,
@@ -123,8 +123,8 @@ function getPlatformPerformance(metaCampaignId, dateRange = defaultRange()) {
 /**
  * Get messaging-specific platform analysis.
  */
-function getMessagingPlatformAnalysis(metaCampaignId, dateRange = defaultRange()) {
-  const platformPerf = getPlatformPerformance(metaCampaignId, dateRange);
+async function getMessagingPlatformAnalysis(metaCampaignId, dateRange = defaultRange()) {
+  const platformPerf = await getPlatformPerformance(metaCampaignId, dateRange);
 
   // Filter to messaging-capable platforms
   const messagingPlatforms = platformPerf.platforms.filter(p =>
@@ -165,9 +165,9 @@ function getMessagingPlatformAnalysis(metaCampaignId, dateRange = defaultRange()
 /**
  * Generate platform-level recommendations.
  */
-function generatePlatformRecommendations(metaCampaignId, dateRange = defaultRange()) {
-  const platformPerf = getPlatformPerformance(metaCampaignId, dateRange);
-  const messagingPerf = getMessagingPlatformAnalysis(metaCampaignId, dateRange);
+async function generatePlatformRecommendations(metaCampaignId, dateRange = defaultRange()) {
+  const platformPerf = await getPlatformPerformance(metaCampaignId, dateRange);
+  const messagingPerf = await getMessagingPlatformAnalysis(metaCampaignId, dateRange);
 
   const recommendations = [];
 

@@ -108,8 +108,8 @@ function buildPatterns(winnerPct, loserPct) {
 // PHASE 12 — Account Learning
 // ─────────────────────────────────────────────
 
-function getAccountCreativeLearning(accountId) {
-  const rows = db.all(
+async function getAccountCreativeLearning(accountId) {
+  const rows = await db.all(
     `SELECT ca.* FROM creative_analytics ca
      INNER JOIN (
        SELECT meta_ad_id, MAX(date_until) as max_until FROM creative_analytics
@@ -164,15 +164,15 @@ function classifyDominantMessage(analysis, ctaType) {
   return 'General branding (no distinct persuasion pattern detected)';
 }
 
-function resolveCampaignMetaId(idOrMetaId) {
-  const row = db.get('SELECT meta_campaign_id FROM campaigns WHERE id = ? OR meta_campaign_id = ?', [idOrMetaId, idOrMetaId]);
+async function resolveCampaignMetaId(idOrMetaId) {
+  const row = await db.get('SELECT meta_campaign_id FROM campaigns WHERE id = ? OR meta_campaign_id = ?', [idOrMetaId, idOrMetaId]);
   return row?.meta_campaign_id || idOrMetaId;
 }
 
-function getCampaignCreativeLearning(campaignId) {
-  const metaCampaignId = resolveCampaignMetaId(campaignId);
+async function getCampaignCreativeLearning(campaignId) {
+  const metaCampaignId = await resolveCampaignMetaId(campaignId);
 
-  const rows = db.all(
+  const rows = await db.all(
     `SELECT ca.*, a.name as ad_name FROM creative_analytics ca
      LEFT JOIN ads a ON a.meta_ad_id = ca.meta_ad_id
      INNER JOIN (

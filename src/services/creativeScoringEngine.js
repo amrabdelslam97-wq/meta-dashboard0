@@ -35,8 +35,8 @@ function classifyScoreStatus(score) {
  * creativeIntelligenceEngine.js's computeCreativeScore()) for a single ad,
  * reshaped into this route family's existing response envelope.
  */
-function calculateCreativeScore(metaAdId) {
-  const analytics = db.get(
+async function calculateCreativeScore(metaAdId) {
+  const analytics = await db.get(
     `SELECT * FROM creative_analytics
      WHERE meta_ad_id = ?
      ORDER BY date_until DESC LIMIT 1`,
@@ -98,15 +98,18 @@ function calculateCreativeScore(metaAdId) {
 /**
  * Score all creatives for a campaign.
  */
-function scoreCreativesByCampaign(metaCampaignId, limit = 50) {
-  const ads = db.all(
+async function scoreCreativesByCampaign(metaCampaignId, limit = 50) {
+  const ads = await db.all(
     `SELECT a.meta_ad_id FROM ads a
      WHERE a.campaign_id = (SELECT id FROM campaigns WHERE meta_campaign_id = ?)
      LIMIT ?`,
     [metaCampaignId, limit]
   );
 
-  const scores = ads.map(ad => calculateCreativeScore(ad.meta_ad_id));
+  // Promise.all is safe here: each ad's calculateCreativeScore() read is
+  // independent (own meta_ad_id, no shared mutable state), and Promise.all
+  // preserves the same output order as the .map() it replaces.
+  const scores = await Promise.all(ads.map(ad => calculateCreativeScore(ad.meta_ad_id)));
 
   // Rank creatives
   const ranked = [...scores].filter(s => s.score !== null).sort((a, b) => b.score - a.score);

@@ -119,7 +119,7 @@ describe('budgetDistributionAnalytics', () => {
       expect(syncResult.campaignsProcessed).toBe(2);
       expect(syncResult.errors).toEqual([]);
 
-      const read = budgetAnalytics.getBudgetDistribution(account.id, range);
+      const read = await budgetAnalytics.getBudgetDistribution(account.id, range);
       expect(read.campaigns.length).toBe(2);
       expect(read.account_totals.spend_amount).toBe(100); // 80 + 20
       const camp1 = read.campaigns.find(c => c.entity_meta_id === 'camp_budget_1');

@@ -67,14 +67,14 @@ describe('advisorLearningEngine', () => {
   });
 
   describe('getAccountCreativeLearning', () => {
-    test('reports insufficient_data honestly below the minimum sample size', () => {
-      const result = getAccountCreativeLearning('non-existent-account-id');
+    test('reports insufficient_data honestly below the minimum sample size', async () => {
+      const result = await getAccountCreativeLearning('non-existent-account-id');
       expect(result.status).toBe('insufficient_data');
       expect(result.sample_size).toBe(0);
     });
 
-    test('detects a real winning pattern (social proof / urgency / strong CTA) with an honest evidence gap', () => {
-      const result = getAccountCreativeLearning(accountId);
+    test('detects a real winning pattern (social proof / urgency / strong CTA) with an honest evidence gap', async () => {
+      const result = await getAccountCreativeLearning(accountId);
       expect(result.status).toBe('ok');
       expect(result.sample_size.total).toBe(6);
       expect(result.winning_patterns.length).toBeGreaterThan(0);
@@ -86,8 +86,8 @@ describe('advisorLearningEngine', () => {
   });
 
   describe('getCampaignCreativeLearning', () => {
-    test('identifies the most successful and weakest message with a real category label', () => {
-      const result = getCampaignCreativeLearning(campaignId);
+    test('identifies the most successful and weakest message with a real category label', async () => {
+      const result = await getCampaignCreativeLearning(campaignId);
       expect(result.status).toBe('ok');
       expect(result.most_successful_message).toBeTruthy();
       expect(result.weakest_message).toBeTruthy();
@@ -95,8 +95,8 @@ describe('advisorLearningEngine', () => {
       expect(typeof result.most_successful_message.message_category).toBe('string');
     });
 
-    test('reports insufficient_data for an unknown campaign', () => {
-      const result = getCampaignCreativeLearning('camp_does_not_exist');
+    test('reports insufficient_data for an unknown campaign', async () => {
+      const result = await getCampaignCreativeLearning('camp_does_not_exist');
       expect(result.status).toBe('insufficient_data');
     });
   });

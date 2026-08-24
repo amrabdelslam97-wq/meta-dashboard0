@@ -30,11 +30,11 @@ const { ensureMigrationsTable, markMigrationApplied } = require('./migrationTrac
 
 const MIGRATION_NAME = 'phase20_messaging_destination_and_language_targeting';
 
-function addColumnIfMissing(table, column, type) {
-  const existingCols = db.all(`PRAGMA table_info(${table})`).map(c => c.name);
+async function addColumnIfMissing(table, column, type) {
+  const existingCols = (await db.all(`PRAGMA table_info(${table})`)).map(c => c.name);
   if (existingCols.includes(column)) return false;
   try {
-    db.run(`ALTER TABLE ${table} ADD COLUMN ${column} ${type}`);
+    await db.run(`ALTER TABLE ${table} ADD COLUMN ${column} ${type}`);
     return true;
   } catch (err) {
     console.warn(`[DB] Phase 20: could not add ${table}.${column}:`, err.message);
@@ -42,18 +42,18 @@ function addColumnIfMissing(table, column, type) {
   }
 }
 
-function runPhase20Migrations() {
-  ensureMigrationsTable();
+async function runPhase20Migrations() {
+  await ensureMigrationsTable();
 
   let added = 0;
-  if (addColumnIfMissing('ads', 'destination_type', 'TEXT')) added++;
-  if (addColumnIfMissing('creative_analytics', 'destination_type', 'TEXT')) added++;
-  if (addColumnIfMissing('ad_sets', 'targeting_locales', 'TEXT')) added++;
+  if (await addColumnIfMissing('ads', 'destination_type', 'TEXT')) added++;
+  if (await addColumnIfMissing('creative_analytics', 'destination_type', 'TEXT')) added++;
+  if (await addColumnIfMissing('ad_sets', 'targeting_locales', 'TEXT')) added++;
 
-  markMigrationApplied(MIGRATION_NAME);
+  await markMigrationApplied(MIGRATION_NAME);
 
   if (added > 0) {
-    db.persist();
+    await db.persist();
     console.log(`[DB] Phase 20 migration complete — added ${added} column(s).`);
   } else {
     console.log('[DB] Phase 20 schema: columns already present, skipping.');

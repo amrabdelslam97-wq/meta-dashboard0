@@ -57,7 +57,7 @@ async function syncAccountLanguageAttribution(account, dateRange = defaultRange(
   const accessToken = decryptToken(account.access_token_encrypted);
   const summary = { campaignsProcessed: 0, apiCalls: 0, errors: [] };
 
-  const adSets = db.all(
+  const adSets = await db.all(
     `SELECT s.meta_adset_id, s.targeting_json, c.meta_campaign_id
      FROM ad_sets s JOIN campaigns c ON c.id = s.campaign_id
      WHERE s.ad_account_id = ? AND s.status = 'active'`,
@@ -138,7 +138,7 @@ async function syncAccountLanguageAttribution(account, dateRange = defaultRange(
 
     const totalSpend = [...byLocaleForCampaign.values()].reduce((s, a) => s + a.spend, 0);
 
-    db.transaction(tx => {
+    await db.transaction(tx => {
       for (const [locale, agg] of byLocaleForCampaign) {
         const ctr = agg.impressions > 0 ? round((agg.clicks / agg.impressions) * 100, 4) : null;
         const roas = agg.spend > 0 && agg.purchase_value > 0 ? round(agg.purchase_value / agg.spend, 2) : null;
@@ -166,8 +166,8 @@ async function syncAccountLanguageAttribution(account, dateRange = defaultRange(
  * Read side: get language performance for a campaign. Shows which languages
  * had the best ROAS/CPA and which received the most budget.
  */
-function getLanguageAttribution(metaCampaignId, dateRange = defaultRange()) {
-  const rows = db.all(
+async function getLanguageAttribution(metaCampaignId, dateRange = defaultRange()) {
+  const rows = await db.all(
     `SELECT * FROM language_performance_attribution
      WHERE meta_campaign_id = ? AND date_since = ? AND date_until = ?
      ORDER BY spend DESC`,

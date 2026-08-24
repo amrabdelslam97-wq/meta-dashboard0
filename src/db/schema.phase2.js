@@ -246,8 +246,8 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_active_alerts_dedup
 
 `;
 
-function runPhase2Migrations() {
-  ensureMigrationsTable();
+async function runPhase2Migrations() {
+  await ensureMigrationsTable();
   console.log('[DB] Running Phase 2 schema migrations...');
 
   const statements = PHASE2_SCHEMA
@@ -256,10 +256,10 @@ function runPhase2Migrations() {
     .filter(s => s.length > 0);
 
   for (const statement of statements) {
-    db.run(statement + ';');
+    await db.run(statement + ';');
   }
 
-  markMigrationApplied(MIGRATION_NAME);
+  await markMigrationApplied(MIGRATION_NAME);
   console.log('[DB] Phase 2 schema complete.');
 }
 

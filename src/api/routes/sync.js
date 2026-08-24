@@ -12,7 +12,93 @@ const cache = require('../../services/cacheService');
 const { syncAccount, syncAllAccounts } = require('../../services/syncService');
 const smartSyncEngine = require('../../services/smartSyncEngine');
 const autoSyncScheduler = require('../../services/autoSyncScheduler');
+const executionTracker = require('../../services/syncExecutionTracker');
 const { asyncHandler } = require('../../middleware/errorHandler');
+
+// Time-Budget Guard (AP-POS Sync Architecture Audit): vercel.json caps every
+// function invocation -- including /api/cron/sync -- at maxDuration=60s.
+// Without an elapsed-time check, enough active accounts in the loop below
+// could silently exceed that ceiling: the platform kills the invocation
+// mid-loop, the response never returns, and whichever accounts hadn't been
+// reached yet simply never ran that day (not deferred -- skipped, with no
+// record of why). DEFAULT_CRON_TIME_BUDGET_MS=50s leaves ~10s of headroom
+// for this invocation's own overhead (request routing, response
+// serialization) within the 60s ceiling. Configurable via env for the same
+// reason SYNC_TIME_BUDGET_MS (syncService.js) is -- do not guess a value
+// that outlives vercel.json's own maxDuration if that ever changes.
+const DEFAULT_CRON_TIME_BUDGET_MS = 50_000;
+
+function getCronTimeBudgetMs() {
+  const parsed = parseInt(process.env.CRON_TIME_BUDGET_MS, 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_CRON_TIME_BUDGET_MS;
+}
+
+/**
+ * Shared by POST /sync/refresh-active and the Vercel Cron trigger route
+ * (src/api/routes/cron.js) so the "refresh every active, token-valid
+ * account" orchestration exists in exactly one place — the cron route
+ * calls this directly rather than re-implementing it, per the migration
+ * mission's explicit "do not duplicate synchronization logic" rule. The
+ * actual sync work (Meta API calls, DB writes, the DB-backed per-account
+ * in-flight guard) all still lives in smartSyncEngine.forceSyncActiveAccount(),
+ * unchanged.
+ *
+ * @param {'force_active'|'cron'} source - forwarded to
+ *   smartSyncEngine.forceSyncActiveAccount() unchanged. Defaults to
+ *   'force_active' (the manual "Refresh Active Data" button's existing,
+ *   unchanged behavior: bypasses cadence, always active-only). cron.js
+ *   passes 'cron' instead -- the genuinely-automatic recurring trigger,
+ *   which respects each tier's own due-check instead of bypassing cadence,
+ *   and stays FULL (not active-only) until the account's initial hierarchy
+ *   sweep completes -- see smartSyncEngine.runDueForAccount()'s doc comment.
+ */
+async function refreshAllActiveAccounts(source = 'force_active') {
+  // Stalest-synced-first -- same priority shape as autoSyncScheduler.js's
+  // runDueAccountsCycle (never-synced accounts first, then accounts with
+  // active campaigns, oldest-synced first). Matters now that this loop can
+  // be time-budget-truncated (below): an unordered scan would let the same
+  // early accounts monopolize every cron tick while later ones never get a
+  // turn; this ordering guarantees whichever accounts get deferred today
+  // are exactly the ones prioritized on the next tick.
+  const accounts = await db.all(
+    `SELECT * FROM ad_accounts
+     WHERE status = 'active' AND token_is_valid = 1
+     ORDER BY
+       last_sync_completed_at IS NOT NULL,
+       (SELECT COUNT(*) FROM campaigns c WHERE c.ad_account_id = ad_accounts.id AND c.status = 'active') = 0,
+       last_sync_completed_at ASC`
+  );
+
+  const timeBudgetMs = getCronTimeBudgetMs();
+  const loopStartedAt = Date.now();
+  const results = [];
+
+  for (const account of accounts) {
+    if (Date.now() - loopStartedAt >= timeBudgetMs) {
+      console.warn(`[Sync] Time budget (${timeBudgetMs}ms) reached — ${accounts.length - results.length} account(s) deferred to next cycle.`);
+      break;
+    }
+
+    // One account's uncaught throw (e.g. decryptToken() failing on a
+    // corrupted/rotated-key token -- see tokenCrypto.js) must not abort
+    // every account still queued behind it in this same cron run.
+    // syncService.js's syncAccount() already guards against this exact
+    // failure per-account (see its "Automatic Recovery" comment); this
+    // loop had no equivalent guard, even though it's the one Vercel Cron
+    // actually invokes (see this function's own header comment).
+    try {
+      results.push(await smartSyncEngine.forceSyncActiveAccount(account, source));
+    } catch (err) {
+      console.error(`[Cron] Sync threw for account ${account.meta_account_id}:`, err.message);
+      results.push({
+        accountId: account.id, metaAccountId: account.meta_account_id,
+        campaigns: { synced: 0, errors: 1 }, adSets: { synced: 0, errors: 0 }, ads: { synced: 0, errors: 0 },
+        errors: [{ level: 'account', message: err.message }], warnings: [],
+      });
+    }
+  }
+  return { accounts_synced: results.length, results };
+}
 
 /**
  * POST /sync
@@ -35,7 +121,7 @@ router.post(
 
     if (account_id) {
       // Sync a specific account
-      const account = db.get(
+      const account = await db.get(
         "SELECT * FROM ad_accounts WHERE id = ? AND status = 'active' AND token_is_valid = 1",
         [account_id]
       );
@@ -48,16 +134,39 @@ router.post(
       }
 
       let result;
-      if (sync_ad_sets === false || sync_ads === false) {
-        // Explicit partial sync requested — bypass smartSyncEngine's
-        // all-tiers Force Sync and call syncService directly, same as before.
-        result = await syncAccount(account, { syncAdSets: sync_ad_sets, syncAds: sync_ads });
-      } else {
-        result = await smartSyncEngine.forceSyncAccount(account);
+      try {
+        if (sync_ad_sets === false || sync_ads === false) {
+          // Explicit partial sync requested — bypass smartSyncEngine's
+          // all-tiers Force Sync and call syncService directly, same as before.
+          result = await syncAccount(account, { syncAdSets: sync_ad_sets, syncAds: sync_ads });
+        } else {
+          result = await smartSyncEngine.forceSyncAccount(account);
+        }
+      } catch (err) {
+        // Structured Force Sync API (AUTONOMOUS META SYNC RECOVERY mission,
+        // Phase 13): a rate-limit/tier-level throw from forceSyncAccount()
+        // previously fell straight through to errorHandler.js's generic
+        // 500 ("Internal server error") -- the actual, already-recorded
+        // (sync_live_executions) reason was discarded. Caught here instead
+        // so the response reflects the real outcome.
+        return res.status(200).json({
+          success: false,
+          executionId: err.executionId || null,
+          account_id,
+          status: err.isRateLimit ? 'partial' : 'failed',
+          partialReason: err.isRateLimit ? 'rate_limited' : null,
+          errorCode: err.isRateLimit ? 'RATE_LIMITED' : 'TIER_ERROR',
+          message: err.message,
+        });
       }
 
       return res.json({
-        success: true,
+        success: result.status !== 'failed',
+        executionId: result.executionId || null,
+        account_id,
+        status: result.status || (result.errors?.length ? 'failed' : 'completed'),
+        partialReason: result.partialReason || null,
+        errorCode: result.errorCode || null,
         results: [result],
       });
     }
@@ -93,7 +202,7 @@ router.post('/refresh-active', asyncHandler(async (req, res) => {
   const { account_id } = req.body || {};
 
   if (account_id) {
-    const account = db.get(
+    const account = await db.get(
       "SELECT * FROM ad_accounts WHERE id = ? AND status = 'active' AND token_is_valid = 1",
       [account_id]
     );
@@ -104,12 +213,8 @@ router.post('/refresh-active', asyncHandler(async (req, res) => {
     return res.json({ success: true, mode: 'refresh_active', results: [result] });
   }
 
-  const accounts = db.all("SELECT * FROM ad_accounts WHERE status = 'active' AND token_is_valid = 1");
-  const results = [];
-  for (const account of accounts) {
-    results.push(await smartSyncEngine.forceSyncActiveAccount(account));
-  }
-  return res.json({ success: true, mode: 'refresh_active', accounts_synced: results.length, results });
+  const { accounts_synced, results } = await refreshAllActiveAccounts();
+  return res.json({ success: true, mode: 'refresh_active', accounts_synced, results });
 }));
 
 /**
@@ -131,7 +236,7 @@ router.post('/full', asyncHandler(async (req, res) => {
   const { account_id } = req.body || {};
 
   if (account_id) {
-    const account = db.get(
+    const account = await db.get(
       "SELECT * FROM ad_accounts WHERE id = ? AND status = 'active' AND token_is_valid = 1",
       [account_id]
     );
@@ -142,7 +247,7 @@ router.post('/full', asyncHandler(async (req, res) => {
     return res.json({ success: true, mode: 'full_sync', results: [result] });
   }
 
-  const accounts = db.all("SELECT * FROM ad_accounts WHERE status = 'active' AND token_is_valid = 1");
+  const accounts = await db.all("SELECT * FROM ad_accounts WHERE status = 'active' AND token_is_valid = 1");
   const results = [];
   for (const account of accounts) {
     results.push(await smartSyncEngine.forceSyncAccount(account));
@@ -157,7 +262,7 @@ router.post('/full', asyncHandler(async (req, res) => {
  * completed, Meta API rate-limit status, totals, last error.
  */
 router.get('/scheduler-status', asyncHandler(async (req, res) => {
-  return res.json({ data: autoSyncScheduler.getSchedulerStatus() });
+  return res.json({ data: await autoSyncScheduler.getSchedulerStatus() });
 }));
 
 /**
@@ -167,10 +272,10 @@ router.get('/scheduler-status', asyncHandler(async (req, res) => {
  * account_id) still works while paused.
  */
 router.post('/scheduler/pause', asyncHandler(async (req, res) => {
-  return res.json({ data: autoSyncScheduler.pauseScheduler() });
+  return res.json({ data: await autoSyncScheduler.pauseScheduler() });
 }));
 router.post('/scheduler/resume', asyncHandler(async (req, res) => {
-  return res.json({ data: autoSyncScheduler.resumeScheduler() });
+  return res.json({ data: await autoSyncScheduler.resumeScheduler() });
 }));
 
 /**
@@ -180,8 +285,36 @@ router.post('/scheduler/resume', asyncHandler(async (req, res) => {
  */
 router.get('/history', asyncHandler(async (req, res) => {
   const { account_id, limit } = req.query;
-  const rows = smartSyncEngine.getSyncHistory(limit ? parseInt(limit, 10) : 50, account_id || null);
+  const rows = await smartSyncEngine.getSyncHistory(limit ? parseInt(limit, 10) : 50, account_id || null);
   return res.json({ data: rows });
+}));
+
+/**
+ * GET /sync/execution/:id
+ * Durable live/finished execution state (AUTONOMOUS META SYNC RECOVERY
+ * mission, Phase 12/13) — sync_live_executions, committed incrementally as
+ * the run progresses, survives a hard Vercel platform kill unlike anything
+ * that only ever lived in console output or in-memory summary objects.
+ * Poll this while status='running' to watch a Force Sync live.
+ */
+router.get('/execution/:id', asyncHandler(async (req, res) => {
+  const execution = await executionTracker.getExecution(req.params.id);
+  if (!execution) return res.status(404).json({ error: 'Execution not found' });
+  const events = await executionTracker.getEvents(req.params.id);
+  return res.json({ data: { execution, events } });
+}));
+
+/**
+ * GET /sync/live/:account_id
+ * The most recent execution (running or finished) for one account — what
+ * the dashboard polls right after a Force Sync click, before it has an
+ * executionId of its own to look up directly.
+ */
+router.get('/live/:account_id', asyncHandler(async (req, res) => {
+  const execution = await executionTracker.getLatestExecutionForAccount(req.params.account_id);
+  if (!execution) return res.json({ data: null });
+  const events = await executionTracker.getEvents(execution.id);
+  return res.json({ data: { execution, events } });
 }));
 
 /**
@@ -189,9 +322,9 @@ router.get('/history', asyncHandler(async (req, res) => {
  * Per-entity-type data freshness for one account (Data Freshness requirement).
  */
 router.get('/freshness/:account_id', asyncHandler(async (req, res) => {
-  const account = db.get('SELECT id FROM ad_accounts WHERE id = ?', [req.params.account_id]);
+  const account = await db.get('SELECT id FROM ad_accounts WHERE id = ?', [req.params.account_id]);
   if (!account) return res.status(404).json({ error: 'Account not found' });
-  return res.json({ data: smartSyncEngine.getEntityFreshness(req.params.account_id) });
+  return res.json({ data: await smartSyncEngine.getEntityFreshness(req.params.account_id) });
 }));
 
 /**
@@ -201,16 +334,16 @@ router.get('/freshness/:account_id', asyncHandler(async (req, res) => {
 router.get(
   '/status',
   asyncHandler(async (req, res) => {
-    const accounts = db.get('SELECT COUNT(*) as count FROM ad_accounts');
-    const campaigns = db.get('SELECT COUNT(*) as count FROM campaigns');
-    const adSets = db.get('SELECT COUNT(*) as count FROM ad_sets');
-    const ads = db.get('SELECT COUNT(*) as count FROM ads');
+    const accounts = await db.get('SELECT COUNT(*) as count FROM ad_accounts');
+    const campaigns = await db.get('SELECT COUNT(*) as count FROM campaigns');
+    const adSets = await db.get('SELECT COUNT(*) as count FROM ad_sets');
+    const ads = await db.get('SELECT COUNT(*) as count FROM ads');
 
-    const activeCampaigns = db.get(
+    const activeCampaigns = await db.get(
       "SELECT COUNT(*) as count FROM campaigns WHERE status = 'active'"
     );
 
-    const latestCampaign = db.get(
+    const latestCampaign = await db.get(
       'SELECT updated_at FROM campaigns ORDER BY updated_at DESC LIMIT 1'
     );
 
@@ -236,7 +369,7 @@ router.post('/cache/flush', asyncHandler(async (req, res) => {
   const { account_id } = req.body || {};
   let count;
   if (account_id) {
-    const acct = db.get('SELECT meta_account_id FROM ad_accounts WHERE id = ?', [account_id]);
+    const acct = await db.get('SELECT meta_account_id FROM ad_accounts WHERE id = ?', [account_id]);
     count = acct ? cache.invalidateAccount(acct.meta_account_id) : 0;
   } else {
     count = cache.flush();
@@ -260,3 +393,4 @@ router.get('/cache/stats', asyncHandler(async (req, res) => {
 }));
 
 module.exports = router;
+module.exports.refreshAllActiveAccounts = refreshAllActiveAccounts;

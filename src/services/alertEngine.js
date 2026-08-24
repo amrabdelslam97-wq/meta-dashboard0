@@ -17,7 +17,7 @@ const { compare, pctChange } = require('./conditionComparator');
 // ─────────────────────────────────────────────
 // Load all active alert rules
 // ─────────────────────────────────────────────
-function loadAlertRules() {
+async function loadAlertRules() {
   return db.all(`SELECT * FROM alert_rules WHERE is_active = 1`);
 }
 
@@ -91,12 +91,12 @@ function evaluateAlertRule(rule, currentMetrics, priorMetrics) {
 // If not → insert new record
 // If condition clears → resolve existing alert
 // ─────────────────────────────────────────────
-function upsertAlert(rule, campaign, adAccountId, evalResult, entityType = 'campaign') {
+async function upsertAlert(rule, campaign, adAccountId, evalResult, entityType = 'campaign') {
   const now = new Date().toISOString();
   const { detectedValue, thresholdValue, message } = evalResult;
 
   // Check for existing active/snoozed alert
-  const existing = db.get(
+  const existing = await db.get(
     `SELECT id, occurrence_count FROM active_alerts
      WHERE alert_code = ? AND entity_meta_id = ?
        AND status IN ('active','snoozed')`,
@@ -104,7 +104,7 @@ function upsertAlert(rule, campaign, adAccountId, evalResult, entityType = 'camp
   );
 
   if (existing) {
-    db.run(
+    await db.run(
       `UPDATE active_alerts
        SET last_detected_at  = ?,
            occurrence_count  = ?,
@@ -123,7 +123,7 @@ function upsertAlert(rule, campaign, adAccountId, evalResult, entityType = 'camp
   }
 
   // Check for previously resolved alert (to carry occurrence_count forward)
-  const lastResolved = db.get(
+  const lastResolved = await db.get(
     `SELECT occurrence_count FROM active_alerts
      WHERE alert_code = ? AND entity_meta_id = ?
        AND status = 'resolved'
@@ -132,7 +132,7 @@ function upsertAlert(rule, campaign, adAccountId, evalResult, entityType = 'camp
   );
 
   const id = uuidv4();
-  db.run(
+  await db.run(
     `INSERT INTO active_alerts
        (id, ad_account_id, alert_rule_id, alert_code, entity_type,
         entity_meta_id, entity_label, severity, detected_value, threshold_value,
@@ -165,9 +165,9 @@ function upsertAlert(rule, campaign, adAccountId, evalResult, entityType = 'camp
 // ─────────────────────────────────────────────
 // Resolve alerts that no longer apply
 // ─────────────────────────────────────────────
-function resolveAlert(alertCode, entityMetaId) {
+async function resolveAlert(alertCode, entityMetaId) {
   const now = new Date().toISOString();
-  db.run(
+  await db.run(
     `UPDATE active_alerts
      SET status = 'resolved', resolved_at = ?
      WHERE alert_code = ? AND entity_meta_id = ?
@@ -180,8 +180,8 @@ function resolveAlert(alertCode, entityMetaId) {
 // MAIN: Run alert engine for one campaign
 // Returns array of active alerts
 // ─────────────────────────────────────────────
-function runAlertEngine(campaign, currentMetrics, priorMetrics, adAccountId, entityType = 'campaign') {
-  const rules = loadAlertRules();
+async function runAlertEngine(campaign, currentMetrics, priorMetrics, adAccountId, entityType = 'campaign') {
+  const rules = await loadAlertRules();
   const activeAlerts = [];
 
   for (const rule of rules) {
@@ -194,7 +194,7 @@ function runAlertEngine(campaign, currentMetrics, priorMetrics, adAccountId, ent
     const evalResult = evaluateAlertRule(rule, currentMetrics, priorMetrics);
 
     if (evalResult.triggered) {
-      upsertAlert(rule, campaign, adAccountId, evalResult, entityType);
+      await upsertAlert(rule, campaign, adAccountId, evalResult, entityType);
       activeAlerts.push({
         alert_code:    rule.alert_code,
         alert_name:    rule.alert_name,
@@ -205,7 +205,7 @@ function runAlertEngine(campaign, currentMetrics, priorMetrics, adAccountId, ent
       });
     } else {
       // Condition cleared — resolve any existing alert for this rule+entity
-      resolveAlert(rule.alert_code, campaign.meta_campaign_id);
+      await resolveAlert(rule.alert_code, campaign.meta_campaign_id);
     }
   }
 
@@ -216,7 +216,7 @@ function runAlertEngine(campaign, currentMetrics, priorMetrics, adAccountId, ent
 // Load active (non-snoozed, non-resolved) alerts
 // for a campaign from DB
 // ─────────────────────────────────────────────
-function loadActiveAlerts(metaCampaignId, entityType = 'campaign') {
+async function loadActiveAlerts(metaCampaignId, entityType = 'campaign') {
   return db.all(
     `SELECT
        a.alert_code,

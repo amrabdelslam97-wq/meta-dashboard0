@@ -57,11 +57,11 @@ const { ensureMigrationsTable, markMigrationApplied, isMigrationApplied } = requ
 
 const MIGRATION_NAME = 'phase22_attribution_customer_journey';
 
-function addColumnIfMissing(table, column, type) {
-  const existingCols = db.all(`PRAGMA table_info(${table})`).map(c => c.name);
+async function addColumnIfMissing(table, column, type) {
+  const existingCols = (await db.all(`PRAGMA table_info(${table})`)).map(c => c.name);
   if (existingCols.includes(column)) return false;
   try {
-    db.run(`ALTER TABLE ${table} ADD COLUMN ${column} ${type}`);
+    await db.run(`ALTER TABLE ${table} ADD COLUMN ${column} ${type}`);
     return true;
   } catch (err) {
     console.warn(`[DB] Phase 22: could not add ${table}.${column}:`, err.message);
@@ -69,17 +69,17 @@ function addColumnIfMissing(table, column, type) {
   }
 }
 
-function runPhase22Migrations() {
-  ensureMigrationsTable();
-  const alreadyApplied = isMigrationApplied(MIGRATION_NAME);
+async function runPhase22Migrations() {
+  await ensureMigrationsTable();
+  const alreadyApplied = await isMigrationApplied(MIGRATION_NAME);
 
   let added = 0;
-  if (addColumnIfMissing('ad_sets', 'targeting_json', 'TEXT')) added++;
-  if (addColumnIfMissing('ad_sets', 'audience_type', 'TEXT')) added++;
-  if (addColumnIfMissing('budget_distribution_snapshots', 'revenue', 'REAL')) added++;
-  if (addColumnIfMissing('budget_distribution_snapshots', 'roas', 'REAL')) added++;
+  if (await addColumnIfMissing('ad_sets', 'targeting_json', 'TEXT')) added++;
+  if (await addColumnIfMissing('ad_sets', 'audience_type', 'TEXT')) added++;
+  if (await addColumnIfMissing('budget_distribution_snapshots', 'revenue', 'REAL')) added++;
+  if (await addColumnIfMissing('budget_distribution_snapshots', 'roas', 'REAL')) added++;
 
-  db.run(`
+  await db.run(`
     CREATE TABLE IF NOT EXISTS conversation_attribution (
       id                   TEXT PRIMARY KEY,
       ad_account_id        TEXT NOT NULL,
@@ -97,9 +97,9 @@ function runPhase22Migrations() {
       UNIQUE(ad_account_id, meta_campaign_id, destination_type, date_since, date_until)
     )
   `);
-  db.run(`CREATE INDEX IF NOT EXISTS idx_conversation_attribution_lookup ON conversation_attribution(ad_account_id, meta_campaign_id, date_since)`);
+  await db.run(`CREATE INDEX IF NOT EXISTS idx_conversation_attribution_lookup ON conversation_attribution(ad_account_id, meta_campaign_id, date_since)`);
 
-  db.run(`
+  await db.run(`
     CREATE TABLE IF NOT EXISTS attribution_window_comparison (
       id                TEXT PRIMARY KEY,
       ad_account_id     TEXT NOT NULL,
@@ -115,9 +115,9 @@ function runPhase22Migrations() {
       UNIQUE(ad_account_id, meta_campaign_id, attribution_window, date_since, date_until)
     )
   `);
-  db.run(`CREATE INDEX IF NOT EXISTS idx_attribution_window_lookup ON attribution_window_comparison(ad_account_id, meta_campaign_id, date_since)`);
+  await db.run(`CREATE INDEX IF NOT EXISTS idx_attribution_window_lookup ON attribution_window_comparison(ad_account_id, meta_campaign_id, date_since)`);
 
-  db.run(`
+  await db.run(`
     CREATE TABLE IF NOT EXISTS language_performance_attribution (
       id                TEXT PRIMARY KEY,
       ad_account_id     TEXT NOT NULL,
@@ -136,9 +136,9 @@ function runPhase22Migrations() {
       UNIQUE(ad_account_id, meta_campaign_id, locale_id, date_since, date_until)
     )
   `);
-  db.run(`CREATE INDEX IF NOT EXISTS idx_language_attribution_lookup ON language_performance_attribution(ad_account_id, meta_campaign_id, date_since)`);
+  await db.run(`CREATE INDEX IF NOT EXISTS idx_language_attribution_lookup ON language_performance_attribution(ad_account_id, meta_campaign_id, date_since)`);
 
-  db.run(`
+  await db.run(`
     CREATE TABLE IF NOT EXISTS audience_attribution (
       id                TEXT PRIMARY KEY,
       ad_account_id     TEXT NOT NULL,
@@ -157,9 +157,9 @@ function runPhase22Migrations() {
       UNIQUE(ad_account_id, meta_campaign_id, audience_type, date_since, date_until)
     )
   `);
-  db.run(`CREATE INDEX IF NOT EXISTS idx_audience_attribution_lookup ON audience_attribution(ad_account_id, meta_campaign_id, date_since)`);
+  await db.run(`CREATE INDEX IF NOT EXISTS idx_audience_attribution_lookup ON audience_attribution(ad_account_id, meta_campaign_id, date_since)`);
 
-  db.run(`
+  await db.run(`
     CREATE TABLE IF NOT EXISTS customer_journey_funnel (
       id                   TEXT PRIMARY KEY,
       ad_account_id        TEXT NOT NULL,
@@ -177,12 +177,12 @@ function runPhase22Migrations() {
       UNIQUE(ad_account_id, meta_campaign_id, date_since, date_until)
     )
   `);
-  db.run(`CREATE INDEX IF NOT EXISTS idx_journey_funnel_lookup ON customer_journey_funnel(ad_account_id, meta_campaign_id, date_since)`);
+  await db.run(`CREATE INDEX IF NOT EXISTS idx_journey_funnel_lookup ON customer_journey_funnel(ad_account_id, meta_campaign_id, date_since)`);
 
-  markMigrationApplied(MIGRATION_NAME);
+  await markMigrationApplied(MIGRATION_NAME);
 
   if (added > 0 || !alreadyApplied) {
-    db.persist();
+    await db.persist();
     console.log(`[DB] Phase 22 migration complete — added ${added} column(s), created 5 attribution tables.`);
   } else {
     console.log('[DB] Phase 22 schema: attribution tables already present, skipping.');

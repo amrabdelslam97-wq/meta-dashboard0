@@ -19,8 +19,8 @@ const deviceIntelligenceEngine = require('../../services/deviceIntelligenceEngin
 const publisherPlatformIntelligenceEngine = require('../../services/publisherPlatformIntelligenceEngine');
 const creativeIntelligenceEngine = require('../../services/creativeIntelligenceEngine');
 
-function loadCampaignMetaId(idOrMetaId) {
-  const row = db.get(
+async function loadCampaignMetaId(idOrMetaId) {
+  const row = await db.get(
     'SELECT meta_campaign_id FROM campaigns WHERE id = ? OR meta_campaign_id = ?',
     [idOrMetaId, idOrMetaId]
   );
@@ -30,43 +30,43 @@ function loadCampaignMetaId(idOrMetaId) {
 // ── Audience Intelligence ──────────────────────────────────────────
 
 router.get('/audience/:campaignId/:dimension', asyncHandler(async (req, res) => {
-  const metaCampaignId = loadCampaignMetaId(req.params.campaignId);
+  const metaCampaignId = await loadCampaignMetaId(req.params.campaignId);
   if (!metaCampaignId) return res.status(404).json({ error: 'Campaign not found' });
 
   const dimension = req.params.dimension || 'age_gender';
   const dateRange = resolveDateRange(req.query);
-  const data = audienceIntelligenceEngine.getAudienceBreakdown(metaCampaignId, dimension, dateRange);
+  const data = await audienceIntelligenceEngine.getAudienceBreakdown(metaCampaignId, dimension, dateRange);
 
   return res.json({ data });
 }));
 
 router.get('/audience-types/:campaignId', asyncHandler(async (req, res) => {
-  const metaCampaignId = loadCampaignMetaId(req.params.campaignId);
+  const metaCampaignId = await loadCampaignMetaId(req.params.campaignId);
   if (!metaCampaignId) return res.status(404).json({ error: 'Campaign not found' });
 
   const dateRange = resolveDateRange(req.query);
-  const data = audienceIntelligenceEngine.getAudienceTypePerformance(metaCampaignId, dateRange);
+  const data = await audienceIntelligenceEngine.getAudienceTypePerformance(metaCampaignId, dateRange);
 
   return res.json({ data });
 }));
 
 router.get('/audience-opportunities/:campaignId', asyncHandler(async (req, res) => {
-  const metaCampaignId = loadCampaignMetaId(req.params.campaignId);
+  const metaCampaignId = await loadCampaignMetaId(req.params.campaignId);
   if (!metaCampaignId) return res.status(404).json({ error: 'Campaign not found' });
 
   const dimension = req.query.dimension || 'age_gender';
   const dateRange = resolveDateRange(req.query);
-  const data = audienceIntelligenceEngine.detectAudienceOpportunities(metaCampaignId, dimension, dateRange);
+  const data = await audienceIntelligenceEngine.detectAudienceOpportunities(metaCampaignId, dimension, dateRange);
 
   return res.json({ data });
 }));
 
 router.get('/audience-recommendations/:campaignId', asyncHandler(async (req, res) => {
-  const metaCampaignId = loadCampaignMetaId(req.params.campaignId);
+  const metaCampaignId = await loadCampaignMetaId(req.params.campaignId);
   if (!metaCampaignId) return res.status(404).json({ error: 'Campaign not found' });
 
   const dateRange = resolveDateRange(req.query);
-  const data = audienceIntelligenceEngine.generateAudienceRecommendations(metaCampaignId, dateRange);
+  const data = await audienceIntelligenceEngine.generateAudienceRecommendations(metaCampaignId, dateRange);
 
   return res.json({ data });
 }));
@@ -74,22 +74,22 @@ router.get('/audience-recommendations/:campaignId', asyncHandler(async (req, res
 // ── Audience Scoring (Phase 23) ────────────────────────────────────
 
 router.get('/audience-score/:campaignId/:dimension', asyncHandler(async (req, res) => {
-  const metaCampaignId = loadCampaignMetaId(req.params.campaignId);
+  const metaCampaignId = await loadCampaignMetaId(req.params.campaignId);
   if (!metaCampaignId) return res.status(404).json({ error: 'Campaign not found' });
 
   const dimension = req.params.dimension || 'age_gender';
   const dateRange = resolveDateRange(req.query);
-  const data = audienceScoringEngine.scoreAudienceDimension(metaCampaignId, dimension, dateRange);
+  const data = await audienceScoringEngine.scoreAudienceDimension(metaCampaignId, dimension, dateRange);
 
   return res.json({ data });
 }));
 
 router.get('/audience-score-ranking/:campaignId', asyncHandler(async (req, res) => {
-  const metaCampaignId = loadCampaignMetaId(req.params.campaignId);
+  const metaCampaignId = await loadCampaignMetaId(req.params.campaignId);
   if (!metaCampaignId) return res.status(404).json({ error: 'Campaign not found' });
 
   const dateRange = resolveDateRange(req.query);
-  const data = audienceScoringEngine.getRankingAcrossAllDimensions(metaCampaignId, dateRange);
+  const data = await audienceScoringEngine.getRankingAcrossAllDimensions(metaCampaignId, dateRange);
 
   return res.json({ data });
 }));
@@ -97,12 +97,12 @@ router.get('/audience-score-ranking/:campaignId', asyncHandler(async (req, res) 
 // ── Audience Diagnostics (Phase 23) ────────────────────────────────
 
 router.get('/audience-diagnostics/:campaignId/:dimension', asyncHandler(async (req, res) => {
-  const metaCampaignId = loadCampaignMetaId(req.params.campaignId);
+  const metaCampaignId = await loadCampaignMetaId(req.params.campaignId);
   if (!metaCampaignId) return res.status(404).json({ error: 'Campaign not found' });
 
   const dimension = req.params.dimension || 'age_gender';
   const dateRange = resolveDateRange(req.query);
-  const data = audienceIntelligenceEngine.generateAudienceDiagnostics(metaCampaignId, dimension, dateRange);
+  const data = await audienceIntelligenceEngine.generateAudienceDiagnostics(metaCampaignId, dimension, dateRange);
 
   return res.json({ data });
 }));
@@ -110,11 +110,11 @@ router.get('/audience-diagnostics/:campaignId/:dimension', asyncHandler(async (r
 // ── Advanced Opportunity Engine (Phase 23) ────────────────────────────
 
 router.get('/audience-advanced-opportunities/:campaignId', asyncHandler(async (req, res) => {
-  const metaCampaignId = loadCampaignMetaId(req.params.campaignId);
+  const metaCampaignId = await loadCampaignMetaId(req.params.campaignId);
   if (!metaCampaignId) return res.status(404).json({ error: 'Campaign not found' });
 
   const dateRange = resolveDateRange(req.query);
-  const data = audienceIntelligenceEngine.detectAdvancedOpportunities(metaCampaignId, dateRange);
+  const data = await audienceIntelligenceEngine.detectAdvancedOpportunities(metaCampaignId, dateRange);
 
   return res.json({ data });
 }));
@@ -122,31 +122,31 @@ router.get('/audience-advanced-opportunities/:campaignId', asyncHandler(async (r
 // ── Placement Intelligence ───────────────────────────────────────────
 
 router.get('/placement/:campaignId', asyncHandler(async (req, res) => {
-  const metaCampaignId = loadCampaignMetaId(req.params.campaignId);
+  const metaCampaignId = await loadCampaignMetaId(req.params.campaignId);
   if (!metaCampaignId) return res.status(404).json({ error: 'Campaign not found' });
 
   const dateRange = resolveDateRange(req.query);
-  const data = placementIntelligenceEngine.getPlacementPerformance(metaCampaignId, dateRange);
+  const data = await placementIntelligenceEngine.getPlacementPerformance(metaCampaignId, dateRange);
 
   return res.json({ data });
 }));
 
 router.get('/placement-issues/:campaignId', asyncHandler(async (req, res) => {
-  const metaCampaignId = loadCampaignMetaId(req.params.campaignId);
+  const metaCampaignId = await loadCampaignMetaId(req.params.campaignId);
   if (!metaCampaignId) return res.status(404).json({ error: 'Campaign not found' });
 
   const dateRange = resolveDateRange(req.query);
-  const data = placementIntelligenceEngine.detectPlacementIssues(metaCampaignId, dateRange);
+  const data = await placementIntelligenceEngine.detectPlacementIssues(metaCampaignId, dateRange);
 
   return res.json({ data });
 }));
 
 router.get('/placement-recommendations/:campaignId', asyncHandler(async (req, res) => {
-  const metaCampaignId = loadCampaignMetaId(req.params.campaignId);
+  const metaCampaignId = await loadCampaignMetaId(req.params.campaignId);
   if (!metaCampaignId) return res.status(404).json({ error: 'Campaign not found' });
 
   const dateRange = resolveDateRange(req.query);
-  const data = placementIntelligenceEngine.generatePlacementRecommendations(metaCampaignId, dateRange);
+  const data = await placementIntelligenceEngine.generatePlacementRecommendations(metaCampaignId, dateRange);
 
   return res.json({ data });
 }));
@@ -154,31 +154,31 @@ router.get('/placement-recommendations/:campaignId', asyncHandler(async (req, re
 // ── Device Intelligence ────────────────────────────────────────────
 
 router.get('/device/:campaignId', asyncHandler(async (req, res) => {
-  const metaCampaignId = loadCampaignMetaId(req.params.campaignId);
+  const metaCampaignId = await loadCampaignMetaId(req.params.campaignId);
   if (!metaCampaignId) return res.status(404).json({ error: 'Campaign not found' });
 
   const dateRange = resolveDateRange(req.query);
-  const data = deviceIntelligenceEngine.getDevicePerformance(metaCampaignId, dateRange);
+  const data = await deviceIntelligenceEngine.getDevicePerformance(metaCampaignId, dateRange);
 
   return res.json({ data });
 }));
 
 router.get('/device-issues/:campaignId', asyncHandler(async (req, res) => {
-  const metaCampaignId = loadCampaignMetaId(req.params.campaignId);
+  const metaCampaignId = await loadCampaignMetaId(req.params.campaignId);
   if (!metaCampaignId) return res.status(404).json({ error: 'Campaign not found' });
 
   const dateRange = resolveDateRange(req.query);
-  const data = deviceIntelligenceEngine.detectDeviceIssues(metaCampaignId, dateRange);
+  const data = await deviceIntelligenceEngine.detectDeviceIssues(metaCampaignId, dateRange);
 
   return res.json({ data });
 }));
 
 router.get('/device-recommendations/:campaignId', asyncHandler(async (req, res) => {
-  const metaCampaignId = loadCampaignMetaId(req.params.campaignId);
+  const metaCampaignId = await loadCampaignMetaId(req.params.campaignId);
   if (!metaCampaignId) return res.status(404).json({ error: 'Campaign not found' });
 
   const dateRange = resolveDateRange(req.query);
-  const data = deviceIntelligenceEngine.generateDeviceRecommendations(metaCampaignId, dateRange);
+  const data = await deviceIntelligenceEngine.generateDeviceRecommendations(metaCampaignId, dateRange);
 
   return res.json({ data });
 }));
@@ -186,31 +186,31 @@ router.get('/device-recommendations/:campaignId', asyncHandler(async (req, res) 
 // ── Publisher Platform Intelligence ────────────────────────────────
 
 router.get('/platform/:campaignId', asyncHandler(async (req, res) => {
-  const metaCampaignId = loadCampaignMetaId(req.params.campaignId);
+  const metaCampaignId = await loadCampaignMetaId(req.params.campaignId);
   if (!metaCampaignId) return res.status(404).json({ error: 'Campaign not found' });
 
   const dateRange = resolveDateRange(req.query);
-  const data = publisherPlatformIntelligenceEngine.getPlatformPerformance(metaCampaignId, dateRange);
+  const data = await publisherPlatformIntelligenceEngine.getPlatformPerformance(metaCampaignId, dateRange);
 
   return res.json({ data });
 }));
 
 router.get('/messaging-platforms/:campaignId', asyncHandler(async (req, res) => {
-  const metaCampaignId = loadCampaignMetaId(req.params.campaignId);
+  const metaCampaignId = await loadCampaignMetaId(req.params.campaignId);
   if (!metaCampaignId) return res.status(404).json({ error: 'Campaign not found' });
 
   const dateRange = resolveDateRange(req.query);
-  const data = publisherPlatformIntelligenceEngine.getMessagingPlatformAnalysis(metaCampaignId, dateRange);
+  const data = await publisherPlatformIntelligenceEngine.getMessagingPlatformAnalysis(metaCampaignId, dateRange);
 
   return res.json({ data });
 }));
 
 router.get('/platform-recommendations/:campaignId', asyncHandler(async (req, res) => {
-  const metaCampaignId = loadCampaignMetaId(req.params.campaignId);
+  const metaCampaignId = await loadCampaignMetaId(req.params.campaignId);
   if (!metaCampaignId) return res.status(404).json({ error: 'Campaign not found' });
 
   const dateRange = resolveDateRange(req.query);
-  const data = publisherPlatformIntelligenceEngine.generatePlatformRecommendations(metaCampaignId, dateRange);
+  const data = await publisherPlatformIntelligenceEngine.generatePlatformRecommendations(metaCampaignId, dateRange);
 
   return res.json({ data });
 }));
@@ -218,7 +218,7 @@ router.get('/platform-recommendations/:campaignId', asyncHandler(async (req, res
 // ── Creative Intelligence (expanded) ───────────────────────────────
 
 router.get('/creative/:campaignId', asyncHandler(async (req, res) => {
-  const metaCampaignId = loadCampaignMetaId(req.params.campaignId);
+  const metaCampaignId = await loadCampaignMetaId(req.params.campaignId);
   if (!metaCampaignId) return res.status(404).json({ error: 'Campaign not found' });
 
   const dateRange = resolveDateRange(req.query);
@@ -236,24 +236,30 @@ router.get('/creative/:campaignId', asyncHandler(async (req, res) => {
 // ── Master Intelligence Dashboard ──────────────────────────────────
 
 router.get('/master/:campaignId', asyncHandler(async (req, res) => {
-  const metaCampaignId = loadCampaignMetaId(req.params.campaignId);
+  const metaCampaignId = await loadCampaignMetaId(req.params.campaignId);
   if (!metaCampaignId) return res.status(404).json({ error: 'Campaign not found' });
 
   const dateRange = resolveDateRange(req.query);
 
-  const audience = audienceIntelligenceEngine.getAudienceBreakdown(metaCampaignId, 'age_gender', dateRange);
-  const audienceOpportunities = audienceIntelligenceEngine.detectAudienceOpportunities(metaCampaignId, 'age_gender', dateRange);
-  const audienceRecs = audienceIntelligenceEngine.generateAudienceRecommendations(metaCampaignId, dateRange);
-
-  const placement = placementIntelligenceEngine.getPlacementPerformance(metaCampaignId, dateRange);
-  const placementIssues = placementIntelligenceEngine.detectPlacementIssues(metaCampaignId, dateRange);
-  const placementRecs = placementIntelligenceEngine.generatePlacementRecommendations(metaCampaignId, dateRange);
-
-  const device = deviceIntelligenceEngine.getDevicePerformance(metaCampaignId, dateRange);
-  const deviceRecs = deviceIntelligenceEngine.generateDeviceRecommendations(metaCampaignId, dateRange);
-
-  const platform = publisherPlatformIntelligenceEngine.getPlatformPerformance(metaCampaignId, dateRange);
-  const platformRecs = publisherPlatformIntelligenceEngine.generatePlatformRecommendations(metaCampaignId, dateRange);
+  // Promise.all is safe here: every read below is independent (own table/
+  // query, none consumes another's output).
+  const [
+    audience, audienceOpportunities, audienceRecs,
+    placement, placementIssues, placementRecs,
+    device, deviceRecs,
+    platform, platformRecs,
+  ] = await Promise.all([
+    audienceIntelligenceEngine.getAudienceBreakdown(metaCampaignId, 'age_gender', dateRange),
+    audienceIntelligenceEngine.detectAudienceOpportunities(metaCampaignId, 'age_gender', dateRange),
+    audienceIntelligenceEngine.generateAudienceRecommendations(metaCampaignId, dateRange),
+    placementIntelligenceEngine.getPlacementPerformance(metaCampaignId, dateRange),
+    placementIntelligenceEngine.detectPlacementIssues(metaCampaignId, dateRange),
+    placementIntelligenceEngine.generatePlacementRecommendations(metaCampaignId, dateRange),
+    deviceIntelligenceEngine.getDevicePerformance(metaCampaignId, dateRange),
+    deviceIntelligenceEngine.generateDeviceRecommendations(metaCampaignId, dateRange),
+    publisherPlatformIntelligenceEngine.getPlatformPerformance(metaCampaignId, dateRange),
+    publisherPlatformIntelligenceEngine.generatePlatformRecommendations(metaCampaignId, dateRange),
+  ]);
 
   return res.json({
     data: {

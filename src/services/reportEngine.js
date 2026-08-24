@@ -49,12 +49,12 @@ function resolvePrimaryKPIForRow(row) {
 // decision_history all carry an `objective` column directly; active_alerts
 // doesn't (see schema.phase2.js), so its query joins campaigns instead.
 // ─────────────────────────────────────────────
-function buildSummaryData(adAccountId, since, until, objective = null) {
+async function buildSummaryData(adAccountId, since, until, objective = null) {
   const objClause = objective ? 'AND objective = ?' : '';
   const objParam  = objective ? [objective] : [];
 
   // Health score stats for the period
-  const healthStats = db.get(`
+  const healthStats = await db.get(`
     SELECT
       AVG(health_score)  as avg_score,
       MIN(health_score)  as min_score,
@@ -66,7 +66,7 @@ function buildSummaryData(adAccountId, since, until, objective = null) {
   `, [adAccountId, since, until + 'T23:59:59', ...objParam]);
 
   // Latest score per campaign for period
-  const campaignScores = db.all(`
+  const campaignScoreRows = await db.all(`
     SELECT
       h.entity_meta_id, h.entity_label, h.health_score, h.health_status,
       h.objective, h.calculated_at, h.score_breakdown
@@ -79,13 +79,14 @@ function buildSummaryData(adAccountId, since, until, objective = null) {
       GROUP BY entity_meta_id
     ) m ON h.entity_meta_id = m.entity_meta_id AND h.calculated_at = m.latest
     ORDER BY h.health_score DESC
-  `, [adAccountId, since, until + 'T23:59:59', ...objParam]).map(row => ({
+  `, [adAccountId, since, until + 'T23:59:59', ...objParam]);
+  const campaignScores = campaignScoreRows.map(row => ({
     ...row,
     primary_kpi: resolvePrimaryKPIForRow(row),
   }));
 
   // Recommendations for the period
-  const recs = db.all(`
+  const recs = await db.all(`
     SELECT rule_code, severity, entity_label, recommendation_title,
            action_taken, generated_at
     FROM recommendation_log
@@ -99,7 +100,7 @@ function buildSummaryData(adAccountId, since, until, objective = null) {
   // have no direct campaign row to join here, matching the existing
   // campaign-only scope of this report).
   const alerts = objective
-    ? db.all(`
+    ? await db.all(`
         SELECT a.alert_code, a.severity, a.entity_label, a.alert_message,
                a.first_detected_at, a.occurrence_count, a.status
         FROM active_alerts a
@@ -108,7 +109,7 @@ function buildSummaryData(adAccountId, since, until, objective = null) {
           AND c.objective = ?
         ORDER BY CASE a.severity WHEN 'critical' THEN 1 WHEN 'warning' THEN 2 ELSE 3 END
       `, [adAccountId, since, until + 'T23:59:59', objective])
-    : db.all(`
+    : await db.all(`
         SELECT alert_code, severity, entity_label, alert_message,
                first_detected_at, occurrence_count, status
         FROM active_alerts
@@ -119,7 +120,7 @@ function buildSummaryData(adAccountId, since, until, objective = null) {
   // Decisions generated in the period
   let decisions = [];
   try {
-    decisions = db.all(`
+    decisions = await db.all(`
       SELECT decision_type, priority, campaign_name, reason, status, created_at
       FROM decision_history
       WHERE ad_account_id = ? AND created_at >= ? AND created_at <= ? ${objClause}
@@ -130,7 +131,7 @@ function buildSummaryData(adAccountId, since, until, objective = null) {
   const topCampaigns    = campaignScores.slice(0, 5);
   const worstCampaigns  = [...campaignScores].sort((a, b) => a.health_score - b.health_score).slice(0, 5);
 
-  const account = db.get('SELECT account_name, currency FROM ad_accounts WHERE id = ?', [adAccountId]);
+  const account = await db.get('SELECT account_name, currency FROM ad_accounts WHERE id = ?', [adAccountId]);
 
   return {
     account_name:    account?.account_name || 'Unknown Account',

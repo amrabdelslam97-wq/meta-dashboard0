@@ -15,11 +15,11 @@ function generateId(prefix) {
 /**
  * Create a new workspace
  */
-function createWorkspace(userId, workspaceData) {
+async function createWorkspace(userId, workspaceData) {
   const workspaceId = generateId('ws');
   const now = new Date().toISOString();
 
-  db.run(`
+  await db.run(`
     INSERT INTO workspaces (
       id, owner_user_id, workspace_type, name, logo_url,
       industry, country, currency, timezone, billing_email,
@@ -43,7 +43,7 @@ function createWorkspace(userId, workspaceData) {
 
   // Add owner as workspace member
   const memberId = generateId('wsm');
-  db.run(`
+  await db.run(`
     INSERT INTO workspace_members (
       id, workspace_id, user_id, role, status, joined_at, created_at, updated_at
     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
@@ -55,7 +55,7 @@ function createWorkspace(userId, workspaceData) {
 /**
  * Get workspace details
  */
-function getWorkspace(workspaceId) {
+async function getWorkspace(workspaceId) {
   return db.get(`
     SELECT * FROM workspaces WHERE id = ?
   `, [workspaceId]);
@@ -64,7 +64,7 @@ function getWorkspace(workspaceId) {
 /**
  * List user's workspaces
  */
-function getUserWorkspaces(userId) {
+async function getUserWorkspaces(userId) {
   return db.all(`
     SELECT w.* FROM workspaces w
     INNER JOIN workspace_members wm ON w.id = wm.workspace_id
@@ -76,11 +76,11 @@ function getUserWorkspaces(userId) {
 /**
  * Add member to workspace
  */
-function addWorkspaceMember(workspaceId, userId, role) {
+async function addWorkspaceMember(workspaceId, userId, role) {
   const memberId = generateId('wsm');
   const now = new Date().toISOString();
 
-  const existing = db.get(
+  const existing = await db.get(
     'SELECT id FROM workspace_members WHERE workspace_id = ? AND user_id = ?',
     [workspaceId, userId]
   );
@@ -92,7 +92,7 @@ function addWorkspaceMember(workspaceId, userId, role) {
     };
   }
 
-  db.run(`
+  await db.run(`
     INSERT INTO workspace_members (
       id, workspace_id, user_id, role, status, invited_at, created_at, updated_at
     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
@@ -110,7 +110,7 @@ function addWorkspaceMember(workspaceId, userId, role) {
 /**
  * Get workspace members
  */
-function getWorkspaceMembers(workspaceId) {
+async function getWorkspaceMembers(workspaceId) {
   return db.all(`
     SELECT wm.*, u.email, cr.name as custom_role_name
     FROM workspace_members wm
@@ -124,10 +124,10 @@ function getWorkspaceMembers(workspaceId) {
 /**
  * Update member role
  */
-function updateMemberRole(workspaceId, userId, newRole) {
+async function updateMemberRole(workspaceId, userId, newRole) {
   const now = new Date().toISOString();
 
-  db.run(`
+  await db.run(`
     UPDATE workspace_members
     SET role = ?, updated_at = ?
     WHERE workspace_id = ? AND user_id = ?
@@ -142,10 +142,10 @@ function updateMemberRole(workspaceId, userId, newRole) {
 /**
  * Remove member from workspace
  */
-function removeWorkspaceMember(workspaceId, userId) {
+async function removeWorkspaceMember(workspaceId, userId) {
   const now = new Date().toISOString();
 
-  db.run(`
+  await db.run(`
     UPDATE workspace_members
     SET status = 'suspended', updated_at = ?
     WHERE workspace_id = ? AND user_id = ?
@@ -157,8 +157,8 @@ function removeWorkspaceMember(workspaceId, userId) {
 /**
  * Get member permissions for workspace
  */
-function getMemberPermissions(workspaceId, userId) {
-  const member = db.get(
+async function getMemberPermissions(workspaceId, userId) {
+  const member = await db.get(
     'SELECT role, custom_role_id FROM workspace_members WHERE workspace_id = ? AND user_id = ?',
     [workspaceId, userId]
   );
@@ -186,7 +186,7 @@ function getMemberPermissions(workspaceId, userId) {
 
   // If custom role, merge custom permissions
   if (member.custom_role_id) {
-    const customRole = db.get(
+    const customRole = await db.get(
       'SELECT permissions_json FROM custom_roles WHERE id = ?',
       [member.custom_role_id]
     );
@@ -202,19 +202,19 @@ function getMemberPermissions(workspaceId, userId) {
 /**
  * Check if user can perform action
  */
-function canUserPerform(workspaceId, userId, action) {
-  const perms = getMemberPermissions(workspaceId, userId);
+async function canUserPerform(workspaceId, userId, action) {
+  const perms = await getMemberPermissions(workspaceId, userId);
   return perms.permissions.includes(action);
 }
 
 /**
  * Create custom role
  */
-function createCustomRole(workspaceId, roleData) {
+async function createCustomRole(workspaceId, roleData) {
   const roleId = generateId('cr');
   const now = new Date().toISOString();
 
-  db.run(`
+  await db.run(`
     INSERT INTO custom_roles (
       id, workspace_id, name, description, permissions_json,
       created_at, updated_at
@@ -235,23 +235,23 @@ function createCustomRole(workspaceId, roleData) {
 /**
  * Get workspace analytics
  */
-function getWorkspaceAnalytics(workspaceId) {
-  const memberCount = db.get(
+async function getWorkspaceAnalytics(workspaceId) {
+  const memberCount = await db.get(
     'SELECT COUNT(*) as count FROM workspace_members WHERE workspace_id = ? AND status = "active"',
     [workspaceId]
   );
 
-  const projectCount = db.get(
+  const projectCount = await db.get(
     'SELECT COUNT(*) as count FROM projects WHERE workspace_id = ?',
     [workspaceId]
   );
 
-  const taskCount = db.get(`
+  const taskCount = await db.get(`
     SELECT COUNT(*) as count FROM project_tasks
     WHERE project_id IN (SELECT id FROM projects WHERE workspace_id = ?)
   `, [workspaceId]);
 
-  const pendingApprovals = db.get(`
+  const pendingApprovals = await db.get(`
     SELECT COUNT(*) as count FROM approvals
     WHERE workspace_id = ? AND status IN ('pending', 'revisions_requested')
   `, [workspaceId]);

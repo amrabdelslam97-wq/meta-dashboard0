@@ -83,11 +83,11 @@ function classifyOutcome(metricKey, before, after) {
  * @param {object} campaign - { meta_campaign_id }
  * @param {object} currentMetrics - normalized metrics this analysis run already fetched
  */
-function measureOutcomes(campaign, currentMetrics) {
+async function measureOutcomes(campaign, currentMetrics) {
   if (!currentMetrics || !campaign?.meta_campaign_id) return [];
 
   const cutoff = new Date(Date.now() - OUTCOME_MEASUREMENT_WINDOW_DAYS * 86400000).toISOString();
-  const candidates = db.all(
+  const candidates = await db.all(
     `SELECT dh.* FROM decision_history dh
      LEFT JOIN decision_outcomes do ON do.decision_history_id = dh.id
      WHERE dh.meta_campaign_id = ? AND dh.status = 'completed'
@@ -113,7 +113,7 @@ function measureOutcomes(campaign, currentMetrics) {
 
     const deltaPct = pctChange(after, before, { denominator: 'abs' });
     const id = uuidv4();
-    db.run(
+    await db.run(
       `INSERT INTO decision_outcomes
          (id, decision_history_id, meta_campaign_id, decision_type, metric_key,
           metric_before, metric_after, delta_pct, outcome, measured_at)
@@ -131,8 +131,8 @@ function measureOutcomes(campaign, currentMetrics) {
 /**
  * @returns {{attempts:number, improved:number, worsened:number, no_change:number, lastOutcome:string|null, lastTwoIneffective:boolean}}
  */
-function getHistoricalEffectiveness(metaCampaignId, decisionType) {
-  const rows = db.all(
+async function getHistoricalEffectiveness(metaCampaignId, decisionType) {
+  const rows = await db.all(
     `SELECT outcome FROM decision_outcomes
      WHERE meta_campaign_id = ? AND decision_type = ?
      ORDER BY measured_at DESC`,
@@ -165,10 +165,14 @@ const CONFIDENCE_DOWNGRADE = { high: 'medium', medium: 'low', low: 'low' };
  *
  * @param {object[]} decisions - Decision-shaped objects with meta_campaign_id, decision_type, confidence
  */
-function applyHistoricalLearning(decisions = []) {
-  return decisions.map(d => {
+async function applyHistoricalLearning(decisions = []) {
+  // Promise.all is safe here: each decision's getHistoricalEffectiveness()
+  // read is independent (own campaign/decision_type, no shared mutable
+  // state), and Promise.all preserves the same output order as the .map()
+  // it replaces.
+  return Promise.all(decisions.map(async d => {
     if (!d.meta_campaign_id || !d.decision_type) return d;
-    const eff = getHistoricalEffectiveness(d.meta_campaign_id, d.decision_type);
+    const eff = await getHistoricalEffectiveness(d.meta_campaign_id, d.decision_type);
 
     if (!eff.lastTwoIneffective) {
       return { ...d, historical_effectiveness: eff };
@@ -180,7 +184,7 @@ function applyHistoricalLearning(decisions = []) {
       historical_effectiveness: eff,
       historical_note: 'Tried twice before with no improvement (see Decision History).',
     };
-  });
+  }));
 }
 
 module.exports = {

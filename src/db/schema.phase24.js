@@ -15,11 +15,11 @@ const { ensureMigrationsTable, markMigrationApplied, isMigrationApplied } = requ
 
 const MIGRATION_NAME = 'phase24_budget_intelligence_attribution';
 
-function runPhase24Migrations() {
-  ensureMigrationsTable();
-  const alreadyApplied = isMigrationApplied(MIGRATION_NAME);
+async function runPhase24Migrations() {
+  await ensureMigrationsTable();
+  const alreadyApplied = await isMigrationApplied(MIGRATION_NAME);
 
-  db.run(`
+  await db.run(`
     CREATE TABLE IF NOT EXISTS budget_analysis_history (
       id                   TEXT PRIMARY KEY,
       ad_account_id        TEXT NOT NULL,
@@ -42,10 +42,10 @@ function runPhase24Migrations() {
       UNIQUE(ad_account_id, level, entity_meta_id, date_since, date_until)
     )
   `);
-  db.run(`CREATE INDEX IF NOT EXISTS idx_budget_analysis_lookup ON budget_analysis_history(ad_account_id, level, date_since)`);
-  db.run(`CREATE INDEX IF NOT EXISTS idx_budget_waste_detection ON budget_analysis_history(ad_account_id, waste_detected, date_since)`);
+  await db.run(`CREATE INDEX IF NOT EXISTS idx_budget_analysis_lookup ON budget_analysis_history(ad_account_id, level, date_since)`);
+  await db.run(`CREATE INDEX IF NOT EXISTS idx_budget_waste_detection ON budget_analysis_history(ad_account_id, waste_detected, date_since)`);
 
-  db.run(`
+  await db.run(`
     CREATE TABLE IF NOT EXISTS attribution_window_analysis (
       id                       TEXT PRIMARY KEY,
       ad_account_id            TEXT NOT NULL,
@@ -65,9 +65,9 @@ function runPhase24Migrations() {
       UNIQUE(ad_account_id, meta_campaign_id, attribution_window, breakdown_dimension, breakdown_value, date_since, date_until)
     )
   `);
-  db.run(`CREATE INDEX IF NOT EXISTS idx_attribution_window_lookup ON attribution_window_analysis(ad_account_id, meta_campaign_id, attribution_window, date_since)`);
+  await db.run(`CREATE INDEX IF NOT EXISTS idx_attribution_window_lookup ON attribution_window_analysis(ad_account_id, meta_campaign_id, attribution_window, date_since)`);
 
-  db.run(`
+  await db.run(`
     CREATE TABLE IF NOT EXISTS budget_movement_recommendations (
       id                   TEXT PRIMARY KEY,
       ad_account_id        TEXT NOT NULL,
@@ -88,13 +88,13 @@ function runPhase24Migrations() {
       UNIQUE(ad_account_id, from_entity_id, to_entity_id, movement_type, date_generated)
     )
   `);
-  db.run(`CREATE INDEX IF NOT EXISTS idx_budget_movements_lookup ON budget_movement_recommendations(ad_account_id, date_generated)`);
-  db.run(`CREATE INDEX IF NOT EXISTS idx_budget_movements_status ON budget_movement_recommendations(ad_account_id, status)`);
+  await db.run(`CREATE INDEX IF NOT EXISTS idx_budget_movements_lookup ON budget_movement_recommendations(ad_account_id, date_generated)`);
+  await db.run(`CREATE INDEX IF NOT EXISTS idx_budget_movements_status ON budget_movement_recommendations(ad_account_id, status)`);
 
-  markMigrationApplied(MIGRATION_NAME);
+  await markMigrationApplied(MIGRATION_NAME);
 
   if (!alreadyApplied) {
-    db.persist();
+    await db.persist();
     console.log('[DB] Phase 24 migration complete — budget intelligence and attribution tables created.');
   } else {
     console.log('[DB] Phase 24 schema: budget tables already present, skipping.');

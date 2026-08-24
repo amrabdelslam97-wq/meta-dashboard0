@@ -22,25 +22,25 @@ const NEW_COLUMNS = [
   { name: 'preview_url',  type: 'TEXT' },
 ];
 
-function runPhase7BMigrations() {
-  ensureMigrationsTable();
-  const existingCols = db.all("PRAGMA table_info(ads)").map(c => c.name);
+async function runPhase7BMigrations() {
+  await ensureMigrationsTable();
+  const existingCols = (await db.all("PRAGMA table_info(ads)")).map(c => c.name);
 
   let added = 0;
   for (const col of NEW_COLUMNS) {
     if (existingCols.includes(col.name)) continue; // idempotent guard
     try {
-      db.run(`ALTER TABLE ads ADD COLUMN ${col.name} ${col.type}`);
+      await db.run(`ALTER TABLE ads ADD COLUMN ${col.name} ${col.type}`);
       added++;
     } catch (err) {
       console.warn(`[DB] Phase 7B: could not add column ${col.name}:`, err.message);
     }
   }
 
-  markMigrationApplied(MIGRATION_NAME);
+  await markMigrationApplied(MIGRATION_NAME);
 
   if (added > 0) {
-    db.persist();
+    await db.persist();
     console.log(`[DB] Phase 7B migration complete — added ${added} creative preview column(s) to ads.`);
   } else {
     console.log('[DB] Phase 7B schema: creative preview columns already present, skipping.');

@@ -44,12 +44,12 @@ describe('objectiveIntelligenceEngine.buildObjectiveIntelligence (integration, r
     testDb.cleanup();
   });
 
-  test('engagement objective: exactly the 4 required KPIs (cpr, ctr, frequency, reach), each with a real threshold-derived verdict', () => {
+  test('engagement objective: exactly the 4 required KPIs (cpr, ctr, frequency, reach), each with a real threshold-derived verdict', async () => {
     const objective = 'engagement';
     const currentMetrics = { cpr: 5, ctr: 0.3, frequency: 2.5, reach: 5000 };
-    const benchmark = evaluateBenchmarks({ objective }, currentMetrics, 'test-account');
+    const benchmark = await evaluateBenchmarks({ objective }, currentMetrics, 'test-account');
 
-    const result = buildObjectiveIntelligence({
+    const result = await buildObjectiveIntelligence({
       objective, adAccountId: 'test-account', currentMetrics,
       healthScore: 60, healthStatus: 'good',
       benchmark,
@@ -74,11 +74,11 @@ describe('objectiveIntelligenceEngine.buildObjectiveIntelligence (integration, r
     expect(freqRow.status).toBe('success'); // within optimal range 1.5-3.5
   });
 
-  test('formula_used reflects the real per-objective aggregation rule (arithmetic vs. direct metric)', () => {
+  test('formula_used reflects the real per-objective aggregation rule (arithmetic vs. direct metric)', async () => {
     const objective = 'sales';
     const currentMetrics = { roas: 2, cpa: 60, purchases: 5, ctr: 2 };
-    const benchmark = evaluateBenchmarks({ objective }, currentMetrics, 'test-account');
-    const result = buildObjectiveIntelligence({ objective, adAccountId: 'test-account', currentMetrics, benchmark });
+    const benchmark = await evaluateBenchmarks({ objective }, currentMetrics, 'test-account');
+    const result = await buildObjectiveIntelligence({ objective, adAccountId: 'test-account', currentMetrics, benchmark });
 
     const cpaRow = result.kpis.find(k => k.metric_key === 'cpa');
     expect(cpaRow.formula_used).toBe('spend/purchases'); // arithmetic, from kpiProfileResolver PROFILES.sales.aggregation
@@ -86,9 +86,9 @@ describe('objectiveIntelligenceEngine.buildObjectiveIntelligence (integration, r
     expect(ctrRow.formula_used).toBe('Direct metric (from Meta Insights API)'); // aggregation rule is 'spend_weighted_avg', not arithmetic
   });
 
-  test('root_cause and executive_interpretation pass through unchanged when supplied', () => {
+  test('root_cause and executive_interpretation pass through unchanged when supplied', async () => {
     const diagnosis = { status: 'diagnosed', category: 'creative', primaryKey: 'ctr', primaryLabel: 'CTR', summary: 'CTR fell 25%.' };
-    const result = buildObjectiveIntelligence({
+    const result = await buildObjectiveIntelligence({
       objective: 'traffic', adAccountId: 'test-account', currentMetrics: {},
       benchmark: { metrics: {}, summary: {} }, diagnosis, executiveSummary: 'Some summary text.',
     });
@@ -99,13 +99,13 @@ describe('objectiveIntelligenceEngine.buildObjectiveIntelligence (integration, r
     expect(ctrRow.reason).toBe('CTR fell 25%.'); // diagnosis.summary used since primaryKey matches this metric
   });
 
-  test('related_rules cross-references a fired rule whose evidence touches this metric', () => {
+  test('related_rules cross-references a fired rule whose evidence touches this metric', async () => {
     const objective = 'traffic';
     const ruleEngineFired = [{
       rule_id: 'MF7.10.10', framework: 'MF7', governance_state: 'passed',
       evidence: [{ metric: 'landing_page_views/link_clicks', operator: 'ratio_lt', threshold: 0.5, actual: 0.2 }],
     }];
-    const result = buildObjectiveIntelligence({
+    const result = await buildObjectiveIntelligence({
       objective, adAccountId: 'test-account', currentMetrics: {},
       benchmark: { metrics: {}, summary: {} }, ruleEngineFired,
     });
@@ -116,9 +116,9 @@ describe('objectiveIntelligenceEngine.buildObjectiveIntelligence (integration, r
     expect(lpvRow.maifs_governance_status).toBe('passed');
   });
 
-  test('never throws with no arguments at all', () => {
-    expect(() => buildObjectiveIntelligence()).not.toThrow();
-    const result = buildObjectiveIntelligence();
+  test('never throws with no arguments at all', async () => {
+    await expect(buildObjectiveIntelligence()).resolves.not.toThrow();
+    const result = await buildObjectiveIntelligence();
     expect(Array.isArray(result.kpis)).toBe(true);
   });
 });

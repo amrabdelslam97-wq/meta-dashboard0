@@ -95,7 +95,7 @@ describe('attributionWindowEngine', () => {
   });
 
   describe('getAttributionWindowComparison (read side, no Meta calls)', () => {
-    test('ranks the most/least aggressive window from real persisted rows', () => {
+    test('ranks the most/least aggressive window from real persisted rows', async () => {
       const account = insertAccount(testDb);
       const range = { since: '2026-06-01', until: '2026-06-07' };
       const now = new Date().toISOString();
@@ -108,7 +108,7 @@ describe('attributionWindowEngine', () => {
       insertRow('7d_click', 9);
       insertRow('1d_view', 3);
 
-      const result = engine.getAttributionWindowComparison('camp_attrwin_read', range);
+      const result = await engine.getAttributionWindowComparison('camp_attrwin_read', range);
       expect(result.most_aggressive_window).toBe('7d_click');
       expect(result.most_conservative_window).toBe('1d_view');
       expect(result.windows).toHaveLength(3);

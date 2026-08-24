@@ -37,12 +37,12 @@ router.get('/creative/:adId', asyncHandler(async (req, res) => {
 }));
 
 router.get('/account/:accountId/learning', asyncHandler(async (req, res) => {
-  const learning = advisorLearningEngine.getAccountCreativeLearning(req.params.accountId);
+  const learning = await advisorLearningEngine.getAccountCreativeLearning(req.params.accountId);
   return res.json({ data: learning });
 }));
 
 router.get('/campaign/:campaignId/learning', asyncHandler(async (req, res) => {
-  const learning = advisorLearningEngine.getCampaignCreativeLearning(req.params.campaignId);
+  const learning = await advisorLearningEngine.getCampaignCreativeLearning(req.params.campaignId);
   return res.json({ data: learning });
 }));
 

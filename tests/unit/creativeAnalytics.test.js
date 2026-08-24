@@ -207,7 +207,7 @@ describe('creativeAnalytics', () => {
   });
 
   describe('getCreativeAnalytics (read side, no Meta calls)', () => {
-    test('returns persisted creatives ranked with an attached insight', () => {
+    test('returns persisted creatives ranked with an attached insight', async () => {
       const account = insertAccount(testDb);
       const range = { since: '2026-06-01', until: '2026-06-07' };
       const now = new Date().toISOString();
@@ -222,7 +222,7 @@ describe('creativeAnalytics', () => {
         [uuidv4(), account.id, range.since, range.until, now]
       );
 
-      const result = creativeAnalytics.getCreativeAnalytics('camp_read_cr', range);
+      const result = await creativeAnalytics.getCreativeAnalytics('camp_read_cr', range);
       expect(result.creatives.length).toBe(2);
       expect(result.insight.top_performer.label).toBe('Winner Ad');
       expect(result.insight.bottom_performer.label).toBe('Loser Ad');

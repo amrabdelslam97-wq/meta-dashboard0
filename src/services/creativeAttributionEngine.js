@@ -65,8 +65,8 @@ function attributeByScoreDimension(scoreDimension, rows) {
  * @param {string} metaCampaignId
  * @param {{since,until}} [dateRange]
  */
-function getCreativeAttribution(metaCampaignId, dateRange = defaultRange()) {
-  const rows = db.all(
+async function getCreativeAttribution(metaCampaignId, dateRange = defaultRange()) {
+  const rows = await db.all(
     `SELECT meta_ad_id, headline, destination_type, results, roas, cpa, hold_rate, video_p100_pct, fatigue_status,
             score_hook, score_headline, score_copy, score_cta, score_offer, score_visual, score_trust, score_overall
      FROM creative_analytics WHERE meta_campaign_id = ? AND date_since = ? AND date_until = ?`,

@@ -83,7 +83,7 @@ function normalizeMetric(value, config) {
 // ─────────────────────────────────────────────────────────────
 // Load scoring configs for an objective
 // ─────────────────────────────────────────────────────────────
-function loadScoringConfigs(objective) {
+async function loadScoringConfigs(objective) {
   return db.all(
     `SELECT * FROM objective_scoring_configs WHERE objective = ?`,
     [objective]
@@ -118,11 +118,11 @@ function extractMetric(metrics, key) {
  *   sub-profile), but does NOT change which objective_scoring_configs
  *   rows are loaded -- see the file header for why.
  */
-function resolveHealthScore(campaign, metrics, adAccountId, optimizationGoal = null) {
+async function resolveHealthScore(campaign, metrics, adAccountId, optimizationGoal = null) {
   const { objective } = campaign;
   const profile = resolveProfile(objective, optimizationGoal);
 
-  const scoringConfigs = loadScoringConfigs(objective);
+  const scoringConfigs = await loadScoringConfigs(objective);
 
   if (!scoringConfigs.length) {
     return {
@@ -152,7 +152,7 @@ function resolveHealthScore(campaign, metrics, adAccountId, optimizationGoal = n
     }
 
     // Resolve thresholds (existing 3-tier account -> global -> platform system, unchanged)
-    const thresholds = resolveThresholds(objective, config.metric_key, adAccountId, config);
+    const thresholds = await resolveThresholds(objective, config.metric_key, adAccountId, config);
     if (thresholds.source !== 'platform_default') {
       scoreReference = 'benchmark';
     }

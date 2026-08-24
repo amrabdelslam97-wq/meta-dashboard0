@@ -23,11 +23,11 @@ const { ensureMigrationsTable, markMigrationApplied } = require('./migrationTrac
 
 const MIGRATION_NAME = 'phase12_governance_state_columns';
 
-function addColumnIfMissing(table, column, type) {
-  const existingCols = db.all(`PRAGMA table_info(${table})`).map(c => c.name);
+async function addColumnIfMissing(table, column, type) {
+  const existingCols = (await db.all(`PRAGMA table_info(${table})`)).map(c => c.name);
   if (existingCols.includes(column)) return false;
   try {
-    db.run(`ALTER TABLE ${table} ADD COLUMN ${column} ${type}`);
+    await db.run(`ALTER TABLE ${table} ADD COLUMN ${column} ${type}`);
     return true;
   } catch (err) {
     console.warn(`[DB] Phase 12: could not add column ${column} to ${table}:`, err.message);
@@ -35,17 +35,17 @@ function addColumnIfMissing(table, column, type) {
   }
 }
 
-function runPhase12Migrations() {
-  ensureMigrationsTable();
+async function runPhase12Migrations() {
+  await ensureMigrationsTable();
 
   let added = 0;
-  if (addColumnIfMissing('recommendation_log', 'governance_state', 'TEXT')) added++;
-  if (addColumnIfMissing('active_alerts', 'governance_state', 'TEXT')) added++;
+  if (await addColumnIfMissing('recommendation_log', 'governance_state', 'TEXT')) added++;
+  if (await addColumnIfMissing('active_alerts', 'governance_state', 'TEXT')) added++;
 
-  markMigrationApplied(MIGRATION_NAME);
+  await markMigrationApplied(MIGRATION_NAME);
 
   if (added > 0) {
-    db.persist();
+    await db.persist();
     console.log(`[DB] Phase 12 migration complete — added governance_state to ${added} table(s).`);
   } else {
     console.log('[DB] Phase 12 schema: governance_state columns already present, skipping.');

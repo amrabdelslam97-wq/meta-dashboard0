@@ -39,10 +39,10 @@ const DEFAULT_INTERVALS = {
   metadata:  24 * 60,
 };
 
-function runPhase16Migrations() {
-  ensureMigrationsTable();
+async function runPhase16Migrations() {
+  await ensureMigrationsTable();
 
-  db.run(`
+  await db.run(`
     CREATE TABLE IF NOT EXISTS sync_schedule_config (
       entity_type      TEXT PRIMARY KEY,
       interval_minutes INTEGER NOT NULL,
@@ -50,7 +50,7 @@ function runPhase16Migrations() {
     )
   `);
 
-  db.run(`
+  await db.run(`
     CREATE TABLE IF NOT EXISTS sync_entity_state (
       id                     TEXT PRIMARY KEY,
       ad_account_id          TEXT NOT NULL,
@@ -68,7 +68,7 @@ function runPhase16Migrations() {
     )
   `);
 
-  db.run(`
+  await db.run(`
     CREATE TABLE IF NOT EXISTS sync_execution_log (
       id               TEXT PRIMARY KEY,
       ad_account_id    TEXT NOT NULL,
@@ -88,18 +88,18 @@ function runPhase16Migrations() {
     )
   `);
 
-  db.run(`CREATE INDEX IF NOT EXISTS idx_sync_execution_log_account ON sync_execution_log(ad_account_id, started_at)`);
+  await db.run(`CREATE INDEX IF NOT EXISTS idx_sync_execution_log_account ON sync_execution_log(ad_account_id, started_at)`);
 
-  if (!isMigrationApplied(MIGRATION_NAME)) {
+  if (!await isMigrationApplied(MIGRATION_NAME)) {
     const now = new Date().toISOString();
     for (const [entityType, minutes] of Object.entries(DEFAULT_INTERVALS)) {
-      db.run(
+      await db.run(
         `INSERT OR IGNORE INTO sync_schedule_config (entity_type, interval_minutes, updated_at) VALUES (?, ?, ?)`,
         [entityType, minutes, now]
       );
     }
-    markMigrationApplied(MIGRATION_NAME);
-    db.persist();
+    await markMigrationApplied(MIGRATION_NAME);
+    await db.persist();
     console.log('[DB] Phase 16 migration complete — smart auto sync tables created and seeded.');
   } else {
     console.log('[DB] Phase 16 schema: smart auto sync tables already present, skipping seed.');

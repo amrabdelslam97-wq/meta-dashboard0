@@ -4,19 +4,21 @@
  * Workspace isolation for multiple teams, clients, projects, tasks, approvals, and collaboration.
  * Integrated with existing Multi-Account and RBAC systems.
  *
- * Tables:
+ * Tables (creation order -- custom_roles is created right after workspaces,
+ * ahead of workspace_members which references it; see that table's own
+ * comment for why):
  *   1. workspaces          — Agency/Brand/Company workspace containers
- *   2. workspace_members   — Users within each workspace with roles
- *   3. clients             — Client profiles, contact info, Meta accounts
- *   4. projects            — Work items (Meta Ads, Google Ads, Content, etc.)
- *   5. project_tasks       — Tasks within projects
- *   6. task_subtasks       — Subtasks within tasks
- *   7. task_checklists     — Checklist items for tasks
- *   8. approvals           — Approval requests and workflow
- *   9. comments            — Comments on tasks, projects, creatives, campaigns
- *  10. activity_timeline   — Audit trail of actions
- *  11. file_uploads        — Creative assets, documents, reports
- *  12. custom_roles        — Custom role definitions
+ *   2. custom_roles        — Custom role definitions
+ *   3. workspace_members   — Users within each workspace with roles
+ *   4. clients             — Client profiles, contact info, Meta accounts
+ *   5. projects            — Work items (Meta Ads, Google Ads, Content, etc.)
+ *   6. project_tasks       — Tasks within projects
+ *   7. task_subtasks       — Subtasks within tasks
+ *   8. task_checklists     — Checklist items for tasks
+ *   9. approvals           — Approval requests and workflow
+ *  10. comments            — Comments on tasks, projects, creatives, campaigns
+ *  11. activity_timeline   — Audit trail of actions
+ *  12. file_uploads        — Creative assets, documents, reports
  *  13. notifications       — In-app notifications
  *  14. meeting_notes       — Meeting records and action items
  *  15. knowledge_base      — SOPs, guides, playbooks, templates
@@ -54,6 +56,32 @@ CREATE INDEX IF NOT EXISTS idx_workspaces_owner
 
 CREATE INDEX IF NOT EXISTS idx_workspaces_type
   ON workspaces(workspace_type);
+
+-- ─────────────────────────────────────────────
+-- TABLE: custom_roles
+-- Custom role definitions per workspace
+--
+-- Created here (moved ahead of its original position, further below) --
+-- workspace_members.custom_role_id REFERENCES this table, and SQLite
+-- (unlike PostgreSQL) does not validate that a REFERENCES target already
+-- exists at CREATE TABLE time, so the original creation order (custom_roles
+-- declared after workspace_members) worked under SQLite but fails under
+-- PostgreSQL with "relation custom_roles does not exist". No column,
+-- constraint, or index definition changed -- purely a create-order fix.
+-- ─────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS custom_roles (
+  id                TEXT PRIMARY KEY,
+  workspace_id      TEXT NOT NULL REFERENCES workspaces(id),
+  name              TEXT NOT NULL,
+  description       TEXT,
+  permissions_json  TEXT NOT NULL,
+  created_at        TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at        TEXT NOT NULL DEFAULT (datetime('now')),
+  UNIQUE(workspace_id, name)
+);
+
+CREATE INDEX IF NOT EXISTS idx_custom_roles_workspace
+  ON custom_roles(workspace_id);
 
 -- ─────────────────────────────────────────────
 -- TABLE: workspace_members
@@ -359,24 +387,6 @@ CREATE INDEX IF NOT EXISTS idx_file_uploads_uploaded_by
   ON file_uploads(uploaded_by_user_id);
 
 -- ─────────────────────────────────────────────
--- TABLE: custom_roles
--- Custom role definitions per workspace
--- ─────────────────────────────────────────────
-CREATE TABLE IF NOT EXISTS custom_roles (
-  id                TEXT PRIMARY KEY,
-  workspace_id      TEXT NOT NULL REFERENCES workspaces(id),
-  name              TEXT NOT NULL,
-  description       TEXT,
-  permissions_json  TEXT NOT NULL,
-  created_at        TEXT NOT NULL DEFAULT (datetime('now')),
-  updated_at        TEXT NOT NULL DEFAULT (datetime('now')),
-  UNIQUE(workspace_id, name)
-);
-
-CREATE INDEX IF NOT EXISTS idx_custom_roles_workspace
-  ON custom_roles(workspace_id);
-
--- ─────────────────────────────────────────────
 -- TABLE: notifications
 -- In-app notifications (email/push-ready)
 -- ─────────────────────────────────────────────
@@ -466,22 +476,22 @@ CREATE INDEX IF NOT EXISTS idx_knowledge_base_archived
 
 `;
 
-function runPhase28Migrations() {
+async function runPhase28Migrations() {
   try {
     // Ensure migration registry exists
-    ensureMigrationsTable();
+    await ensureMigrationsTable();
 
     // Skip if env var set
     if (process.env.SKIP_MIGRATIONS) return;
 
     // Check if migration already applied (idempotent)
-    if (isMigrationApplied(MIGRATION_NAME)) return;
+    if (await isMigrationApplied(MIGRATION_NAME)) return;
 
     // Run migration
-    db.run(SCHEMA_SQL);
+    await db.run(SCHEMA_SQL);
 
     // Mark as applied
-    markMigrationApplied(MIGRATION_NAME);
+    await markMigrationApplied(MIGRATION_NAME);
     console.log('✓ Phase 28 (Agency OS & Collaboration) migrations applied');
   } catch (e) {
     console.error(`Phase 28 migration error: ${e.message}`);

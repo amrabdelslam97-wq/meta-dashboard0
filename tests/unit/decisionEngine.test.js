@@ -41,7 +41,7 @@ describe('decisionEngine.generateTodaysDecisions', () => {
   // different priority scores (declining should score exactly 15 points
   // higher, the full trend component swing, since improving contributes 0
   // and declining contributes 15 per prioritizationEngine.js).
-  test('trend direction (declining vs improving) is correctly reflected in priority_score, not hardcoded', () => {
+  test('trend direction (declining vs improving) is correctly reflected in priority_score, not hardcoded', async () => {
     insertHistory('camp_declining', 90, '2026-05-01T00:00:00.000Z');
     insertHistory('camp_declining', 70, '2026-06-28T00:00:00.000Z');
     insertHistory('camp_declining', 70, '2026-06-29T00:00:00.000Z');
@@ -78,7 +78,7 @@ describe('decisionEngine.generateTodaysDecisions', () => {
       [uuidv4(), accountId]
     );
 
-    const result = generateTodaysDecisions(accountId);
+    const result = await generateTodaysDecisions(accountId);
     const declining = result.decisions.find(d => d.meta_campaign_id === 'camp_declining');
     const improving = result.decisions.find(d => d.meta_campaign_id === 'camp_improving');
 
@@ -93,8 +93,8 @@ describe('decisionEngine.generateTodaysDecisions', () => {
   // exactly 'high'/'medium'/'low' (maifsGovernance.js's hardcoded gate
   // depends on it) and a new confidence_pct field should be present
   // alongside it.
-  test('confidence is a real percentage (confidence_pct) backing the existing high/medium/low string', () => {
-    const result = generateTodaysDecisions(accountId);
+  test('confidence is a real percentage (confidence_pct) backing the existing high/medium/low string', async () => {
+    const result = await generateTodaysDecisions(accountId);
     const declining = result.decisions.find(d => d.meta_campaign_id === 'camp_declining');
     expect(declining.confidence).toBe('high'); // critical severity, unchanged from before
     expect(typeof declining.confidence_pct).toBe('number');
@@ -109,7 +109,7 @@ describe('decisionEngine.generateTodaysDecisions', () => {
   // never match a real row. Confirm a recommendation/alert carrying one
   // of those codes produces NO decision (mapping is genuinely gone, not
   // just untested).
-  test('a recommendation with a dead/never-seeded rule_code produces no decision', () => {
+  test('a recommendation with a dead/never-seeded rule_code produces no decision', async () => {
     testDb.db.run(
       `INSERT INTO campaigns (id, ad_account_id, meta_campaign_id, name, objective, status, created_at, updated_at)
        VALUES (?, ?, 'camp_dead_code', 'Dead Code Campaign', 'sales', 'active', datetime('now'), datetime('now'))`,
@@ -123,11 +123,11 @@ describe('decisionEngine.generateTodaysDecisions', () => {
       [uuidv4(), accountId]
     );
 
-    const result = generateTodaysDecisions(accountId);
+    const result = await generateTodaysDecisions(accountId);
     expect(result.decisions.some(d => d.meta_campaign_id === 'camp_dead_code')).toBe(false);
   });
 
-  test('an alert with a dead/never-seeded alert_code produces no decision', () => {
+  test('an alert with a dead/never-seeded alert_code produces no decision', async () => {
     testDb.db.run(
       `INSERT INTO campaigns (id, ad_account_id, meta_campaign_id, name, objective, status, created_at, updated_at)
        VALUES (?, ?, 'camp_dead_alert', 'Dead Alert Campaign', 'sales', 'active', datetime('now'), datetime('now'))`,
@@ -140,11 +140,11 @@ describe('decisionEngine.generateTodaysDecisions', () => {
       [uuidv4(), accountId]
     );
 
-    const result = generateTodaysDecisions(accountId);
+    const result = await generateTodaysDecisions(accountId);
     expect(result.decisions.some(d => d.meta_campaign_id === 'camp_dead_alert')).toBe(false);
   });
 
-  test('a live alert code (ROAS_BELOW_ONE) does produce a PAUSE_CAMPAIGN decision', () => {
+  test('a live alert code (ROAS_BELOW_ONE) does produce a PAUSE_CAMPAIGN decision', async () => {
     testDb.db.run(
       `INSERT INTO campaigns (id, ad_account_id, meta_campaign_id, name, objective, status, created_at, updated_at)
        VALUES (?, ?, 'camp_live_alert', 'Live Alert Campaign', 'sales', 'active', datetime('now'), datetime('now'))`,
@@ -157,7 +157,7 @@ describe('decisionEngine.generateTodaysDecisions', () => {
       [uuidv4(), accountId]
     );
 
-    const result = generateTodaysDecisions(accountId);
+    const result = await generateTodaysDecisions(accountId);
     const decision = result.decisions.find(d => d.meta_campaign_id === 'camp_live_alert');
     expect(decision).toBeDefined();
     expect(decision.decision_type).toBe('PAUSE_CAMPAIGN');
@@ -170,7 +170,7 @@ describe('decisionEngine.generateTodaysDecisions', () => {
   // non-'sales' objective, and that the objectiveWeight=1.0 default leaves
   // priority scoring unaffected (same score a flat 1.0 multiplier would
   // produce).
-  test('mapping resolution and objectiveWeight=1.0 default work correctly for a non-sales objective', () => {
+  test('mapping resolution and objectiveWeight=1.0 default work correctly for a non-sales objective', async () => {
     testDb.db.run(
       `INSERT INTO campaigns (id, ad_account_id, meta_campaign_id, name, objective, status, created_at, updated_at)
        VALUES (?, ?, 'camp_engagement_alert', 'Engagement Alert Campaign', 'engagement', 'active', datetime('now'), datetime('now'))`,
@@ -183,7 +183,7 @@ describe('decisionEngine.generateTodaysDecisions', () => {
       [uuidv4(), accountId]
     );
 
-    const result = generateTodaysDecisions(accountId);
+    const result = await generateTodaysDecisions(accountId);
     const decision = result.decisions.find(d => d.meta_campaign_id === 'camp_engagement_alert');
     expect(decision).toBeDefined();
     expect(decision.decision_type).toBe('REFRESH_CREATIVE');

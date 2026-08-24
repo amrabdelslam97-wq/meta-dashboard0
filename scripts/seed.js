@@ -32,14 +32,14 @@ async function seed() {
   // (without ever having started the real server) was missing every
   // intelligence table (benchmark_metrics, health_score_history,
   // recommendation_log, active_alerts, decision_history, etc.).
-  runMigrations();
-  runPhase2Migrations();
-  runPhase5Migrations();
-  runPhase6Migrations();
-  runPhase7BMigrations();
-  runPhase8Migrations();
-  runUniqueConstraintsMigration();
-  seedIntelligenceConfig();
+  await runMigrations();
+  await runPhase2Migrations();
+  await runPhase5Migrations();
+  await runPhase6Migrations();
+  await runPhase7BMigrations();
+  await runPhase8Migrations();
+  await runUniqueConstraintsMigration();
+  await seedIntelligenceConfig();
 
   const now = new Date().toISOString();
 

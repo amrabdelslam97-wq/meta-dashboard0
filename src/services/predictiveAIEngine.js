@@ -28,10 +28,10 @@ function round(n, dp = 2) {
 /**
  * Fetch historical data points for an entity across time.
  */
-function getHistoricalData(table, column, filter, dateOrderBy = 'date_until') {
+async function getHistoricalData(table, column, filter, dateOrderBy = 'date_until') {
   try {
     const query = `SELECT ${column}, date_since, date_until FROM ${table} WHERE ${filter} ORDER BY ${dateOrderBy} ASC`;
-    return db.all(query);
+    return await db.all(query);
   } catch (e) {
     return [];
   }
@@ -148,8 +148,8 @@ function detectAnomaly(value, values, threshold = 2.5) {
 /**
  * Predict next period value for a metric.
  */
-function predictMetric(table, column, filter, metric = 'ctr', periods = 1) {
-  const history = getHistoricalData(table, column, filter);
+async function predictMetric(table, column, filter, metric = 'ctr', periods = 1) {
+  const history = await getHistoricalData(table, column, filter);
 
   if (!history || history.length < 2) {
     return {
@@ -205,8 +205,8 @@ function predictMetric(table, column, filter, metric = 'ctr', periods = 1) {
  * Calculate risk score for an entity (0-100).
  * Factors: stability, volatility, trend, historical performance.
  */
-function calculateRiskScore(table, column, filter) {
-  const history = getHistoricalData(table, column, filter);
+async function calculateRiskScore(table, column, filter) {
+  const history = await getHistoricalData(table, column, filter);
 
   if (!history || history.length < 2) {
     return {
@@ -280,8 +280,8 @@ function calculateRiskScore(table, column, filter) {
  * Calculate opportunity score for an entity (0-100).
  * Factors: growth potential, performance vs peers, headroom.
  */
-function calculateOpportunityScore(table, column, filter, entityMetaId) {
-  const history = getHistoricalData(table, column, filter);
+async function calculateOpportunityScore(table, column, filter, entityMetaId) {
+  const history = await getHistoricalData(table, column, filter);
 
   if (!history || history.length < 2) {
     return {
@@ -348,19 +348,19 @@ function calculateOpportunityScore(table, column, filter, entityMetaId) {
 /**
  * Predict next day/week/month performance with full confidence metrics.
  */
-function forecast(entityType, entityId, metric, forecastHorizon = '7d', dateRange = defaultRange()) {
+async function forecast(entityType, entityId, metric, forecastHorizon = '7d', dateRange = defaultRange()) {
   // Convert horizon to periods (simplified for phase 25a)
   const periodMap = { '1d': 1, '7d': 7, '14d': 14, '30d': 30 };
   const periods = periodMap[forecastHorizon] || 7;
 
   // Get prediction
-  const prediction = predictMetric('campaigns', metric, `meta_campaign_id = '${entityId}'`, metric, periods);
+  const prediction = await predictMetric('campaigns', metric, `meta_campaign_id = '${entityId}'`, metric, periods);
 
   // Get risk
-  const risk = calculateRiskScore('campaigns', metric, `meta_campaign_id = '${entityId}'`);
+  const risk = await calculateRiskScore('campaigns', metric, `meta_campaign_id = '${entityId}'`);
 
   // Get opportunity
-  const opportunity = calculateOpportunityScore('campaigns', metric, `meta_campaign_id = '${entityId}'`, entityId);
+  const opportunity = await calculateOpportunityScore('campaigns', metric, `meta_campaign_id = '${entityId}'`, entityId);
 
   return {
     entity_type: entityType,

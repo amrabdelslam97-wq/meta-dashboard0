@@ -127,28 +127,28 @@ function buildLifecycleRecommendation({ campaign, adAccountId, entityType, lifec
  * not hide the issue" requirement: leaving stale findings in place would be
  * hiding the real, current state behind out-of-date ones).
  */
-function persistLifecycleState({ campaign, adAccountId, entityType, recommendation }) {
+async function persistLifecycleState({ campaign, adAccountId, entityType, recommendation }) {
   const now = new Date().toISOString();
 
-  db.run(
+  await db.run(
     `UPDATE recommendation_log SET dismissed_at = ?
      WHERE entity_meta_id = ? AND dismissed_at IS NULL AND rule_code NOT LIKE 'LIFECYCLE_%'`,
     [now, campaign.meta_campaign_id]
   );
-  db.run(
+  await db.run(
     `UPDATE active_alerts SET status = 'resolved', resolved_at = ?
      WHERE entity_meta_id = ? AND status = 'active'`,
     [now, campaign.meta_campaign_id]
   );
 
-  const existing = db.get(
+  const existing = await db.get(
     `SELECT id FROM recommendation_log WHERE rule_code = ? AND entity_meta_id = ? AND dismissed_at IS NULL`,
     [recommendation.rule_code, campaign.meta_campaign_id]
   );
   if (existing) {
-    db.run(`UPDATE recommendation_log SET last_generated_at = ? WHERE id = ?`, [now, existing.id]);
+    await db.run(`UPDATE recommendation_log SET last_generated_at = ? WHERE id = ?`, [now, existing.id]);
   } else {
-    db.run(
+    await db.run(
       `INSERT INTO recommendation_log
          (id, rule_code, ad_account_id, entity_type, entity_meta_id, entity_label,
           objective, severity, recommendation_title, recommendation_body,
@@ -353,7 +353,7 @@ function buildGovernanceTrace({ campaign, entityType = 'campaign', currentMetric
  *   prevent. A lifecycle-only bundle is returned instead (see
  *   buildLifecycleIntelligence()/buildLifecycleRecommendation() above).
  */
-function orchestrateIntelligence({
+async function orchestrateIntelligence({
   campaign, entityType = 'campaign', adAccountId, currentMetrics, priorMetrics, deltas,
   intelligence: precomputedIntelligence = null,
   relatedDecisions = [], budgetUtilizationPct = null, creativeContext = null, persist = true,
@@ -380,7 +380,7 @@ function orchestrateIntelligence({
     };
 
     if (persist) {
-      persistLifecycleState({ campaign, adAccountId, entityType, recommendation });
+      await persistLifecycleState({ campaign, adAccountId, entityType, recommendation });
     }
 
     // No decisions are produced on the lifecycle short-circuit path (empty
@@ -409,8 +409,8 @@ function orchestrateIntelligence({
   // adIntelligence.js already called directly before this change.
   const intelligence = precomputedIntelligence || (
     entityType === 'campaign'
-      ? runIntelligencePipeline(campaign, currentMetrics, priorMetrics, adAccountId)
-      : runScoringPipeline(campaign, currentMetrics, priorMetrics, adAccountId, entityType)
+      ? await runIntelligencePipeline(campaign, currentMetrics, priorMetrics, adAccountId)
+      : await runScoringPipeline(campaign, currentMetrics, priorMetrics, adAccountId, entityType)
   );
 
   // Step 0.5 — Executive Memory: measure outcomes of past completed
@@ -420,7 +420,7 @@ function orchestrateIntelligence({
   // Gated by `persist` for the same write-amplification reason Step 5's
   // other writes are (see Phase X.1's ad_set/ad list-view rationale).
   if (persist) {
-    measureOutcomes(campaign, currentMetrics);
+    await measureOutcomes(campaign, currentMetrics);
   }
 
   // Step 1 — Rule Engine (runs before Diagnosis Engine per the target
@@ -447,7 +447,7 @@ function orchestrateIntelligence({
   // is called from intelligenceOrchestrator.js, not from inside the scoring
   // logic itself).
   if (persist && diagnosis) {
-    db.run(
+    await db.run(
       `INSERT INTO diagnosis_history
          (id, ad_account_id, entity_type, entity_meta_id, objective, status,
           primary_key, primary_label, delta_pct, category, confidence, priority,
@@ -463,7 +463,7 @@ function orchestrateIntelligence({
   }
 
   // Step 3 — Decision Engine: Rule Engine firings become Decision-shaped objects.
-  let ruleEngineDecisions = decisionsFromRuleEngine(campaign, adAccountId, ruleEngineResult.fired);
+  let ruleEngineDecisions = await decisionsFromRuleEngine(campaign, adAccountId, ruleEngineResult.fired);
 
   // Step 3.5 — Executive Memory: apply historical learning BEFORE MAIFS sees
   // these decisions (Phase X.6), so a confidence downgrade from repeated
@@ -473,14 +473,14 @@ function orchestrateIntelligence({
   // (rule_engine, recommendation, alert); opportunity-sourced decisions
   // stay excluded, same reasoning as Phase X.3/X.4 (no live metrics context
   // at that grain).
-  ruleEngineDecisions = applyHistoricalLearning(ruleEngineDecisions);
-  const recommendationShapes = applyHistoricalLearning(
+  ruleEngineDecisions = await applyHistoricalLearning(ruleEngineDecisions);
+  const recommendationShapes = await applyHistoricalLearning(
     (intelligence.recommendations || []).map(r => ({
       ...decisionShapeForGovernance('recommendation', r),
       meta_campaign_id: campaign.meta_campaign_id,
     }))
   );
-  const alertShapes = applyHistoricalLearning(
+  const alertShapes = await applyHistoricalLearning(
     (intelligence.alerts || []).map(a => ({
       ...decisionShapeForGovernance('alert', a),
       meta_campaign_id: campaign.meta_campaign_id,
@@ -533,15 +533,15 @@ function orchestrateIntelligence({
   // response. entityType is threaded through so ad_set/ad firings are
   // never mislabeled 'campaign' in rule_engine_log.
   if (persist) {
-    persistRuleEngineFirings(adAccountId, campaign, firedWithGovernance, entityType);
+    await persistRuleEngineFirings(adAccountId, campaign, firedWithGovernance, entityType);
 
-    db.transaction(tx => {
-      intelligence.recommendations.forEach(r => {
-        persistGovernanceState('recommendation_log', 'rule_code', r.rule_code, campaign.meta_campaign_id, r.governance_state, tx);
-      });
-      intelligence.alerts.forEach(a => {
-        persistGovernanceState('active_alerts', 'alert_code', a.alert_code, campaign.meta_campaign_id, a.governance_state, tx);
-      });
+    await db.transaction(async tx => {
+      for (const r of intelligence.recommendations) {
+        await persistGovernanceState('recommendation_log', 'rule_code', r.rule_code, campaign.meta_campaign_id, r.governance_state, tx);
+      }
+      for (const a of intelligence.alerts) {
+        await persistGovernanceState('active_alerts', 'alert_code', a.alert_code, campaign.meta_campaign_id, a.governance_state, tx);
+      }
     });
   }
 

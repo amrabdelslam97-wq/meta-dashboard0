@@ -11,14 +11,14 @@
 const db = require('./database');
 const { encryptToken, isEncrypted } = require('../services/tokenCrypto');
 
-function encryptLegacyTokens() {
-  const accounts = db.all('SELECT id, access_token_encrypted FROM ad_accounts');
+async function encryptLegacyTokens() {
+  const accounts = await db.all('SELECT id, access_token_encrypted FROM ad_accounts');
 
   let migrated = 0;
   for (const acct of accounts) {
     if (!acct.access_token_encrypted || isEncrypted(acct.access_token_encrypted)) continue;
     const encrypted = encryptToken(acct.access_token_encrypted);
-    db.run('UPDATE ad_accounts SET access_token_encrypted = ? WHERE id = ?', [encrypted, acct.id]);
+    await db.run('UPDATE ad_accounts SET access_token_encrypted = ? WHERE id = ?', [encrypted, acct.id]);
     migrated++;
   }
 

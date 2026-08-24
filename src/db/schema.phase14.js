@@ -35,25 +35,25 @@ const NEW_COLUMNS = [
   { name: 'auto_sync_interval_minutes',  type: 'INTEGER NOT NULL DEFAULT 60' },
 ];
 
-function runPhase14Migrations() {
-  ensureMigrationsTable();
-  const existingCols = db.all("PRAGMA table_info(ad_accounts)").map(c => c.name);
+async function runPhase14Migrations() {
+  await ensureMigrationsTable();
+  const existingCols = (await db.all("PRAGMA table_info(ad_accounts)")).map(c => c.name);
 
   let added = 0;
   for (const col of NEW_COLUMNS) {
     if (existingCols.includes(col.name)) continue; // idempotent guard
     try {
-      db.run(`ALTER TABLE ad_accounts ADD COLUMN ${col.name} ${col.type}`);
+      await db.run(`ALTER TABLE ad_accounts ADD COLUMN ${col.name} ${col.type}`);
       added++;
     } catch (err) {
       console.warn(`[DB] Phase 14: could not add column ${col.name}:`, err.message);
     }
   }
 
-  markMigrationApplied(MIGRATION_NAME);
+  await markMigrationApplied(MIGRATION_NAME);
 
   if (added > 0) {
-    db.persist();
+    await db.persist();
     console.log(`[DB] Phase 14 migration complete — added ${added} column(s) to ad_accounts.`);
   } else {
     console.log('[DB] Phase 14 schema: multi-account columns already present, skipping.');

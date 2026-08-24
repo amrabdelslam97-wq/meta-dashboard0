@@ -27,15 +27,15 @@ const db = require('../db/database');
  *   objective_scoring_configs directly and returns null if nothing exists
  *   at any tier (callers must handle a null result).
  */
-function resolveThresholds(objective, metricKey, adAccountId, platformConfig = null) {
-  const accountBenchmark = db.get(
+async function resolveThresholds(objective, metricKey, adAccountId, platformConfig = null) {
+  const accountBenchmark = await db.get(
     `SELECT * FROM benchmark_metrics
      WHERE objective = ? AND metric_key = ? AND ad_account_id = ?`,
     [objective, metricKey, adAccountId]
   );
   if (accountBenchmark) return { ...accountBenchmark, source: 'account_benchmark' };
 
-  const globalBenchmark = db.get(
+  const globalBenchmark = await db.get(
     `SELECT * FROM benchmark_metrics
      WHERE objective = ? AND metric_key = ? AND ad_account_id IS NULL`,
     [objective, metricKey]
@@ -46,7 +46,7 @@ function resolveThresholds(objective, metricKey, adAccountId, platformConfig = n
     return { ...platformConfig, source: 'platform_default' };
   }
 
-  const platform = db.get(
+  const platform = await db.get(
     `SELECT * FROM objective_scoring_configs WHERE objective = ? AND metric_key = ?`,
     [objective, metricKey]
   );

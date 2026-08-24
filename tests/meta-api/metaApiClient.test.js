@@ -127,6 +127,113 @@ describe('metaApiClient.metaGetAll pagination', () => {
     expect(items.incomplete).toBe(true);
     expect(items.incompleteReason).toBe('page_fetch_error');
   });
+
+  // ═══════════════════════════════════════════════════════════════════
+  // Force Sync Deadline Propagation fix (FORCE_SYNC_END_TO_END_VERIFICATION_
+  // REPORT.md): a real production Force Sync for a 173-campaign account
+  // (needing 2 pages at Meta's 100-per-page limit) timed out at Vercel's
+  // 60s hard kill AFTER the request-wide deadline fix from the previous
+  // mission -- because that fix only checked the deadline between
+  // syncAccount()'s own high-level awaited calls, never inside
+  // metaGetAll()'s own pagination loop. These tests prove the deadline now
+  // reaches that layer.
+  // ═══════════════════════════════════════════════════════════════════
+  describe('deadline propagation (Force Sync Deadline Propagation fix)', () => {
+    test('stops requesting further pages once the deadline is reached, without throwing, marking the result incomplete', async () => {
+      nock(BASE).get(`/${VERSION}/act_173/campaigns`).query(true).reply(200, {
+        data: [{ id: 'camp_page1' }],
+        paging: { cursors: { after: 'CURSOR1' }, next: `${BASE}/${VERSION}/act_173/campaigns?after=CURSOR1` },
+      });
+      // Page 2 deliberately NOT mocked -- proves it's genuinely never requested.
+
+      const deadlineAt = Date.now() - 1; // already in the past
+      const items = await metaGetAll('act_173/campaigns', {}, 'token', deadlineAt);
+
+      expect(items.map(i => i.id)).toEqual(['camp_page1']);
+      expect(items.incomplete).toBe(true);
+      expect(items.incompleteReason).toBe('deadline_exceeded');
+    });
+
+    test('a 173-campaign account spanning two 100-item pages: both pages fetched when the deadline is comfortable', async () => {
+      const page1 = Array.from({ length: 100 }, (_, i) => ({ id: `camp_${i + 1}` }));
+      const page2 = Array.from({ length: 73 }, (_, i) => ({ id: `camp_${i + 101}` }));
+      nock(BASE).get(`/${VERSION}/act_173/campaigns`).query(true).reply(200, {
+        data: page1,
+        paging: { cursors: { after: 'CURSOR1' }, next: `${BASE}/${VERSION}/act_173/campaigns?after=CURSOR1` },
+      });
+      nock(BASE).get(`/${VERSION}/act_173/campaigns`).query(q => q.after === 'CURSOR1').reply(200, {
+        data: page2,
+        paging: { cursors: { after: 'CURSOR2' } },
+      });
+
+      const deadlineAt = Date.now() + 60_000; // generous
+      const items = await metaGetAll('act_173/campaigns', {}, 'token', deadlineAt);
+
+      expect(items.length).toBe(173);
+      expect(items.incomplete).toBe(false);
+    });
+
+    test('a 173-campaign account interrupted between page 1 and page 2: page 1 data is preserved, page 2 never requested', async () => {
+      const page1 = Array.from({ length: 100 }, (_, i) => ({ id: `camp_${i + 1}` }));
+      nock(BASE).get(`/${VERSION}/act_173/campaigns`).query(true).reply(200, {
+        data: page1,
+        paging: { cursors: { after: 'CURSOR1' }, next: `${BASE}/${VERSION}/act_173/campaigns?after=CURSOR1` },
+      });
+      // Page 2 (the remaining 73) deliberately NOT mocked.
+
+      // Deterministic, not a race: the first page is always fetched
+      // unconditionally regardless of deadlineAt (see metaGetAll()'s own
+      // header comment -- there must be at least SOME data to make
+      // progress/resume from), so an already-past deadline still reliably
+      // demonstrates "page 1 succeeds, page 2 is never attempted" without
+      // depending on exact timing between two async operations.
+      const deadlineAt = Date.now() - 1;
+      const items = await metaGetAll('act_173/campaigns', {}, 'token', deadlineAt);
+
+      // Page 1's 100 items are NOT lost -- this is the core semantic
+      // requirement (never discard already-fetched data merely because the
+      // deadline was reached).
+      expect(items.length).toBe(100);
+      expect(items.incomplete).toBe(true);
+      expect(items.incompleteReason).toBe('deadline_exceeded');
+    }, 10_000);
+
+    test('does not retry a rate-limited page fetch if the deadline would be exceeded before the backoff completes', async () => {
+      nock(BASE).get(`/${VERSION}/act_123/campaigns`).query(true)
+        .reply(400, { error: { message: 'User request limit reached', code: 17 } });
+      // No successful-retry mock registered -- proves no retry is attempted.
+
+      const deadlineAt = Date.now() + 1000; // far less than the 5s minimum backoff
+      await expect(metaGet('act_123/campaigns', {}, 'token', 0, deadlineAt)).rejects.toMatchObject({
+        isRateLimit: true,
+        deadlineExceeded: true,
+      });
+    });
+
+    test('still retries normally when the deadline comfortably covers the backoff', async () => {
+      nock(BASE).get(`/${VERSION}/act_123/campaigns`).query(true).reply(429, { error: { message: 'Too many requests' } });
+      nock(BASE).get(`/${VERSION}/act_123/campaigns`).query(true).reply(200, { data: [{ id: 'camp_ok' }] });
+
+      const deadlineAt = Date.now() + 60_000;
+      const result = await metaGet('act_123/campaigns', {}, 'token', 0, deadlineAt);
+      expect(result.data[0].id).toBe('camp_ok');
+    }, 15_000);
+
+    test('omitting deadlineAt entirely preserves all existing behavior (backward compatible)', async () => {
+      nock(BASE).get(`/${VERSION}/act_123/campaigns`).query(true).reply(200, {
+        data: [{ id: 'camp_1' }],
+        paging: { cursors: { after: 'CURSOR1' }, next: `${BASE}/${VERSION}/act_123/campaigns?after=CURSOR1` },
+      });
+      nock(BASE).get(`/${VERSION}/act_123/campaigns`).query(q => q.after === 'CURSOR1').reply(200, {
+        data: [{ id: 'camp_2' }],
+        paging: { cursors: { after: 'CURSOR2' } },
+      });
+
+      const items = await metaGetAll('act_123/campaigns', {}, 'token'); // no deadlineAt at all
+      expect(items.map(i => i.id)).toEqual(['camp_1', 'camp_2']);
+      expect(items.incomplete).toBe(false);
+    });
+  });
 });
 
 describe('metaApiClient.fetchAdPreview', () => {

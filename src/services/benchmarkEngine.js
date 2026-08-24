@@ -104,7 +104,7 @@ function evaluateMetric(value, benchmark) {
 // objective's primary volume KPI (leads, purchases, landing_page_views) and
 // substituting a generic 'cpm' that wasn't part of that objective's scoring
 // weights at all. The resolver is now the single source of truth for both.
-function evaluateBenchmarks(campaign, metrics, adAccountId, optimizationGoal = null) {
+async function evaluateBenchmarks(campaign, metrics, adAccountId, optimizationGoal = null) {
   const { objective } = campaign;
 
   const profile = resolveProfile(objective, optimizationGoal);
@@ -117,7 +117,7 @@ function evaluateBenchmarks(campaign, metrics, adAccountId, optimizationGoal = n
       ? parseFloat(metrics[metricKey])
       : null;
 
-    const benchmark = resolveBenchmark(objective, metricKey, adAccountId);
+    const benchmark = await resolveBenchmark(objective, metricKey, adAccountId);
     const evaluation = evaluateMetric(rawValue, benchmark);
 
     results[metricKey] = {

@@ -69,28 +69,28 @@ const NEW_COLUMNS = [
   { name: 'fatigue_recommendation',  type: 'TEXT' }, // 'scale'|'monitor'|'refresh'|'duplicate'|'pause'
 ];
 
-function runPhase21Migrations() {
-  ensureMigrationsTable();
-  const existingCols = db.all("PRAGMA table_info(creative_analytics)").map(c => c.name);
+async function runPhase21Migrations() {
+  await ensureMigrationsTable();
+  const existingCols = (await db.all("PRAGMA table_info(creative_analytics)")).map(c => c.name);
 
   let added = 0;
   for (const col of NEW_COLUMNS) {
     if (existingCols.includes(col.name)) continue; // idempotent guard
     try {
-      db.run(`ALTER TABLE creative_analytics ADD COLUMN ${col.name} ${col.type}`);
+      await db.run(`ALTER TABLE creative_analytics ADD COLUMN ${col.name} ${col.type}`);
       added++;
     } catch (err) {
       console.warn(`[DB] Phase 21: could not add column ${col.name}:`, err.message);
     }
   }
 
-  db.run(`CREATE INDEX IF NOT EXISTS idx_creative_analytics_score ON creative_analytics(meta_campaign_id, score_overall)`);
-  db.run(`CREATE INDEX IF NOT EXISTS idx_creative_analytics_fatigue ON creative_analytics(fatigue_status)`);
+  await db.run(`CREATE INDEX IF NOT EXISTS idx_creative_analytics_score ON creative_analytics(meta_campaign_id, score_overall)`);
+  await db.run(`CREATE INDEX IF NOT EXISTS idx_creative_analytics_fatigue ON creative_analytics(fatigue_status)`);
 
-  markMigrationApplied(MIGRATION_NAME);
+  await markMigrationApplied(MIGRATION_NAME);
 
   if (added > 0) {
-    db.persist();
+    await db.persist();
     console.log(`[DB] Phase 21 migration complete — added ${added} column(s) to creative_analytics.`);
   } else {
     console.log('[DB] Phase 21 schema: Creative Intelligence columns already present, skipping.');

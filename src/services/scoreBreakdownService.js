@@ -79,7 +79,7 @@ function interpretMetric(metricKey, normalized, direction, value, currency) {
 // ─────────────────────────────────────────────
 // Load latest score breakdown from DB
 // ─────────────────────────────────────────────
-function loadLatestBreakdown(entityMetaId, entityType = 'campaign') {
+async function loadLatestBreakdown(entityMetaId, entityType = 'campaign') {
   return db.get(
     `SELECT health_score, health_status, objective, score_breakdown,
             score_reference, benchmark_industry, calculated_at
@@ -94,7 +94,7 @@ function loadLatestBreakdown(entityMetaId, entityType = 'campaign') {
 // ─────────────────────────────────────────────
 // Load threshold context from objective_scoring_configs
 // ─────────────────────────────────────────────
-function loadThresholds(objective, metricKey) {
+async function loadThresholds(objective, metricKey) {
   return db.get(
     `SELECT excellent_threshold, good_threshold, warning_threshold, critical_threshold,
             comparison_direction, optimal_low, optimal_high
@@ -107,8 +107,8 @@ function loadThresholds(objective, metricKey) {
 // ─────────────────────────────────────────────
 // MAIN: Format score breakdown for display
 // ─────────────────────────────────────────────
-function formatScoreBreakdown(entityMetaId, entityType = 'campaign', currency = '') {
-  const row = loadLatestBreakdown(entityMetaId, entityType);
+async function formatScoreBreakdown(entityMetaId, entityType = 'campaign', currency = '') {
+  const row = await loadLatestBreakdown(entityMetaId, entityType);
 
   if (!row) {
     return {
@@ -133,7 +133,7 @@ function formatScoreBreakdown(entityMetaId, entityType = 'campaign', currency = 
 
   for (const [metricKey, data] of Object.entries(breakdown)) {
     const { value, normalized, weight } = data;
-    const thresholds = loadThresholds(row.objective, metricKey);
+    const thresholds = await loadThresholds(row.objective, metricKey);
 
     const weightedContribution = normalized !== null ? normalized * weight : null;
 

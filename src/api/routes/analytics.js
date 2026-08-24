@@ -25,16 +25,16 @@ const languageAnalytics = require('../../services/languageAnalytics');
 const chart = require('../../services/chartDataBuilder');
 const smartSyncEngine = require('../../services/smartSyncEngine');
 
-function loadCampaignMetaId(idOrMetaId) {
-  const row = db.get(
+async function loadCampaignMetaId(idOrMetaId) {
+  const row = await db.get(
     'SELECT meta_campaign_id FROM campaigns WHERE id = ? OR meta_campaign_id = ?',
     [idOrMetaId, idOrMetaId]
   );
   return row?.meta_campaign_id || null;
 }
 
-function loadAccountId(idOrMetaId) {
-  const row = db.get(
+async function loadAccountId(idOrMetaId) {
+  const row = await db.get(
     'SELECT id FROM ad_accounts WHERE id = ? OR meta_account_id = ?',
     [idOrMetaId, idOrMetaId]
   );
@@ -43,67 +43,67 @@ function loadAccountId(idOrMetaId) {
 
 // ── Audience Analytics ──────────────────────────────────────────
 router.get('/audience/:campaignId', asyncHandler(async (req, res) => {
-  const metaCampaignId = loadCampaignMetaId(req.params.campaignId);
+  const metaCampaignId = await loadCampaignMetaId(req.params.campaignId);
   if (!metaCampaignId) return res.status(404).json({ error: 'Campaign not found' });
   const dimension = ['age', 'gender', 'age_gender'].includes(req.query.dimension) ? req.query.dimension : 'age_gender';
   const dateRange = resolveDateRange(req.query);
-  return res.json({ data: analyticsEngine.getBreakdownAnalytics(metaCampaignId, dimension, dateRange) });
+  return res.json({ data: await analyticsEngine.getBreakdownAnalytics(metaCampaignId, dimension, dateRange) });
 }));
 
 // ── Geographic Analytics ─────────────────────────────────────────
 router.get('/geographic/:campaignId', asyncHandler(async (req, res) => {
-  const metaCampaignId = loadCampaignMetaId(req.params.campaignId);
+  const metaCampaignId = await loadCampaignMetaId(req.params.campaignId);
   if (!metaCampaignId) return res.status(404).json({ error: 'Campaign not found' });
   const dimension = ['country', 'region', 'comscore_market'].includes(req.query.dimension) ? req.query.dimension : 'country';
   const dateRange = resolveDateRange(req.query);
-  return res.json({ data: analyticsEngine.getBreakdownAnalytics(metaCampaignId, dimension, dateRange) });
+  return res.json({ data: await analyticsEngine.getBreakdownAnalytics(metaCampaignId, dimension, dateRange) });
 }));
 
 // ── Placement Analytics ──────────────────────────────────────────
 router.get('/placement/:campaignId', asyncHandler(async (req, res) => {
-  const metaCampaignId = loadCampaignMetaId(req.params.campaignId);
+  const metaCampaignId = await loadCampaignMetaId(req.params.campaignId);
   if (!metaCampaignId) return res.status(404).json({ error: 'Campaign not found' });
   const dateRange = resolveDateRange(req.query);
-  return res.json({ data: analyticsEngine.getBreakdownAnalytics(metaCampaignId, 'placement', dateRange) });
+  return res.json({ data: await analyticsEngine.getBreakdownAnalytics(metaCampaignId, 'placement', dateRange) });
 }));
 
 // ── Device Analytics ──────────────────────────────────────────────
 router.get('/device/:campaignId', asyncHandler(async (req, res) => {
-  const metaCampaignId = loadCampaignMetaId(req.params.campaignId);
+  const metaCampaignId = await loadCampaignMetaId(req.params.campaignId);
   if (!metaCampaignId) return res.status(404).json({ error: 'Campaign not found' });
   const dateRange = resolveDateRange(req.query);
-  return res.json({ data: analyticsEngine.getBreakdownAnalytics(metaCampaignId, 'impression_device', dateRange) });
+  return res.json({ data: await analyticsEngine.getBreakdownAnalytics(metaCampaignId, 'impression_device', dateRange) });
 }));
 
 // ── Creative Analytics ───────────────────────────────────────────
 router.get('/creative/:campaignId', asyncHandler(async (req, res) => {
-  const metaCampaignId = loadCampaignMetaId(req.params.campaignId);
+  const metaCampaignId = await loadCampaignMetaId(req.params.campaignId);
   if (!metaCampaignId) return res.status(404).json({ error: 'Campaign not found' });
   const dateRange = resolveDateRange(req.query);
-  return res.json({ data: creativeAnalytics.getCreativeAnalytics(metaCampaignId, dateRange) });
+  return res.json({ data: await creativeAnalytics.getCreativeAnalytics(metaCampaignId, dateRange) });
 }));
 
 // ── Messaging Destination Analytics ──────────────────────────────
 router.get('/messaging/:campaignId', asyncHandler(async (req, res) => {
-  const metaCampaignId = loadCampaignMetaId(req.params.campaignId);
+  const metaCampaignId = await loadCampaignMetaId(req.params.campaignId);
   if (!metaCampaignId) return res.status(404).json({ error: 'Campaign not found' });
   const dateRange = resolveDateRange(req.query);
-  return res.json({ data: messagingAnalytics.getMessagingDestinationAnalytics(metaCampaignId, dateRange) });
+  return res.json({ data: await messagingAnalytics.getMessagingDestinationAnalytics(metaCampaignId, dateRange) });
 }));
 
 // ── Language Analytics (targeting configuration, not performance -- see languageAnalytics.js) ──
 router.get('/language/:campaignId', asyncHandler(async (req, res) => {
-  const metaCampaignId = loadCampaignMetaId(req.params.campaignId);
+  const metaCampaignId = await loadCampaignMetaId(req.params.campaignId);
   if (!metaCampaignId) return res.status(404).json({ error: 'Campaign not found' });
-  return res.json({ data: languageAnalytics.getLanguageTargeting(metaCampaignId) });
+  return res.json({ data: await languageAnalytics.getLanguageTargeting(metaCampaignId) });
 }));
 
 // ── Budget Distribution Analytics ────────────────────────────────
 router.get('/budget-distribution/:accountId', asyncHandler(async (req, res) => {
-  const accountId = loadAccountId(req.params.accountId);
+  const accountId = await loadAccountId(req.params.accountId);
   if (!accountId) return res.status(404).json({ error: 'Account not found' });
   const dateRange = resolveDateRange(req.query);
-  return res.json({ data: budgetDistributionAnalytics.getBudgetDistribution(accountId, dateRange) });
+  return res.json({ data: await budgetDistributionAnalytics.getBudgetDistribution(accountId, dateRange) });
 }));
 
 // ── Executive Charts Layer ───────────────────────────────────────
@@ -111,7 +111,7 @@ router.get('/budget-distribution/:accountId', asyncHandler(async (req, res) => {
 //                                   &dimension=age|gender|age_gender|country|region
 //                                   &format=bar|pie|distribution|treemap
 router.get('/charts/:campaignId', asyncHandler(async (req, res) => {
-  const metaCampaignId = loadCampaignMetaId(req.params.campaignId);
+  const metaCampaignId = await loadCampaignMetaId(req.params.campaignId);
   if (!metaCampaignId) return res.status(404).json({ error: 'Campaign not found' });
 
   const domain = req.query.domain || 'audience';
@@ -120,11 +120,11 @@ router.get('/charts/:campaignId', asyncHandler(async (req, res) => {
 
   let rows, labelKey = 'breakdown_value', valueKey = req.query.metric || 'spend';
   if (domain === 'creative') {
-    rows = creativeAnalytics.getCreativeAnalytics(metaCampaignId, dateRange).creatives;
+    rows = (await creativeAnalytics.getCreativeAnalytics(metaCampaignId, dateRange)).creatives;
     labelKey = 'headline';
   } else {
     const dimension = req.query.dimension || (domain === 'geographic' ? 'country' : domain === 'device' ? 'impression_device' : domain === 'placement' ? 'placement' : 'age_gender');
-    rows = analyticsEngine.getBreakdownAnalytics(metaCampaignId, dimension, dateRange).current;
+    rows = (await analyticsEngine.getBreakdownAnalytics(metaCampaignId, dimension, dateRange)).current;
   }
 
   const builders = {
@@ -140,9 +140,9 @@ router.get('/charts/:campaignId', asyncHandler(async (req, res) => {
 
 // GET /analytics/charts/:campaignId/trend?bucket=day|week|month
 router.get('/charts/:campaignId/trend', asyncHandler(async (req, res) => {
-  const metaCampaignId = loadCampaignMetaId(req.params.campaignId);
+  const metaCampaignId = await loadCampaignMetaId(req.params.campaignId);
   if (!metaCampaignId) return res.status(404).json({ error: 'Campaign not found' });
-  const campaign = db.get(
+  const campaign = await db.get(
     `SELECT c.*, a.access_token_encrypted, a.attribution_window_days FROM campaigns c
      JOIN ad_accounts a ON a.id = c.ad_account_id WHERE c.meta_campaign_id = ?`,
     [metaCampaignId]
@@ -170,7 +170,7 @@ router.post('/sync', asyncHandler(async (req, res) => {
   const { account_id } = req.body || {};
   if (!account_id) return res.status(400).json({ error: 'account_id is required' });
 
-  const account = db.get("SELECT * FROM ad_accounts WHERE id = ? AND status = 'active' AND token_is_valid = 1", [account_id]);
+  const account = await db.get("SELECT * FROM ad_accounts WHERE id = ? AND status = 'active' AND token_is_valid = 1", [account_id]);
   if (!account) return res.status(404).json({ error: 'Account not found or not active' });
 
   await smartSyncEngine.runAnalyticsTier(account, 'force');
@@ -178,7 +178,7 @@ router.post('/sync', asyncHandler(async (req, res) => {
   return res.json({
     success: true,
     message: 'Analytics sync complete.',
-    history: smartSyncEngine.getSyncHistory(1, account_id),
+    history: await smartSyncEngine.getSyncHistory(1, account_id),
   });
 }));
 

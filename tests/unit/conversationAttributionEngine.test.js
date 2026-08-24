@@ -22,20 +22,20 @@ describe('conversationAttributionEngine.getConversationAttribution', () => {
     );
   }
 
-  test('includes only conversation-capable destinations (Messenger/WhatsApp/Instagram Direct), excluding Website/Lead Form', () => {
+  test('includes only conversation-capable destinations (Messenger/WhatsApp/Instagram Direct), excluding Website/Lead Form', async () => {
     insert('WHATSAPP', 100, 20, 15);
     insert('WEBSITE', 200, 5, 3); // not a conversation destination -- excluded
 
-    const result = engine.getConversationAttribution('camp_conv_1', { since: '2026-06-01', until: '2026-06-07' });
+    const result = await engine.getConversationAttribution('camp_conv_1', { since: '2026-06-01', until: '2026-06-07' });
     expect(result.conversations.length).toBe(1);
     expect(result.conversations[0].destination_type).toBe('WHATSAPP');
   });
 
-  test('computes cost_per_conversation, conversation_rate, and contribution_pct correctly', () => {
+  test('computes cost_per_conversation, conversation_rate, and contribution_pct correctly', async () => {
     insert('WHATSAPP', 100, 20, 15);
     insert('MESSENGER', 50, 10, 12);
 
-    const result = engine.getConversationAttribution('camp_conv_1', { since: '2026-06-01', until: '2026-06-07' });
+    const result = await engine.getConversationAttribution('camp_conv_1', { since: '2026-06-01', until: '2026-06-07' });
     expect(result.total_conversations).toBe(30);
     const whatsapp = result.conversations.find(c => c.destination_type === 'WHATSAPP');
     expect(whatsapp.cost_per_conversation).toBeCloseTo(5, 2);
@@ -43,9 +43,9 @@ describe('conversationAttributionEngine.getConversationAttribution', () => {
     expect(whatsapp.contribution_pct).toBeCloseTo(66.7, 0); // 20/30
   });
 
-  test('honestly reports response_rate/first_reply_time/qualified_conversations/calls as unavailable, never fabricated', () => {
+  test('honestly reports response_rate/first_reply_time/qualified_conversations/calls as unavailable, never fabricated', async () => {
     insert('WHATSAPP', 100, 20, 15);
-    const result = engine.getConversationAttribution('camp_conv_1', { since: '2026-06-01', until: '2026-06-07' });
+    const result = await engine.getConversationAttribution('camp_conv_1', { since: '2026-06-01', until: '2026-06-07' });
     expect(result.conversations[0].response_rate).toBeNull();
     expect(result.conversations[0].first_reply_time_seconds).toBeNull();
     expect(result.conversations[0].qualified_conversations).toBeNull();
@@ -53,9 +53,9 @@ describe('conversationAttributionEngine.getConversationAttribution', () => {
     expect(result.not_available_reason).toMatch(/Messenger\/WhatsApp\/Instagram Messaging Platform/);
   });
 
-  test('returns an empty, honest result when no conversation-destination data exists', () => {
+  test('returns an empty, honest result when no conversation-destination data exists', async () => {
     insert('WEBSITE', 100, 10, 10);
-    const result = engine.getConversationAttribution('camp_conv_1', { since: '2026-06-01', until: '2026-06-07' });
+    const result = await engine.getConversationAttribution('camp_conv_1', { since: '2026-06-01', until: '2026-06-07' });
     expect(result.conversations).toEqual([]);
     expect(result.note).toBeTruthy();
   });

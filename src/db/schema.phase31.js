@@ -28,9 +28,9 @@ const { ensureMigrationsTable, markMigrationApplied } = require('./migrationTrac
 
 const MIGRATION_NAME = 'phase31_enterprise_smart_sync';
 
-function runPhase31Migrations() {
-  ensureMigrationsTable();
-  const existingCols = db.all("PRAGMA table_info(ad_accounts)").map(c => c.name);
+async function runPhase31Migrations() {
+  await ensureMigrationsTable();
+  const existingCols = (await db.all("PRAGMA table_info(ad_accounts)")).map(c => c.name);
 
   const columns = [
     ['rate_limit_backoff_until', 'TEXT'],
@@ -42,7 +42,7 @@ function runPhase31Migrations() {
   for (const [name, ddl] of columns) {
     if (!existingCols.includes(name)) {
       try {
-        db.run(`ALTER TABLE ad_accounts ADD COLUMN ${name} ${ddl}`);
+        await db.run(`ALTER TABLE ad_accounts ADD COLUMN ${name} ${ddl}`);
         added++;
       } catch (err) {
         console.warn(`[DB] Phase 31: could not add ${name} column:`, err.message);
@@ -50,10 +50,10 @@ function runPhase31Migrations() {
     }
   }
 
-  markMigrationApplied(MIGRATION_NAME);
+  await markMigrationApplied(MIGRATION_NAME);
 
   if (added > 0) {
-    db.persist();
+    await db.persist();
     console.log(`[DB] Phase 31 migration complete — ${added} column(s) added to ad_accounts.`);
   } else {
     console.log('[DB] Phase 31 schema: already present, skipping.');

@@ -96,8 +96,8 @@ function enrichForAttribution(rows) {
 }
 
 /** @param {string} metaCampaignId @param {{since,until}} [dateRange] */
-function getPlacementAttribution(metaCampaignId, dateRange = defaultRange()) {
-  const result = getBreakdownAnalytics(metaCampaignId, 'placement', dateRange);
+async function getPlacementAttribution(metaCampaignId, dateRange = defaultRange()) {
+  const result = await getBreakdownAnalytics(metaCampaignId, 'placement', dateRange);
   return { ...result, current: enrichForAttribution(result.current) };
 }
 
@@ -106,10 +106,10 @@ function getPlacementAttribution(metaCampaignId, dateRange = defaultRange()) {
  * @param {string} [level] - 'country'|'region'|'comscore_market', default 'country'
  * @param {{since,until}} [dateRange]
  */
-function getGeographicAttribution(metaCampaignId, level = 'country', dateRange = defaultRange()) {
+async function getGeographicAttribution(metaCampaignId, level = 'country', dateRange = defaultRange()) {
   const validLevels = ['country', 'region', 'comscore_market'];
   const resolvedLevel = validLevels.includes(level) ? level : 'country';
-  const result = getBreakdownAnalytics(metaCampaignId, resolvedLevel, dateRange);
+  const result = await getBreakdownAnalytics(metaCampaignId, resolvedLevel, dateRange);
   return {
     ...result,
     current: enrichForAttribution(result.current),
@@ -124,9 +124,9 @@ function getGeographicAttribution(metaCampaignId, level = 'country', dateRange =
  * @param {string} [dimension] - 'impression_device'|'device_platform', default 'impression_device'
  * @param {{since,until}} [dateRange]
  */
-function getDeviceAttribution(metaCampaignId, dimension = 'impression_device', dateRange = defaultRange()) {
+async function getDeviceAttribution(metaCampaignId, dimension = 'impression_device', dateRange = defaultRange()) {
   const resolvedDimension = dimension === 'device_platform' ? 'device_platform' : 'impression_device';
-  const result = getBreakdownAnalytics(metaCampaignId, resolvedDimension, dateRange);
+  const result = await getBreakdownAnalytics(metaCampaignId, resolvedDimension, dateRange);
   return { ...result, current: enrichForAttribution(result.current) };
 }
 

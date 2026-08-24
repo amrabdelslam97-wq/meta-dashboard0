@@ -90,8 +90,8 @@ function detectTrend(scores) {
 /**
  * Latest health score (with score_breakdown) per entity, one query.
  */
-function loadLatestScoresMap(entityType = 'campaign') {
-  const rows = db.all(`
+async function loadLatestScoresMap(entityType = 'campaign') {
+  const rows = await db.all(`
     SELECT h.entity_meta_id, h.health_score, h.health_status, h.score_breakdown, h.calculated_at
     FROM health_score_history h
     INNER JOIN (
@@ -114,8 +114,8 @@ function loadLatestScoresMap(entityType = 'campaign') {
  * one query regardless of campaign count, trading some extra rows fetched
  * for eliminating the N+1 round trips.
  */
-function loadScoreHistoryMap(entityType = 'campaign', limitPerEntity = 10) {
-  const rows = db.all(`
+async function loadScoreHistoryMap(entityType = 'campaign', limitPerEntity = 10) {
+  const rows = await db.all(`
     SELECT entity_meta_id, health_score, calculated_at
     FROM health_score_history
     WHERE entity_type = ?
@@ -134,8 +134,8 @@ function loadScoreHistoryMap(entityType = 'campaign', limitPerEntity = 10) {
 /**
  * Active critical/warning alert counts per entity, one query.
  */
-function loadAlertCountsMap() {
-  const rows = db.all(`
+async function loadAlertCountsMap() {
+  const rows = await db.all(`
     SELECT entity_meta_id,
       SUM(CASE WHEN severity='critical' THEN 1 ELSE 0 END) as critical,
       SUM(CASE WHEN severity='warning'  THEN 1 ELSE 0 END) as warning
@@ -153,8 +153,8 @@ function loadAlertCountsMap() {
  * `dismissedFilter` also excludes action_taken rows when requested (used
  * by topLosersEngine's "unresolved recommendations" signal).
  */
-function loadRecommendationCountsMap({ excludeActionTaken = false } = {}) {
-  const rows = db.all(`
+async function loadRecommendationCountsMap({ excludeActionTaken = false } = {}) {
+  const rows = await db.all(`
     SELECT entity_meta_id, COUNT(*) as count
     FROM recommendation_log
     WHERE dismissed_at IS NULL ${excludeActionTaken ? 'AND action_taken IS NOT 1' : ''}
@@ -182,8 +182,8 @@ function extractFrequency(scoreBreakdownJson) {
  * @param {number} limit
  * @param {string|null} accountId - when given, scope to this ad_accounts.id only
  */
-function getTopWinners(limit = 5, accountId = null) {
-  const campaigns = db.all(`
+async function getTopWinners(limit = 5, accountId = null) {
+  const rawCampaigns = await db.all(`
     SELECT c.id, c.meta_campaign_id, c.name, c.objective, c.status, c.effective_status,
            c.ad_account_id,
            a.account_name, a.currency
@@ -191,18 +191,18 @@ function getTopWinners(limit = 5, accountId = null) {
     JOIN ad_accounts a ON c.ad_account_id = a.id
     WHERE c.status IN ('active','paused')
     ${accountId ? 'AND c.ad_account_id = ?' : ''}
-  `, accountId ? [accountId] : [])
-    // Lifecycle fix: a "winner" is by definition a scale/reallocate-budget
-    // candidate -- a campaign that isn't actually delivering right now
-    // (paused, a parent paused, disapproved, etc.) can never legitimately
-    // be one, no matter how strong its historical score was. Falls back to
-    // `status` only when effective_status hasn't been synced yet.
-    .filter(c => isDelivering(c.effective_status || c.status?.toUpperCase()));
+  `, accountId ? [accountId] : []);
+  // Lifecycle fix: a "winner" is by definition a scale/reallocate-budget
+  // candidate -- a campaign that isn't actually delivering right now
+  // (paused, a parent paused, disapproved, etc.) can never legitimately
+  // be one, no matter how strong its historical score was. Falls back to
+  // `status` only when effective_status hasn't been synced yet.
+  const campaigns = rawCampaigns.filter(c => isDelivering(c.effective_status || c.status?.toUpperCase()));
 
-  const latestScores = loadLatestScoresMap('campaign');
-  const scoreHistories = loadScoreHistoryMap('campaign', 10);
-  const alertCountsByEntity = loadAlertCountsMap();
-  const recCountsByEntity = loadRecommendationCountsMap();
+  const latestScores = await loadLatestScoresMap('campaign');
+  const scoreHistories = await loadScoreHistoryMap('campaign', 10);
+  const alertCountsByEntity = await loadAlertCountsMap();
+  const recCountsByEntity = await loadRecommendationCountsMap();
 
   const results = [];
 

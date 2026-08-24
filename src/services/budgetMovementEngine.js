@@ -19,11 +19,11 @@ function round(n, dp = 2) {
 /**
  * Generate budget movement recommendations for an account.
  */
-function generateBudgetMovementRecommendations(adAccountId, dateRange = defaultRange()) {
+async function generateBudgetMovementRecommendations(adAccountId, dateRange = defaultRange()) {
   const recommendations = [];
 
   // Get all campaigns for analysis
-  const campaigns = db.all(
+  const campaigns = await db.all(
     `SELECT * FROM budget_distribution_snapshots
      WHERE ad_account_id = ? AND level = 'campaign'
      AND date_since = ? AND date_until = ?`,
@@ -155,8 +155,8 @@ function generateBudgetMovementRecommendations(adAccountId, dateRange = defaultR
 /**
  * Simulate budget reallocation impact.
  */
-function simulateBudgetReallocation(adAccountId, movements, dateRange = defaultRange()) {
-  const campaigns = db.all(
+async function simulateBudgetReallocation(adAccountId, movements, dateRange = defaultRange()) {
+  const campaigns = await db.all(
     `SELECT * FROM budget_distribution_snapshots
      WHERE ad_account_id = ? AND level = 'campaign'
      AND date_since = ? AND date_until = ?`,

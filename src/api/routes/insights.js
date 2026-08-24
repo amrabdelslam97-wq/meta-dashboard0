@@ -63,8 +63,8 @@ const { buildRootCauseReasoning } = require('../../services/executiveReasoningEn
 // (latest snapshot per ad, real >= $5-spend creatives only, same tables
 // creativeLibrary.js already reads -- no new table). Read-only.
 // ─────────────────────────────────────────────
-function getCampaignCreativeCrossSignals(metaCampaignId, currentMetrics, deltas) {
-  const agg = db.get(
+async function getCampaignCreativeCrossSignals(metaCampaignId, currentMetrics, deltas) {
+  const agg = await db.get(
     `SELECT AVG(ca.score_overall) as avg_score,
             SUM(CASE WHEN ca.fatigue_status IN ('moderate','severe') THEN 1 ELSE 0 END) as fatigued_count,
             COUNT(*) as n
@@ -130,8 +130,8 @@ function getMockDeltas(current, prior) {
 // ─────────────────────────────────────────────
 // Load campaign + account from DB
 // ─────────────────────────────────────────────
-function loadCampaign(id) {
-  const campaign = db.get(
+async function loadCampaign(id) {
+  const campaign = await db.get(
     `SELECT c.*, a.access_token_encrypted, a.id as internal_account_id,
             a.meta_account_id, a.account_name, a.attribution_window_days, a.currency
      FROM campaigns c
@@ -152,7 +152,7 @@ function loadCampaign(id) {
   // existing single-optimization_goal-per-campaign assumption (used for the
   // Awareness/Video Views sub-profile).
   if (campaign) {
-    const goalRow = db.get(
+    const goalRow = await db.get(
       `SELECT optimization_goal, COUNT(*) as c FROM ad_sets
        WHERE campaign_id = ? AND optimization_goal IS NOT NULL
        GROUP BY optimization_goal ORDER BY c DESC LIMIT 1`,
@@ -173,7 +173,7 @@ router.get('/', asyncHandler(async (req, res) => {
   const useMock     = isMockRequested(req);
   const forceRefresh = req.query.refresh === 'true';
 
-  const campaign = loadCampaign(id);
+  const campaign = await loadCampaign(id);
   if (!campaign) return res.status(404).json({ error: 'Campaign not found', id });
 
   const dateRange = resolveDateRange(req.query);
@@ -234,7 +234,7 @@ router.get('/', asyncHandler(async (req, res) => {
   // Attribution window check
   const dataIncomplete = isInAttributionWindow(until, campaign.attribution_window_days || 7);
 
-  const relatedDecisions = db.all(
+  const relatedDecisions = await db.all(
     `SELECT decision_type, priority, confidence, suggested_action FROM decision_history
      WHERE meta_campaign_id = ? ORDER BY priority_score DESC, created_at DESC LIMIT 5`,
     [campaign.meta_campaign_id]
@@ -243,7 +243,7 @@ router.get('/', asyncHandler(async (req, res) => {
   // Budget Utilization (MF6.14.2) -- the campaign's aggregate ad-set budget
   // over the period, computed here (not inside ruleEngine.js, which stays
   // DB-free) and passed to the orchestrator as a precomputed metric.
-  const budgetRow = db.get(
+  const budgetRow = await db.get(
     `SELECT SUM(daily_budget) as total_daily_budget FROM ad_sets WHERE campaign_id = ?`,
     [campaign.id]
   );
@@ -259,7 +259,7 @@ router.get('/', asyncHandler(async (req, res) => {
   // defaults to 'campaign'), so there is exactly one call, not two.
   const {
     intelligence, diagnosis, ruleEngineResult, ruleEngineDecisions, governance,
-  } = orchestrateIntelligence({
+  } = await orchestrateIntelligence({
     campaign: { id: campaign.id, meta_campaign_id: campaign.meta_campaign_id, name: campaign.name, objective: campaign.objective },
     adAccountId,
     currentMetrics,
@@ -274,7 +274,7 @@ router.get('/', asyncHandler(async (req, res) => {
   // diagnosisEngine.js's own cascade can't explain.
   const rootCauseReasoning = buildRootCauseReasoning({
     diagnosis,
-    crossSignals: getCampaignCreativeCrossSignals(campaign.meta_campaign_id, currentMetrics, deltas),
+    crossSignals: await getCampaignCreativeCrossSignals(campaign.meta_campaign_id, currentMetrics, deltas),
   });
 
   // Product Completion Mode, Milestone 1 — Executive Summary: `diagnosis` was
@@ -296,7 +296,7 @@ router.get('/', asyncHandler(async (req, res) => {
   // already-computed benchmark/diagnosis/rule/governance data into one
   // per-KPI table for the detected objective. Zero new calculations --
   // see objectiveIntelligenceEngine.js's header.
-  const objectiveIntelligenceRaw = buildObjectiveIntelligence({
+  const objectiveIntelligenceRaw = await buildObjectiveIntelligence({
     objective: campaign.objective,
     adAccountId,
     currentMetrics,
@@ -390,7 +390,7 @@ router.get('/trend', asyncHandler(async (req, res) => {
   if (rejectMockInProduction(req, res)) return;
   const { id }  = req.params;
   const useMock = isMockRequested(req);
-  const campaign = loadCampaign(id);
+  const campaign = await loadCampaign(id);
   if (!campaign) return res.status(404).json({ error: 'Campaign not found' });
 
   const { since, until } = resolveDateRange(req.query);
@@ -439,7 +439,7 @@ router.get('/breakdowns', asyncHandler(async (req, res) => {
   const { id }       = req.params;
   const { dimension } = req.query;  // age | gender | region | (omit for all)
   const useMock      = isMockRequested(req);
-  const campaign     = loadCampaign(id);
+  const campaign     = await loadCampaign(id);
   if (!campaign) return res.status(404).json({ error: 'Campaign not found' });
 
   const { since, until } = resolveDateRange(req.query);
@@ -494,13 +494,13 @@ router.get('/adsets', asyncHandler(async (req, res) => {
   if (rejectMockInProduction(req, res)) return;
   const { id }  = req.params;
   const useMock = isMockRequested(req);
-  const campaign = loadCampaign(id);
+  const campaign = await loadCampaign(id);
   if (!campaign) return res.status(404).json({ error: 'Campaign not found' });
 
   const { since, until } = resolveDateRange(req.query);
 
   if (useMock) {
-    const adsets = db.all('SELECT meta_adset_id, name, status FROM ad_sets WHERE campaign_id = ?', [campaign.id]);
+    const adsets = await db.all('SELECT meta_adset_id, name, status FROM ad_sets WHERE campaign_id = ?', [campaign.id]);
     const data = adsets.map((s, i) => ({
       meta_adset_id: s.meta_adset_id, name: s.name, status: s.status,
       spend: Math.round(400 * (1 + i * 0.3) * 100) / 100,
@@ -522,13 +522,13 @@ router.get('/ads', asyncHandler(async (req, res) => {
   if (rejectMockInProduction(req, res)) return;
   const { id }  = req.params;
   const useMock = isMockRequested(req);
-  const campaign = loadCampaign(id);
+  const campaign = await loadCampaign(id);
   if (!campaign) return res.status(404).json({ error: 'Campaign not found' });
 
   const { since, until } = resolveDateRange(req.query);
 
   if (useMock) {
-    const ads = db.all('SELECT meta_ad_id, name, status FROM ads WHERE campaign_id = ?', [campaign.id]);
+    const ads = await db.all('SELECT meta_ad_id, name, status FROM ads WHERE campaign_id = ?', [campaign.id]);
     const data = ads.map((a, i) => ({
       meta_ad_id: a.meta_ad_id, name: a.name, status: a.status,
       spend: Math.round(200 * (1 + i * 0.5) * 100) / 100,
@@ -548,7 +548,7 @@ router.get('/ads', asyncHandler(async (req, res) => {
 // ─────────────────────────────────────────────
 router.post('/refresh', asyncHandler(async (req, res) => {
   const { id } = req.params;
-  const campaign = loadCampaign(id);
+  const campaign = await loadCampaign(id);
   if (!campaign) return res.status(404).json({ error: 'Campaign not found' });
 
   const count = cache.invalidateCampaign(campaign.meta_campaign_id);
@@ -576,7 +576,7 @@ router.get('/diagnosis', asyncHandler(async (req, res) => {
   if (rejectMockInProduction(req, res)) return;
   const { id }  = req.params;
   const useMock = isMockRequested(req);
-  const campaign = loadCampaign(id);
+  const campaign = await loadCampaign(id);
   if (!campaign) return res.status(404).json({ error: 'Campaign not found', id });
 
   const dateRange = resolveDateRange(req.query);
@@ -620,7 +620,7 @@ router.get('/diagnosis', asyncHandler(async (req, res) => {
   // Attach existing context (never recomputed here) -- health score/status
   // as already persisted by healthScoreEngine, and any Decisions already
   // generated for this campaign, matched by meta_campaign_id.
-  const healthRow = db.get(
+  const healthRow = await db.get(
     `SELECT health_score, health_status FROM health_score_history
      WHERE entity_meta_id = ? ORDER BY calculated_at DESC LIMIT 1`,
     [campaign.meta_campaign_id]
@@ -631,7 +631,7 @@ router.get('/diagnosis', asyncHandler(async (req, res) => {
   // (schema.phase5.js) but were never selected here -- added so the
   // dashboard can show real Evidence/Expected Result/Next Action instead of
   // leaving those fields empty.
-  const relatedDecisions = db.all(
+  const relatedDecisions = await db.all(
     `SELECT id, decision_type, priority, confidence, reason, suggested_action, status, created_at,
             supporting_metrics, expected_impact, action_taken, action_notes
      FROM decision_history WHERE meta_campaign_id = ?
@@ -639,7 +639,7 @@ router.get('/diagnosis', asyncHandler(async (req, res) => {
     [campaign.meta_campaign_id]
   );
 
-  const budgetRow = db.get(
+  const budgetRow = await db.get(
     `SELECT SUM(daily_budget) as total_daily_budget FROM ad_sets WHERE campaign_id = ?`,
     [campaign.id]
   );
@@ -657,7 +657,7 @@ router.get('/diagnosis', asyncHandler(async (req, res) => {
   // the orchestrator to skip its internal step 0 rather than compute it.
   const {
     diagnosis, ruleEngineResult, ruleEngineDecisions, governance,
-  } = orchestrateIntelligence({
+  } = await orchestrateIntelligence({
     campaign: { id: campaign.id, meta_campaign_id: campaign.meta_campaign_id, name: campaign.name, objective: campaign.objective },
     adAccountId: campaign.internal_account_id,
     currentMetrics,
@@ -674,8 +674,8 @@ router.get('/diagnosis', asyncHandler(async (req, res) => {
   // surface already-persisted recommendation-/alert-sourced findings
   // (including their Phase X.3 governance_state) that this route has never
   // shown before, without re-running either engine.
-  const recommendationFindings = loadActiveRecommendations(campaign.meta_campaign_id);
-  const alertFindings = loadActiveAlerts(campaign.meta_campaign_id);
+  const recommendationFindings = await loadActiveRecommendations(campaign.meta_campaign_id);
+  const alertFindings = await loadActiveAlerts(campaign.meta_campaign_id);
 
   // Phase X.5 — Executive Diagnosis Card: one unified, card-ready `findings`
   // array regardless of source, each enriched with Expected Result/Next
@@ -695,7 +695,7 @@ router.get('/diagnosis', asyncHandler(async (req, res) => {
   // implementation. Applying it to the rule-engine ones a second time would
   // double-downgrade an already-downgraded confidence, so they're kept separate.
   const ruleEngineFindings = ruleEngineDecisions.map(d => findingShapeForCard('rule_engine', d));
-  const recAlertFindings = applyHistoricalLearning(
+  const recAlertFindings = await applyHistoricalLearning(
     [
       ...recommendationFindings.map(r => findingShapeForCard('recommendation', r)),
       ...alertFindings.map(a => findingShapeForCard('alert', a)),
@@ -728,7 +728,7 @@ router.get('/diagnosis', asyncHandler(async (req, res) => {
   // Phase 43 (Task 1) — same cross-signal reasoning as the main insights route.
   const rootCauseReasoning = buildRootCauseReasoning({
     diagnosis,
-    crossSignals: getCampaignCreativeCrossSignals(campaign.meta_campaign_id, currentMetrics, deltas),
+    crossSignals: await getCampaignCreativeCrossSignals(campaign.meta_campaign_id, currentMetrics, deltas),
   });
 
   // Product Completion Mode, Milestone 1 — Executive Summary, same function
