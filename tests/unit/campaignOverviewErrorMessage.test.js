@@ -77,10 +77,24 @@ describe('icInsightsErrorMessage (Phase 40)', () => {
     expect(html).toContain('Analyze');
   });
 
-  test('falls back to the generic message for a plain network error with no response body', () => {
+  test('shows a real network error message instead of the generic fallback', () => {
     const err = { status: 0, body: null, message: 'Network error — check your connection and try again.' };
     const html = icInsightsErrorMessage(err);
+    expect(html).toContain('Network error');
+    expect(html).not.toContain('Not analyzed yet');
+  });
+
+  test('falls back to the generic message when there is truly nothing more specific (api()\'s own auto-generated "Request failed (N)")', () => {
+    const err = { status: 404, body: {}, message: 'Request failed (404)' };
+    const html = icInsightsErrorMessage(err);
     expect(html).toContain('Not analyzed yet');
+  });
+
+  test('Phase 44: shows the specific reason when mock=true is blocked in production (403, no `reason` field, but api() already extracted body.error into err.message)', () => {
+    const err = { status: 403, body: { error: 'Mock data is disabled in production', message: 'The mock=true parameter is only available when NODE_ENV is not "production".' }, message: 'Mock data is disabled in production' };
+    const html = icInsightsErrorMessage(err);
+    expect(html).toContain('Mock data is disabled in production');
+    expect(html).not.toContain('Not analyzed yet');
   });
 });
 

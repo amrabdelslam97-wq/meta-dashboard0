@@ -1746,7 +1746,16 @@ async function icLoadDiagnosisView(el) {
 // provides (insights.js's 502/200-analyzed:false responses both carry a
 // `reason` string; only the throw path here was losing it).
 function icInsightsErrorMessage(err) {
-  const reason = err && err.body && err.body.reason;
+  // Phase 44: some failure shapes (e.g. mock=true blocked in production,
+  // src/services/mockGuard.js -- a 403 with `error`/`message` fields, no
+  // `reason`) carry a real, specific explanation that api() already
+  // extracts into err.message -- previously only err.body.reason was
+  // checked, so this case fell through to the generic message even though
+  // a genuinely useful one was already sitting on the error object. The
+  // auto-generated "Request failed (404)" fallback (api(), for a body with
+  // no `error` field at all) is excluded -- that's not more informative
+  // than the generic empty-state text.
+  const reason = err && ((err.body && err.body.reason) || (err.message && !/^Request failed \(\d+\)$/.test(err.message) && err.message));
   if (reason) {
     return `<div class="ic-empty">⚠ ${reason}<br><span style="font-size:11px;opacity:.7">Try a different date range, or verify the account's Meta access token.</span></div>`;
   }
