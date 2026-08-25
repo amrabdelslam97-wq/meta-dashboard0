@@ -1464,30 +1464,32 @@ function icSetLevel(level) {
   renderIC();
 }
 
-// ── Analyze current campaign (refreshes ONLY this entity, no full page reload) ──
+// ── Analyze current campaign (explicit refresh — forces a fresh fetch,
+// bypassing any cached insights) ──
+// Phase 41: now shares icFetchCampaignInsights()/icRenderCampaignOverview()
+// with the automatic on-open load (icLoadCampaignView) so the two can never
+// diverge in error handling again -- previously this had its own fetch/catch
+// that only logged to the console on failure and never updated the DOM,
+// leaving the screen silently frozen on a failed Analyze click.
 async function icAnalyze() {
   const c = window.ic.selectedCampaign;
   if (!c) return;
   const btn = document.getElementById('ic-analyze-btn');
   if (btn) { if (btn.disabled) return; btn.textContent = '⏳ Analyzing...'; btn.disabled = true; }
   try {
-    const r = await api(addDateQ(insightsUrl(`/campaigns/${c.id}/insights`)));
-    window.ic.insights = r;
+    const { ins, err } = await icFetchCampaignInsights(c, { forceRefresh: true });
     // Phase 8: only update the score map when Meta actually returned data —
     // an analyzed:false response must not overwrite a previously valid score.
-    if (r.analyzed !== false) {
-      window.ic.scoreMap[c.meta_campaign_id] = { health_score: r.health_score, health_status: r.health_status, calculated_at: r.fetched_at };
+    if (ins && ins.analyzed !== false) {
+      window.ic.scoreMap[c.meta_campaign_id] = { health_score: ins.health_score, health_status: ins.health_status, calculated_at: ins.fetched_at };
     }
-    // Refresh only the header score pill + current level content (not the whole shell)
-    const scorePill = document.querySelector('.ic-topbar .hs-inline, .ic-topbar .badge');
     if (window.ic.level === 'campaign') {
       const el = document.getElementById('ic-level-content');
-      if (el) await icLoadCampaignView(el);
+      if (el) { ins ? icRenderCampaignOverview(el, ins, c) : (el.innerHTML = icInsightsErrorMessage(err)); }
     }
     // Update header inline (score + KPI pills) without full re-render
-    icRefreshHeaderOnly();
-  } catch(e) {
-    console.warn('[icAnalyze] failed:', e.message);
+    if (ins) icRefreshHeaderOnly();
+    if (err) console.warn('[icAnalyze] failed:', err.message);
   } finally {
     const b = document.getElementById('ic-analyze-btn');
     if (b) { b.textContent = '⚡ Analyze'; b.disabled = false; }
@@ -1751,21 +1753,28 @@ function icInsightsErrorMessage(err) {
   return '<div class="ic-empty">📊 Not analyzed yet<br><span style="font-size:11px;opacity:.7">Click ⚡ Analyze above to generate insights for this period</span></div>';
 }
 
-// ── CAMPAIGN OVERVIEW ──
-async function icLoadCampaignView(el) {
-  const c = window.ic.selectedCampaign;
-  el.innerHTML = '<div class="loader"><span class="spin">◌</span> Loading...</div>';
-
-  // Use cached insights or fetch fresh
-  let ins = window.ic.insights;
-  let fetchErr = null;
-  if (!ins) {
-    try { ins = await api(addDateQ(insightsUrl(`/campaigns/${c.id}/insights`))); window.ic.insights = ins; icRefreshHeaderOnly(); }
-    catch (e) { fetchErr = e; }
+// Phase 41: single shared fetch used by both the automatic on-open load
+// (icLoadCampaignView) and the explicit Analyze action (icAnalyze) --
+// previously each had its own independent fetch/catch, and only one path
+// was ever fixed (Phase 40) to surface the real failure reason instead of
+// silently swallowing it. Returns cached insights unless forceRefresh is
+// requested (Analyze always forces a fresh fetch).
+async function icFetchCampaignInsights(c, { forceRefresh = false } = {}) {
+  if (!forceRefresh && window.ic.insights) return { ins: window.ic.insights, err: null };
+  try {
+    const ins = await api(addDateQ(insightsUrl(`/campaigns/${c.id}/insights`)));
+    window.ic.insights = ins;
+    return { ins, err: null };
+  } catch (err) {
+    return { ins: null, err };
   }
-  if (!ins) { el.innerHTML = icInsightsErrorMessage(fetchErr); return; }
+}
 
-  // Phase 8: backend now returns analyzed:false instead of fabricated zero metrics
+// Renders a successfully-fetched insights object into the Overview panel.
+// Shared by the automatic load and Analyze so both always show the exact
+// same result for the exact same data.
+function icRenderCampaignOverview(el, ins, c) {
+  // Phase 8: backend returns analyzed:false instead of fabricated zero metrics
   // when Meta has no insights for the period. Show that honestly, not a fake "0".
   if (ins.analyzed === false) {
     el.innerHTML = `<div class="ic-empty">⚠ ${ins.reason || 'No Meta insights available for the selected period'}<br>
@@ -1878,6 +1887,17 @@ async function icLoadCampaignView(el) {
     ${icRuleEnginePanel(ins.framework_recommendations, ins.rule_engine_decisions)}
     ${icGovernancePanel(ins._governance)}
   `;
+}
+
+// ── CAMPAIGN OVERVIEW — automatic load on open (no Analyze click required) ──
+async function icLoadCampaignView(el) {
+  const c = window.ic.selectedCampaign;
+  el.innerHTML = '<div class="loader"><span class="spin">◌</span> Loading...</div>';
+
+  const { ins, err } = await icFetchCampaignInsights(c);
+  if (ins) icRefreshHeaderOnly();
+  if (!ins) { el.innerHTML = icInsightsErrorMessage(err); return; }
+  icRenderCampaignOverview(el, ins, c);
 }
 
 // ── AD SETS VIEW ──
