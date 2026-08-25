@@ -223,3 +223,34 @@ describe('executiveMemory.getHistoricalEffectiveness + applyHistoricalLearning',
     await expect(applyHistoricalLearning(decisions)).resolves.not.toThrow();
   });
 });
+
+// Phase 47 regression guard -- measureOutcomes()'s query previously aliased
+// `decision_outcomes` as the bare, unquoted identifier `do`. SQLite doesn't
+// reserve that word, so it worked locally, but `DO` is a reserved keyword
+// in PostgreSQL (DO $$...$$ blocks, ON CONFLICT...DO), and Production threw
+// "syntax error at or near \"do\"" on every single live campaign Overview
+// request. Source-level check (not just the functional DB tests above,
+// which only ever ran against SQLite and could never have caught this)
+// so a future edit can't silently reintroduce a Postgres-reserved-word
+// alias here.
+describe('executiveMemory.js source — Postgres reserved-word alias guard (Phase 47)', () => {
+  test('measureOutcomes\' decision_outcomes join never uses the bare reserved-word alias `do`', () => {
+    const fs = require('fs');
+    const path = require('path');
+    const source = fs.readFileSync(path.join(__dirname, '../../src/services/executiveMemory.js'), 'utf8');
+
+    // Isolate just the SQL template literal itself (backtick-delimited),
+    // not surrounding comments/prose, so this test checks the actual query
+    // text sent to the database -- not whether the word "do" appears
+    // anywhere nearby in English commentary.
+    const queryStart = source.indexOf('`SELECT dh.* FROM decision_history dh');
+    const queryEnd = source.indexOf('`', queryStart + 1);
+    const querySql = source.slice(queryStart, queryEnd + 1);
+
+    expect(querySql).toMatch(/decision_outcomes\s+\w+\s+ON/i);
+    // No bare `do` (word-boundary) as an alias/identifier anywhere in the
+    // actual SQL text -- case-insensitive, since Postgres treats
+    // DO/Do/do identically as the reserved keyword.
+    expect(querySql).not.toMatch(/\bdo\b/i);
+  });
+});

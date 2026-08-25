@@ -88,11 +88,15 @@ async function measureOutcomes(campaign, currentMetrics) {
 
   const cutoff = new Date(Date.now() - OUTCOME_MEASUREMENT_WINDOW_DAYS * 86400000).toISOString();
   const candidates = await db.all(
+    // Phase 47: alias was `do` -- valid, unremarkable in SQLite, but `DO` is
+    // a reserved keyword in PostgreSQL (DO $$...$$ blocks, ON CONFLICT...DO),
+    // so an unquoted `do` alias is a syntax error there. Renamed to `outc`,
+    // no logic/filter/join/parameter change.
     `SELECT dh.* FROM decision_history dh
-     LEFT JOIN decision_outcomes do ON do.decision_history_id = dh.id
+     LEFT JOIN decision_outcomes outc ON outc.decision_history_id = dh.id
      WHERE dh.meta_campaign_id = ? AND dh.status = 'completed'
        AND dh.completed_at IS NOT NULL AND dh.completed_at <= ?
-       AND do.id IS NULL`,
+       AND outc.id IS NULL`,
     [campaign.meta_campaign_id, cutoff]
   );
 
