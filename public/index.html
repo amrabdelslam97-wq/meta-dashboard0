@@ -1343,6 +1343,12 @@ async function loadCampaigns() {
     apiDate('/campaigns?limit=200'),
     apiDate('/health-history'),
   ]);
+  // Phase 49 -- /campaigns already returns its own `freshness` (same shape
+  // as /dashboard's), but this was never read, so the global #last-updated
+  // topbar element kept showing whatever loadDashboard() last wrote there
+  // (or nothing, pre-Dashboard-visit) while viewing Campaigns. Same
+  // freshnessLabel() pattern loadDashboard() already uses (line ~924).
+  document.getElementById('last-updated').innerHTML = freshnessLabel(campsR.freshness);
   window.ic.campaigns = campsR.data || [];
   window.ic.scoreMap  = {};
   (histR.data || []).forEach(h => { window.ic.scoreMap[h.entity_meta_id] = h; });
